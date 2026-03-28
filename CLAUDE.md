@@ -65,3 +65,9 @@ Bridge がローカルにいれば動作可能。
 
 - **Event ID** — 再生指示の識別子
 - **Bridge** — UDP/OSC の接続先
+
+## 指示書
+
+- `instructions/` — 他セッションからの未実行の指示書
+- `instructions/completed/` — 完了済みの指示書
+- セッション開始時に `instructions/` を確認し、該当する指示書があれば適用する

@@ -2,79 +2,52 @@
 
 ## repo の目的
 
-Unreal Engine 向けの薄いアダプタ。共通仕様に基づき、Unreal に適した形で Bridge と接続する。
+Unreal Engine 5 向け SDK。runtime プラグイン（`HapbeatSDK`）で Hapbeat を Wi-Fi UDP broadcast 駆動する。
+C++ / Blueprint 両用。AAA / インディー・VR/XR のゲーム開発者が主対象。
 
 ## 全体アーキテクチャ上の役割
 
-contracts / bridge の共通仕様を利用する後段 SDK。
+contracts の Layer 1 仕様の上に載る code SDK。Unity SDK と同じ
+「起点(fire) ↔ 調整(EventMap)」分離を踏襲（L1 では fire 側を実装、EventMap/Trigger は L2）。
 
 ## 責務
 
-- UDP/OSC クライアント
-- Blueprint ノード（将来）
-- 基本的な接続管理
+- Layer 1 protocol の C++ 実装（`Source/HapbeatSDK/.../HapbeatProtocol.*`、手動 little-endian）
+- `UHapbeatSubsystem`（GameInstanceSubsystem、BlueprintCallable）: Connect / Play / Stop / StopAll / Ping
+- FSocket(UDP, FUdpSocketBuilder) による broadcast 送信
+- `.uplugin` / Build.cs / module
 
-## 管理対象
+## 管理対象 / 対象外
 
-- Unreal C++ / Blueprint コード
-- プラグイン設定
-
-## 管理対象外
-
-- Bridge 実装
-- ファームウェア
-- Pack ツール
-- Unity コード
+- 対象: `Source/HapbeatSDK/`、`HapbeatSDK.uplugin`、docs
+- 対象外: Layer 1 仕様の改変（→ contracts）、Unity/その他コード、ファームウェア
 
 ## 依存関係
 
-### 依存してよい repo
-
-- hapbeat-contracts
-- hapbeat-bridge
-
-## 壊してはいけないもの
-
-- 公開 API（将来の Blueprint ノード）
+- hapbeat-contracts（wire 仕様）。UE モジュール依存: Core/CoreUObject/Engine/Sockets/Networking。
 
 ## やってはいけないこと
 
-- 独自プロトコルを作る
-- Unity SDK からの単純コピー
-- 送信機ファームと直接通信する
+- 独自プロトコルを作る（contracts に従う）
+- Unity SDK の単純コピー
+- 後方互換 alias を作る（リリース前）
 
-## まだ作らないもの
+## まだ作らないもの（level-2 / 3）
 
-- 重いネイティブ統合
-- エディタ拡張の大規模実装
+- Blueprint Trigger コンポーネント（衝突/アニメ通知 → 自動 fire）
+- EventMap 風 Editor ツール（event id → default gain）
+- デバイス検出（PONG 受信）/ 定期 CONNECT_STATUS keep-alive（現状は Connect 時 1 回）
+- showcase サンプルプロジェクト
 
-## 最初の着手タスク
+## 重要な制約・正直な現状
 
-1. UDP/OSC 基本接続
-2. 最小サンプル
+- **本 repo は UE ツールチェーン無しで author**。UE5 API（`FUdpSocketBuilder` / `ISocketSubsystem` /
+  `UGameInstanceSubsystem` / `UFUNCTION(BlueprintCallable)`）に忠実に書いたが、
+  **コンパイル検証は未了**。次に UE プロジェクトに入れてビルド確認すること。
+- wire 互換の正は firmware が受理する byte 列。`HapbeatProtocol.cs` / `protocol.py` が参照実装。
+- CONNECT_STATUS byte 順は `HapbeatProtocol.cs`（connected,group,appName,deviceName）。
 
-## テスト
+## 指示書 / メモリ
 
-- UDP 送受信テスト
-
-## オフライン動作
-
-Bridge がローカルにいれば動作可能。
-
-## 重要な概念
-
-- **Event ID** — 再生指示の識別子
-- **Bridge** — UDP/OSC の接続先
-
-## 指示書
-
-- `instructions/` — 他セッションからの未実行の指示書
-- `instructions/completed/` — 完了済みの指示書
-- セッション開始時に `instructions/` を確認し、該当する指示書があれば適用する
-
-## エージェント共通メモリ（Claude / OpenAI 系共通）
-
-- セッション間で引き継ぐ知見・ログ・ルールはワークスペースルートの `docs/agent-memory/` に保存する
-- インデックスは `docs/agent-memory/INDEX.md`
-- この repo から参照する場合の相対パスは `../docs/agent-memory/`
-- メモリを新規作成・更新した場合は、必ず `INDEX.md` も更新する
+- `instructions/`（`completed/` `applied/`）。
+- セッション知見は workspace の `../docs/claude-memory/`（INDEX.md 更新）。

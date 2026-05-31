@@ -1,31 +1,70 @@
-# hapbeat-unreal-sdk
+# Hapbeat Unreal Engine SDK
 
-Unreal Engine 向けの薄いアダプタ。
+Drive [Hapbeat](https://hapbeat.com) haptic devices from Unreal Engine 5 over
+Wi-Fi UDP. A runtime plugin with a Blueprint-callable subsystem — usable from
+both C++ and Blueprint.
 
-## 概要
+> **📚 Docs**: <https://devtools.hapbeat.com/docs/sdk-integration/>
 
-このリポジトリは、Hapbeat デバイスを Unreal Engine アプリケーションから制御するための SDK を提供します。共通仕様を利用する後段の SDK として位置づけられ、初期は UDP/OSC ベースで接続します。
+This is the **level-1** SDK: a script/Blueprint can drive Hapbeat. The fire side
+stays orthogonal to event tuning (the same design as the Hapbeat Unity SDK).
 
-## 全体の中での位置づけ
+## Requirements
 
-共通仕様（contracts）を利用する後段の SDK です。Unity SDK の単純移植ではなく、共通仕様に基づいて Unreal に適した形で実装します。
+- Unreal Engine 5.x (uses the `Sockets` / `Networking` modules).
 
-## 設計方針
+## Install
 
-- 最初から重いネイティブ統合を前提にしない
-- Unity の単純移植ではなく共通仕様を利用する
-- 独自プロトコルを作らない
+1. Copy this repo into your project's `Plugins/` folder as `Plugins/HapbeatSDK/`
+   (so `Plugins/HapbeatSDK/HapbeatSDK.uplugin` exists).
+2. Regenerate project files and build (the plugin compiles with your project).
+3. **Edit → Plugins → Hardware → Hapbeat SDK** → Enabled (if not already).
 
-## 依存関係
+## Quick start
 
-- [hapbeat-contracts](../hapbeat-contracts) — メッセージ仕様・Event ID 定義
-- [hapbeat-bridge](../hapbeat-bridge) — デバイス通信の中継サーバ
+### Blueprint
 
-## 今後の最初のタスク
+```
+Get Game Instance → Get Subsystem (Hapbeat Subsystem)
+  → Connect (Port 7700, App Name "MyGame")
+  → Play (Event Id "impact.hit", Gain 0.5)
+```
 
-1. UDP/OSC ベースの基本接続
-2. Blueprint ノード検討
+### C++
 
-## 現状
+```cpp
+#include "HapbeatSubsystem.h"
 
-現時点では実装コードはありません。設計・計画フェーズです。
+if (UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>())
+{
+    Hb->Connect(7700, TEXT("MyGame"));
+    Hb->Play(TEXT("impact.hit"), 0.5f);
+}
+```
+
+`"impact.hit"` must be an event id present in the **kit deployed to the device**
+via [Hapbeat Studio](https://devtools.hapbeat.com). The SDK sends the
+*instruction*; the waveform lives in the kit on the device.
+
+## API (`UHapbeatSubsystem`)
+
+| Function | Purpose |
+|---|---|
+| `Connect(Port, AppName)` | open the UDP broadcast socket |
+| `Play(EventId, Gain, Target)` | play an event (Gain 0..1) |
+| `Stop(EventId, Target)` | stop one event |
+| `StopAll(Target)` | stop everything |
+| `Ping()` | keep-alive / probe |
+
+`Target` is a device address (`""` = broadcast, `player_1/chest`, `*/chest`).
+
+## Status
+
+Level-1 (fire from C++/Blueprint) is implemented as a runtime plugin. It is
+authored against the UE5 API; **compile it in your Unreal project** to verify.
+Blueprint Trigger components, an EventMap-style editor, and device discovery are
+planned level-2/3 features.
+
+## License
+
+MIT © Hapbeat

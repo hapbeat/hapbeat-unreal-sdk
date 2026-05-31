@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Hapbeat SDK",
+	"Description": "Drive Hapbeat haptic devices over Wi-Fi UDP from Unreal Engine (C++ and Blueprint).",
+	"Category": "Hardware",
+	"CreatedBy": "Hapbeat",
+	"CreatedByURL": "https://hapbeat.com",
+	"DocsURL": "https://devtools.hapbeat.com/docs/sdk-integration/",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/hapbeat/hapbeat-unreal-sdk/issues",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "HapbeatSDK",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

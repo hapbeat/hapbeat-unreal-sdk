@@ -1,0 +1,22 @@
+# Unreal Engine generated
+Binaries/
+Build/
+Intermediate/
+Saved/
+DerivedDataCache/
+*.VC.db
+*.opensdf
+*.opendb
+*.sdf
+*.sln
+*.suo
+.vs/
+.vsconfig
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+
+# Internal dev notes (use workspace dev-notes/<repo-name>/ instead)
+dev-notes/

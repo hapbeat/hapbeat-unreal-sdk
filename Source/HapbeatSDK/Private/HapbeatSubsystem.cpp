@@ -81,7 +81,11 @@ void UHapbeatSubsystem::StopAll(const FString& Target)
 
 void UHapbeatSubsystem::Ping()
 {
-	const int64 NowUs = static_cast<int64>(FDateTime::UtcNow().ToUnixTimestamp()) * 1000000;
+	// Unix-epoch microseconds. ToUnixTimestamp() is whole seconds, so derive µs
+	// from ticks (100 ns each) to keep the int64 field at true microsecond
+	// resolution (parity with the Python/Web/Unity SDKs).
+	static const int64 UnixEpochTicks = FDateTime(1970, 1, 1).GetTicks();
+	const int64 NowUs = (FDateTime::UtcNow().GetTicks() - UnixEpochTicks) / 10;
 	SendPacket(FHapbeatProtocol::BuildPing(NextSeq(), NowUs));
 }
 

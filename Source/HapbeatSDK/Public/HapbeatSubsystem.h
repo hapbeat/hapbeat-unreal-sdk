@@ -51,7 +51,7 @@ private:
 	FSocket* Socket = nullptr;
 	TSharedPtr<FInternetAddr> BroadcastAddr;
 	int32 Port = 7700;
-	uint8 Group = 0;
+	uint8 Group = 0; // TODO(L2): expose group selection; always 0 at level-1
 	FString AppName;
 	uint16 Seq = 0;
 };

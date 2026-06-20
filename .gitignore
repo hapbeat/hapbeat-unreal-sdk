@@ -20,3 +20,6 @@ Thumbs.db
 
 # Internal dev notes (use workspace dev-notes/<repo-name>/ instead)
 dev-notes/
+CLAUDE.md
+instructions/
+.claude/

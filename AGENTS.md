@@ -137,5 +137,7 @@ device-addressing.
 
 ## More detail
 
-- SDK integration overview: https://devtools.hapbeat.com/docs/sdk-integration/
-- Docs portal: https://devtools.hapbeat.com/
+When this single file is not enough, an agent can fetch:
+
+- **Concepts** (shared by every SDK): event id <-> kit https://devtools.hapbeat.com/docs/concepts/event-id-and-kit/ - command vs clip https://devtools.hapbeat.com/docs/concepts/fire-vs-clip/ - targeting https://devtools.hapbeat.com/docs/concepts/group-player-addressing/
+- Human docs: https://devtools.hapbeat.com/docs/sdk-integration/ - Portal: https://devtools.hapbeat.com/

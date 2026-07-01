@@ -12,25 +12,27 @@ from one file. Unreal plugin name: `HapbeatSDK`. Public type: `UHapbeatSubsystem
 
 ## What it is
 
-A thin **level-1** runtime plugin to drive Hapbeat haptic devices from Unreal
-Engine 5 over Wi-Fi UDP broadcast. Exposes a `UGameInstanceSubsystem` that is
-callable from both C++ and Blueprint. No cloud; works on the LAN. Uses only the
-engine's `Sockets` / `Networking` modules (no external deps).
+A **level-2/3** runtime plugin to drive Hapbeat haptic devices from Unreal
+Engine 5 over Wi-Fi UDP broadcast. Exposes a `UGameInstanceSubsystem` callable
+from C++ and Blueprint. No cloud; works on the LAN. Uses only the engine's
+`Sockets` / `Networking` modules (no external deps).
 
-It does **not** read kits, resample audio, stream clip WAVs, discover devices,
-or provide EventMap-style tuning assets. The SDK sends the *instruction*; the
-waveform lives in the kit deployed to the device. Discovery, Blueprint Trigger
-components, and an EventMap editor are planned level-2/3 features.
+Implemented: fire (`Play`/`Stop`/`StopAll`), real-time **clip streaming** with
+gain/pan (`StreamClip` → `UHapbeatStreamPlayback`), **device liveness** from PONG
+replies (delegates + `IsAlive`), a **`UHapbeatEventMap`** data asset for default
+tuning, and Blueprint **trigger components** (collision / sequence). The SDK
+sends the *instruction*; the waveform lives in the kit deployed to the device.
 
-## Core model: fire vs editing, linked by event id
+## Core model: Trigger vs EventMap, linked by event id
 
-- **Fire side** (your UE code): *when/where* to play — `Play` / `Stop` / etc.
-- **Editing side** (the kit on the device): *what/how* — which waveform, default
-  intensity, loop. Authored in [Hapbeat Studio](https://devtools.hapbeat.com) and
-  flashed to the device.
-- They are linked only by **event id** (e.g. `"impact.hit"`). Keep waveform
-  choices out of game code; put them in the kit. At level-1 the only per-call
-  tuning is `Gain` and `Target`.
+- **Trigger side** (your UE code / a trigger component): *when/where* to play —
+  `Play` / `Stop`, a collision, a sequence.
+- **Tuning side** (the `UHapbeatEventMap` + the kit on the device): *what/how* —
+  which waveform, default intensity, loop. Authored in
+  [Hapbeat Studio](https://devtools.hapbeat.com) and flashed to the device.
+- They are linked only by **event id**, formatted `<kit-name>.<file-name>` (e.g.
+  `"sample-kit.sine_100hz"`, the standard verification event). Keep waveform
+  choices out of game code.
 
 The event id and wire format are defined by **hapbeat-contracts**
 (`specs/message-format.md`) — follow it, do not redefine here.
@@ -57,7 +59,7 @@ Studio.
 if (UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>())
 {
     Hb->Connect(7700, TEXT("MyGame"));   // call once, e.g. BeginPlay
-    Hb->Play(TEXT("impact.hit"), 0.5f);  // Gain 0..1
+    Hb->Play(TEXT("sample-kit.sine_100hz"), 0.5f);  // Gain 0..1
 }
 ```
 
@@ -66,7 +68,7 @@ if (UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>()
 ```
 Get Game Instance → Get Subsystem (Hapbeat Subsystem)
   → Connect (Port 7700, App Name "MyGame")
-  → Play (Event Id "impact.hit", Gain 0.5)
+  → Play (Event Id "sample-kit.sine_100hz", Gain 0.5)
 ```
 
 ## Public API (`UHapbeatSubsystem`)
@@ -80,30 +82,57 @@ void Play(const FString& EventId, float Gain = 1.0f, const FString& Target = TEX
 void Stop(const FString& EventId, const FString& Target = TEXT(""));
 void StopAll(const FString& Target = TEXT(""));
 void Ping();
+// Real-time clip streaming (returns a handle for live gain/pan modulation):
+UHapbeatStreamPlayback* StreamClip(UHapbeatClip* Clip, float BaselineGain = 1.0f,
+    float InitialGain = 1.0f, const FString& Target = TEXT(""), bool bLoop = false);
+void StopStream();
+void StopStreamWithFlush(const FString& Target = TEXT(""));
+// Liveness (BlueprintPure): true only when a device has answered a PONG.
+bool IsConnected() const;           // socket open (UDP: not device presence)
+int32 GetAliveDeviceCount() const;
+bool IsAlive() const;
+bool IsStreaming() const;
 ```
 
 - `Connect` — opens the reusable broadcasting UDP socket bound to
-  `255.255.255.255:InPort`. `InAppName` is truncated to 16 chars and shown on the
-  device OLED; if non-empty, `Connect` sends a CONNECT_STATUS(connected=true).
-- `Play` — sends PLAY. `Gain` is clamped to `0..1` on send. `Target` `""` =
-  broadcast.
-- `Stop` / `StopAll` — stop one event / everything.
-- `Ping` — sends PING with Unix-epoch microseconds (keep-alive / probe).
-- There is no explicit `Disconnect`. The subsystem's `Deinitialize` (engine
-  shutdown / GameInstance teardown) sends CONNECT_STATUS(connected=false) when an
-  app name was set, then closes and destroys the socket.
+  `255.255.255.255:InPort`. `InAppName` truncated to 16 chars, shown on the OLED;
+  if non-empty, sends CONNECT_STATUS(connected=true). A ticker sends periodic
+  PING + CONNECT_STATUS keep-alive.
+- `Play` — sends PLAY. `Gain` clamped to `0..1`. `Target` `""` = broadcast.
+- `StreamClip` — streams a PCM16 `UHapbeatClip` and returns a
+  `UHapbeatStreamPlayback` whose `Gain`/`Pan` you set per frame; the SDK
+  pre-multiplies each sample so STREAM_BEGIN carries gain=1.0. Single active
+  session, REPLACE semantics. `StopStream` / `StopStreamWithFlush` end it.
+- Liveness: UDP is connectionless, so `IsConnected()` == "socket open". Device
+  presence is `IsAlive()` / `GetAliveDeviceCount()`, tracked from PONG replies.
+- **Delegates** (`BlueprintAssignable`): `OnConnected` / `OnDisconnected` (fire
+  on a 0<->positive liveness transition), `OnError` (device ERROR packet),
+  `OnPong` (per PONG; endpoint, RTT µs, device name/address/firmware).
+- No explicit `Disconnect`: `Deinitialize` sends CONNECT_STATUS(false) when an
+  app name was set, then closes the socket.
 
-Note: if you call `Play`/`Stop`/etc. before `Connect`, the subsystem lazily
-connects with the last `Port`/`AppName` (defaults `7700` / `""`).
+If you call `Play`/`Stop`/etc. before `Connect`, the subsystem lazily connects
+with the last `Port`/`AppName` (defaults `7700` / `""`).
+
+## Trigger components & EventMap
+
+- `UHapbeatCollisionTriggerComponent` — add to an Actor; fires on hit/overlap
+  (tag filter, cooldown, optional velocity-scaled gain).
+- `UHapbeatSequenceComponent` — grab/hold/release sequences.
+- `UHapbeatTriggerComponent` — base component; resolves an event via the EventMap
+  and plays it. Call `Fire()` from any Blueprint event.
+- `UHapbeatEventMap` (`UDataAsset`) — a list of `FHapbeatEventEntry` (event id +
+  default gain/params). Assign to trigger components so the default gain is data,
+  not code. `UHapbeatTargetLibrary` has Blueprint helpers for target strings.
 
 ## Targeting (device-addressing)
 
 `Target` is a device address string:
 
 ```cpp
-Hb->Play(TEXT("impact.hit"), 0.6f, TEXT("player_1/chest")); // one device
-Hb->Play(TEXT("impact.hit"), 0.6f, TEXT("*/chest"));        // all chest devices
-Hb->Play(TEXT("impact.hit"));                                // "" = broadcast (all)
+Hb->Play(TEXT("sample-kit.sine_100hz"), 0.6f, TEXT("player_1/chest")); // one device
+Hb->Play(TEXT("sample-kit.sine_100hz"), 0.6f, TEXT("*/chest"));        // all chest devices
+Hb->Play(TEXT("sample-kit.sine_100hz"));                                // "" = broadcast (all)
 ```
 
 Devices self-filter by group/target. Syntax (`player_1/chest`, `*/chest`,
@@ -116,10 +145,10 @@ device-addressing.
   dropped"). The device command port is UDP **7700**.
 - Wire format: 8-byte little-endian header (magic `0x4842` "HB", version `0x01`,
   cmd, seq, length) + payload; see `HapbeatProtocol.h` and contracts
-  `message-format.md`. Commands implemented: PLAY `0x01`, STOP `0x02`,
-  STOP_ALL `0x03`, PING `0x10`, CONNECT_STATUS `0x20`.
-- Group selection is fixed to `0` at level-1 (TODO L2). Device config (TCP 7701)
-  is not the SDK's job — that's hapbeat-helper / Studio.
+  `message-format.md`. Commands: PLAY `0x01`, STOP `0x02`, STOP_ALL `0x03`,
+  PING `0x10`, PONG `0x11` (received), CONNECT_STATUS `0x20`, and the streaming
+  set STREAM_BEGIN/DATA/END (`0x30`–`0x32`).
+- Device config (TCP 7701) is not the SDK's job — that's hapbeat-helper / Studio.
 
 ## Common patterns / gotchas
 

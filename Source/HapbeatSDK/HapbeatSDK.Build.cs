@@ -14,6 +14,8 @@ public class HapbeatSDK : ModuleRules
 			"Engine",
 			"Sockets",
 			"Networking",
+			"DeveloperSettings", // UHapbeatConfig : UDeveloperSettings (Project Settings page)
+			"PhysicsCore",       // FBodyInstance read in the collision trigger's setup hint
 		});
 	}
 }

@@ -18,8 +18,9 @@ Drive a Hapbeat device from Unreal Engine 5.
 
 1. **Get Game Instance → Get Subsystem**, class **Hapbeat Subsystem**.
 2. Call **Connect** (Port `7700`, App Name `MyGame`) once, e.g. on BeginPlay.
-3. Call **Play** (Event Id `impact.hit`, Gain `0.5`) wherever you want haptics —
-   an OnHit event, an AnimNotify, an input action.
+3. Call **Play** (Event Id `sample-kit.sine_100hz`, Gain `0.5`) wherever you want haptics —
+   an OnHit event, an AnimNotify, an input action. Event ids follow
+   `<kit-name>.<file-name>`; `sample-kit.sine_100hz` is the standard test event.
 
 ## C++
 
@@ -39,7 +40,7 @@ void AMyActor::OnHit()
 {
     if (UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>())
     {
-        Hb->Play(TEXT("impact.hit"), 0.8f);
+        Hb->Play(TEXT("sample-kit.sine_100hz"), 0.8f);
     }
 }
 ```
@@ -50,9 +51,9 @@ header from C++.
 ## Targeting
 
 ```cpp
-Hb->Play(TEXT("impact.hit"), 0.6f, TEXT("player_1/chest")); // one device
-Hb->Play(TEXT("impact.hit"), 0.6f, TEXT("*/chest"));         // all chest devices
-Hb->Play(TEXT("impact.hit"));                                 // broadcast (all)
+Hb->Play(TEXT("sample-kit.sine_100hz"), 0.6f, TEXT("player_1/chest")); // one device
+Hb->Play(TEXT("sample-kit.sine_100hz"), 0.6f, TEXT("*/chest"));         // all chest devices
+Hb->Play(TEXT("sample-kit.sine_100hz"));                                 // broadcast (all)
 ```
 
 ## The orthogonal design
@@ -60,8 +61,11 @@ Hb->Play(TEXT("impact.hit"));                                 // broadcast (all)
 - **Trigger** = any UE event (OnHit, AnimNotify, input action, gameplay code).
 - **Tuning** = the event id + gain you pass.
 
-These stay separable, matching the Hapbeat Unity SDK. Blueprint Trigger
-components and an EventMap-style editor are planned level-2 features.
+These stay separable, matching the Hapbeat Unity SDK. The plugin also ships
+Blueprint **trigger components** (`UHapbeatCollisionTriggerComponent`,
+`UHapbeatSequenceComponent`), a **`UHapbeatEventMap`** data asset for default
+gains, real-time **clip streaming** (`StreamClip`), and PONG-based device
+liveness — see the README API table.
 
 ## Notes
 

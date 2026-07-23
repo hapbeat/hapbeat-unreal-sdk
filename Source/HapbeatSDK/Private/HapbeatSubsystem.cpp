@@ -16,10 +16,14 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
-// Defaulted in the .cpp (not the header) so the TUniquePtr<FHapbeatStreamer>
-// member is constructed/destroyed where FHapbeatStreamer is a complete type.
+// Defined in the .cpp (not the header) where FHapbeatStreamer is a complete
+// type. The dtor delete is a leak guard only — the normal teardown path is
+// Deinitialize() -> StopStream(), which already deletes and nulls Streamer.
 UHapbeatSubsystem::UHapbeatSubsystem() = default;
-UHapbeatSubsystem::~UHapbeatSubsystem() = default;
+UHapbeatSubsystem::~UHapbeatSubsystem()
+{
+	delete Streamer; // null-safe; normally already nullptr via Deinitialize
+}
 
 void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -210,7 +214,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 	}
 
 	// Single active session, REPLACE semantics: end any current stream first.
-	if (Streamer.IsValid())
+	if (Streamer != nullptr)
 	{
 		StopStream();
 	}
@@ -222,7 +226,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 
 	// The streamer owns a COPY of the clip bytes (TArray copy ctor -> moved into the
 	// streamer) so the source UHapbeatClip is never mutated by the premultiply.
-	Streamer = MakeUnique<FHapbeatStreamer>(
+	Streamer = new FHapbeatStreamer(
 		TArray<uint8>(Clip->Pcm16),
 		Clip->SampleRate,
 		Clip->NumChannels,
@@ -252,7 +256,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 
 bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 {
-	if (!Streamer.IsValid())
+	if (Streamer == nullptr)
 	{
 		// Nothing to drive — auto-unregister this ticker.
 		StreamTickHandle.Reset();
@@ -267,7 +271,8 @@ bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 		// down and return false so the core ticker removes this delegate for us
 		// (do NOT RemoveTicker from inside the callback — returning false is the
 		// reentrancy-safe way).
-		Streamer.Reset();
+		delete Streamer;
+		Streamer = nullptr;
 		ActivePlayback = nullptr;
 		StreamTickHandle.Reset();
 		return false;
@@ -278,11 +283,12 @@ bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 
 void UHapbeatSubsystem::StopStream()
 {
-	if (Streamer.IsValid())
+	if (Streamer != nullptr)
 	{
 		// Send STREAM_END (idempotent) before discarding the streamer.
 		Streamer->SendEnd();
-		Streamer.Reset();
+		delete Streamer;
+		Streamer = nullptr;
 	}
 
 	if (ActivePlayback != nullptr)

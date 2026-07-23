@@ -3,14 +3,13 @@
 
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
-#include "Serialization/ArrayReader.h"        // FArrayReaderPtr (TSharedPtr<FArrayReader>)
+#include "Common/UdpSocketReceiver.h"         // FUdpSocketReceiver + FArrayReaderPtr typedef
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "HapbeatSubsystem.generated.h"
 
 class FSocket;
 class FInternetAddr;
-class FUdpSocketReceiver;
 class FHapbeatStreamer;
 class UHapbeatClip;
 class UHapbeatStreamPlayback;
@@ -49,7 +48,7 @@ class HAPBEATSDK_API UHapbeatSubsystem : public UGameInstanceSubsystem
 public:
 	UHapbeatSubsystem();
 	// Out-of-line dtor (defined in the .cpp where FHapbeatStreamer is complete) so
-	// the TUniquePtr<FHapbeatStreamer> member can be destroyed with only a forward
+	// the owned Streamer pointer can be deleted with only a forward
 	// declaration in this header (the generated dtor would otherwise need the full type).
 	virtual ~UHapbeatSubsystem() override;
 
@@ -132,7 +131,7 @@ public:
 
 	/** True while a clip stream session is active. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
-	bool IsStreaming() const { return Streamer.IsValid(); }
+	bool IsStreaming() const { return Streamer != nullptr; }
 
 	/** Handle to the active stream playback, or nullptr if nothing is streaming. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
@@ -218,8 +217,14 @@ private:
 	UPROPERTY()
 	TObjectPtr<UHapbeatStreamPlayback> ActivePlayback = nullptr;
 
-	/** The single active streamer (PCM copy + pacing). Null when not streaming. */
-	TUniquePtr<FHapbeatStreamer> Streamer;
+	/**
+	 * The single active streamer (PCM copy + pacing). Null when not streaming.
+	 * Owned raw pointer (deleted in StopStream/TickStream/dtor), same pattern as
+	 * Receiver above. Deliberately NOT a TUniquePtr: UHT's gen.cpp includes this
+	 * header with FHapbeatStreamer still incomplete and instantiates the smart
+	 * pointer's deleter there -> C4150 "deletion of incomplete type" as-error.
+	 */
+	FHapbeatStreamer* Streamer = nullptr;
 
 	/** Per-frame ticker driving TickStream; valid only while a stream is active. */
 	FTSTicker::FDelegateHandle StreamTickHandle;

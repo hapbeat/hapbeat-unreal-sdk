@@ -31,9 +31,11 @@ public:
 	 * All parts unset => "" (broadcast to all).
 	 *
 	 * Examples: (1,"pos_chest",-1) => "player_1/pos_chest";
-	 *           (-1,"pos_neck",-1) => "*/pos_neck";
 	 *           (2,"",-1) => "player_2";
-	 *           (-1,"",1) => "*/*/group_1".
+	 *           (-1,"pos_neck",-1) => wildcard player, i.e. asterisk + "/pos_neck";
+	 *           (-1,"",1) => two wildcard segments, then "/group_1".
+	 * (Wildcard examples are spelled out in words: the literal target text would
+	 *  contain an asterisk-slash pair, which terminates this comment block.)
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
 	static FString BuildTarget(int32 Player = -1, const FString& Position = TEXT(""), int32 Group = -1);

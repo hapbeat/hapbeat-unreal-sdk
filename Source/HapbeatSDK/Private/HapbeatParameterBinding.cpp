@@ -72,12 +72,14 @@ float UHapbeatParameterBinding::ReadSourceValue(float DeltaTime)
 		// Physics velocity lives on UPrimitiveComponent (Unity reads Rigidbody;
 		// the UE analogue is a simulating primitive root). 0 when the root is a
 		// plain USceneComponent or isn't simulating — same as Unity's null/zero.
-		const UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Root);
+		// Non-const: GetPhysicsLinearVelocity/AngularVelocity are (oddly) declared
+		// non-const on UPrimitiveComponent.
+		UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Root);
 		return Prim ? static_cast<float>(Prim->GetPhysicsLinearVelocity().Size()) : 0.0f;
 	}
 	case EHapbeatBindingSource::AngularVelocityMagnitude:
 	{
-		const UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Root);
+		UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Root);
 		return Prim ? static_cast<float>(Prim->GetPhysicsAngularVelocityInDegrees().Size()) : 0.0f;
 	}
 

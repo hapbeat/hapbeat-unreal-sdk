@@ -49,4 +49,32 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
 	static void ParseTarget(const FString& Target, int32& OutPlayer, FString& OutPosition, int32& OutGroup);
+
+	/**
+	 * Rewrite Target so the player_ / group_ segments carry forced values,
+	 * without disturbing anything else in the string. A VERBATIM port of
+	 * HapbeatClient.ResolveTarget(string, int, int) (Unity SDK) — same rule
+	 * order, same segment-slot placement, same edge cases. Pure / static so it
+	 * can be exercised directly (see the .cpp for the rule-by-rule mapping to
+	 * Tests/Runtime/ResolveTargetTests.cs, the Unity SDK's authoritative spec).
+	 *
+	 * This is the mechanism behind UHapbeatSubsystem::SetAddressOverride: one
+	 * identical build deployed to many HMDs, each pinned to its own Hapbeat via
+	 * a per-launch player/group override, WITHOUT editing every EventMap entry's
+	 * authored target string.
+	 *
+	 * Grammar (hapbeat-contracts/specs/device-addressing.md §2):
+	 *   [prefix/] player_{N} / {position} [/group_{M}]
+	 *
+	 * @param Target         Original EventMap/API target string. May be empty
+	 *                       (FString has no null, so Unity's null-target case
+	 *                       collapses into the empty-string case here).
+	 * @param OverridePlayer Forced player number, or &lt; 1 to leave the player slot alone.
+	 * @param OverrideGroup  Forced group number, or &lt; 1 to leave the group slot alone.
+	 * @return Target completely unchanged when BOTH overrides are &lt; 1 (disabled) —
+	 *         this is what keeps existing projects' behavior byte-for-byte identical
+	 *         when the feature isn't used. Otherwise the rewritten target string.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	static FString ResolveTarget(const FString& Target, int32 OverridePlayer, int32 OverrideGroup);
 };

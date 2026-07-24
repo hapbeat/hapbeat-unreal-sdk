@@ -39,6 +39,13 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FHapbeatOnPong, const FString&, En
  * replies (AliveDeviceCount / IsAlive). OnConnected / OnDisconnected fire only
  * on a liveness 0<->positive transition (this fixes the Unity double-fire where
  * OnConnected also fired on socket-open).
+ *
+ * Global address override: SetAddressOverride() forces the player/group on
+ * EVERY outgoing send (Play/Stop/StopAll/StreamClip/StopStreamWithFlush)
+ * WITHOUT touching triggers or EventMap entries — the intended flow for one
+ * identical build deployed to many HMDs, each pinned 1:1 to its own Hapbeat via
+ * a per-launch override (optionally persisted). See ResolveTarget (Unity SDK:
+ * HapbeatClient.ResolveTarget / HapbeatManager.SetAddressOverride).
  */
 UCLASS()
 class HAPBEATSDK_API UHapbeatSubsystem : public UGameInstanceSubsystem
@@ -46,6 +53,9 @@ class HAPBEATSDK_API UHapbeatSubsystem : public UGameInstanceSubsystem
 	GENERATED_BODY()
 
 public:
+	/** Sentinel for a disabled address-override axis (player or group). Mirrors HapbeatManager.AddressOverrideDisabled (Unity SDK). */
+	static constexpr int32 AddressOverrideDisabled = -1;
+
 	UHapbeatSubsystem();
 	// Out-of-line dtor (defined in the .cpp where FHapbeatStreamer is complete) so
 	// the owned Streamer pointer can be deleted with only a forward
@@ -112,6 +122,57 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void StopStreamWithFlush(const FString& Target = TEXT(""));
+
+	// ---- Global address override (single-app, multi-HMD 1:1 deployments) ----
+
+	/**
+	 * Force the player / group applied to EVERY outgoing command (Play/Stop/
+	 * StopAll/StreamClip/StopStreamWithFlush) at runtime. Pass
+	 * AddressOverrideDisabled (-1) to leave an axis alone — a disabled axis
+	 * means "don't override that axis", not "rewrite the target's value to
+	 * -1"; it leaves each EventMap/trigger-authored target string exactly as
+	 * authored (see UHapbeatTargetLibrary::ResolveTarget). Values outside
+	 * 1..99 are normalized to AddressOverrideDisabled (NormalizeAddressOverride).
+	 *
+	 * When bPersist is true, the values are saved to the platform's
+	 * GameUserSettings ini (section "HapbeatSDK") and restored on next launch
+	 * (Initialize(), before auto-connect) — the intended flow for "one
+	 * identical build deployed to many HMDs, each bound to its own Hapbeat".
+	 * Mirrors HapbeatManager.SetAddressOverride (Unity SDK).
+	 */
+	// NOTE: the group parameter is named InGroup per this class's existing
+	// `Connect(int32 InPort, const FString& InAppName)` naming convention.
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	void SetAddressOverride(int32 Player, int32 InGroup, bool bPersist = false);
+
+	/**
+	 * Clear a persisted address override (removes the GameUserSettings ini
+	 * keys, if present) and revert the runtime override to disabled on both
+	 * axes. There is no config-level default to fall back to — clearing
+	 * simply means "stop overriding". Reuses SetAddressOverride (bPersist:
+	 * false, so the just-cleared keys aren't immediately re-saved). Mirrors
+	 * HapbeatManager.ClearPersistedAddressOverride (Unity SDK).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	void ClearPersistedAddressOverride();
+
+	/** Currently effective forced player number, or AddressOverrideDisabled (-1) if this axis doesn't override the target's player. */
+	UFUNCTION(BlueprintPure, Category = "Hapbeat|Target")
+	int32 GetOverridePlayer() const { return OverridePlayer; }
+
+	/** Currently effective forced group number, or AddressOverrideDisabled (-1) if this axis doesn't override the target's group. */
+	UFUNCTION(BlueprintPure, Category = "Hapbeat|Target")
+	int32 GetOverrideGroup() const { return OverrideGroup; }
+
+	/**
+	 * Clamp an override value to the valid device-addressing range (1..99).
+	 * Anything outside that range (including the disabled sentinel -1) is
+	 * normalized to AddressOverrideDisabled. Mirrors
+	 * HapbeatClient.NormalizeOverride (Unity SDK); exposed as a public static
+	 * (not BlueprintCallable — matches the Unity method it mirrors) so any
+	 * future tooling reading the persisted ini values can reuse the same clamp.
+	 */
+	static int32 NormalizeAddressOverride(int32 Value) { return (Value >= 1 && Value <= 99) ? Value : AddressOverrideDisabled; }
 
 	/**
 	 * Socket is open and ready to send. UDP is connectionless: this stays true
@@ -189,7 +250,14 @@ private:
 	FUdpSocketReceiver* Receiver = nullptr;
 	TSharedPtr<FInternetAddr> BroadcastAddr;
 	int32 Port = 7700;
-	uint8 Group = 0; // header group field (display-only); seeded from UHapbeatConfig::Group in Initialize
+	/**
+	 * Group byte for CONNECT_STATUS (device OLED display only, never routing):
+	 * the active override group when set, or 0 otherwise. Verbatim port of
+	 * HapbeatManager.ConnectStatusGroupByte (Unity SDK) — the config-level
+	 * UHapbeatConfig::Group is deliberately NOT sent here (parity with Unity,
+	 * where the OLED group display tracks the address override exclusively).
+	 */
+	uint8 ConnectStatusGroupByte() const { return OverrideGroup >= 1 ? static_cast<uint8>(OverrideGroup) : 0; }
 	FString AppName;
 	uint16 Seq = 0;
 	float PingInterval = 5.0f; // seeded from UHapbeatConfig::PingInterval in Initialize
@@ -207,6 +275,14 @@ private:
 	int32 PrevAliveCount = -1;
 	/** Set once Deinitialize starts so SendPacket cannot lazily re-open the socket during teardown. */
 	bool bShuttingDown = false;
+
+	// --- global address override (see SetAddressOverride / ResolveTarget) ---
+
+	/** Effective (already-normalized) forced player. AddressOverrideDisabled (-1) = disabled.
+	 * Populated from GConfig (if persisted) in Initialize(), before auto-connect. */
+	int32 OverridePlayer = AddressOverrideDisabled;
+	/** Effective (already-normalized) forced group. AddressOverrideDisabled (-1) = disabled. */
+	int32 OverrideGroup = AddressOverrideDisabled;
 
 	// --- streaming (Phase 3); game-thread only ---
 

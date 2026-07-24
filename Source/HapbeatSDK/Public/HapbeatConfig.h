@@ -31,7 +31,7 @@ public:
 	int32 Port = 7700;
 
 	UPROPERTY(EditAnywhere, config, Category = "Connection",
-		meta = (Tooltip = "Header group field (display-only on the device OLED). -1 = no group / treated as 0 by the SDK. 0 = broadcast to all. 1-254 = a specific group.\nNote: addressing-based group filtering is a trailing /group_N target segment, not this field.",
+		meta = (Tooltip = "Reserved (kept for Unity SDK config parity; not consumed by the runtime). The device OLED group display tracks SetAddressOverride exclusively, and routing-group filtering is a trailing /group_N target segment.",
 			ClampMin = "-1", ClampMax = "254"))
 	int32 Group = -1;
 

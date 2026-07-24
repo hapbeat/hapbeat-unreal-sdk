@@ -6,13 +6,26 @@
 #include "HapbeatClip.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamer.h"
+#include "HapbeatTargetLibrary.h"
 #include "Async/Async.h"
 #include "Common/UdpSocketBuilder.h"
 #include "Common/UdpSocketReceiver.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Misc/App.h"
+#include "Misc/ConfigCacheIni.h" // GConfig / GGameUserSettingsIni — address-override persistence
 #include "Sockets.h"
 #include "SocketSubsystem.h"
+
+namespace
+{
+	// GameUserSettings ini section + keys for the persisted address override
+	// (SetAddressOverride / ClearPersistedAddressOverride). Mirrors the Unity
+	// SDK's PlayerPrefs keys (Hapbeat.OverridePlayer / Hapbeat.OverrideGroup),
+	// renamed to fit the ini section/key idiom.
+	const TCHAR* AddressOverrideConfigSection = TEXT("HapbeatSDK");
+	const TCHAR* AddressOverridePlayerKey = TEXT("AddressOverridePlayer");
+	const TCHAR* AddressOverrideGroupKey = TEXT("AddressOverrideGroup");
+}
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
@@ -37,8 +50,9 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		Port = Cfg->Port;
 		PingInterval = Cfg->PingInterval;
 		StreamSendAheadSeconds = Cfg->StreamSendAheadSeconds;
-		// Header group is display-only; -1 ("no group") collapses to 0 on the wire.
-		Group = Cfg->Group < 0 ? 0 : static_cast<uint8>(Cfg->Group);
+		// NOTE: UHapbeatConfig::Group is deliberately NOT consumed here. The
+		// CONNECT_STATUS group byte (OLED display) tracks the address override
+		// exclusively — see ConnectStatusGroupByte(), verbatim Unity parity.
 
 		// AppName shows on the device OLED. Empty => fall back to the project name
 		// (parity with the Unity SDK's Application.productName fallback), still
@@ -50,6 +64,18 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		}
 		AppName = ResolvedAppName.Left(FHapbeatProtocol::MaxAppNameLen);
 	}
+
+	// GConfig (if persisted) restores a per-device address override saved by a
+	// prior SetAddressOverride(..., bPersist: true) call. There is no
+	// config-level default to fall back to — an override is either persisted
+	// from a previous run, or starts disabled. Mirrors HapbeatManager.Initialize
+	// (Unity SDK) reading PlayerPrefs before auto-connect.
+	int32 PersistedPlayer = AddressOverrideDisabled;
+	int32 PersistedGroup = AddressOverrideDisabled;
+	GConfig->GetInt(AddressOverrideConfigSection, AddressOverridePlayerKey, PersistedPlayer, GGameUserSettingsIni);
+	GConfig->GetInt(AddressOverrideConfigSection, AddressOverrideGroupKey, PersistedGroup, GGameUserSettingsIni);
+	OverridePlayer = NormalizeAddressOverride(PersistedPlayer);
+	OverrideGroup = NormalizeAddressOverride(PersistedGroup);
 
 	// Auto-connect at startup, matching the Unity SDK's Awake() auto-connect.
 	// GameInstanceSubsystems exist only in PIE / packaged game (not the editor
@@ -89,7 +115,7 @@ void UHapbeatSubsystem::Deinitialize()
 		if (!AppName.IsEmpty())
 		{
 			// Tell the device this app is leaving so the OLED clears.
-			SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), false, Group, AppName, FString()));
+			SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), false, ConnectStatusGroupByte(), AppName, FString()));
 		}
 		Socket->Close();
 		if (ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM))
@@ -159,7 +185,7 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 
 	if (!AppName.IsEmpty())
 	{
-		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, Group, AppName, FString()));
+		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppName, FString()));
 	}
 
 	// NOTE: deliberately do NOT raise OnConnected here. socket-open != device
@@ -169,17 +195,20 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 
 void UHapbeatSubsystem::Play(const FString& EventId, float Gain, const FString& Target)
 {
-	SendPacket(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, Target, 0, FMath::Clamp(Gain, 0.0f, 1.0f)));
+	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
+	SendPacket(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolvedTarget, 0, FMath::Clamp(Gain, 0.0f, 1.0f)));
 }
 
 void UHapbeatSubsystem::Stop(const FString& EventId, const FString& Target)
 {
-	SendPacket(FHapbeatProtocol::BuildStop(NextSeq(), EventId, Target));
+	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
+	SendPacket(FHapbeatProtocol::BuildStop(NextSeq(), EventId, ResolvedTarget));
 }
 
 void UHapbeatSubsystem::StopAll(const FString& Target)
 {
-	SendPacket(FHapbeatProtocol::BuildStopAll(NextSeq(), Target));
+	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
+	SendPacket(FHapbeatProtocol::BuildStopAll(NextSeq(), ResolvedTarget));
 }
 
 void UHapbeatSubsystem::Ping()
@@ -224,13 +253,20 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 	Playback->Init(BaselineGain, InitialGain);
 	ActivePlayback = Playback;
 
+	// Resolve the global address override (if any) BEFORE the streamer captures
+	// Target — it stores this string by value and reuses it, unmodified, for
+	// every STREAM_BEGIN it sends (including the loop-wrap path, which reuses
+	// the session rather than re-resolving). Triggers/EventMap entries stay
+	// untouched: only the wire-bound copy is rewritten.
+	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
+
 	// The streamer owns a COPY of the clip bytes (TArray copy ctor -> moved into the
 	// streamer) so the source UHapbeatClip is never mutated by the premultiply.
 	Streamer = new FHapbeatStreamer(
 		TArray<uint8>(Clip->Pcm16),
 		Clip->SampleRate,
 		Clip->NumChannels,
-		Target,
+		ResolvedTarget,
 		bLoop,
 		TWeakObjectPtr<UHapbeatStreamPlayback>(Playback),
 		[this]() { return NextSeq(); },
@@ -311,14 +347,55 @@ void UHapbeatSubsystem::StopStreamWithFlush(const FString& Target)
 {
 	StopStream();
 
+	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
+
 	// Force the device ring buffer to flush: a STREAM_BEGIN + STREAM_END pair
 	// trips the firmware's BEGIN_FLUSH_THRESHOLD path (ringReset when residual
 	// > 32 ms), silencing within a few ms. gain = 1.0 (any format works); parity
 	// with Unity StopStreamWithFlush (SendStreamBegin(16000,1,PCM16,0,1.0,target)
 	// + SendStreamEnd()). SendPacket no-ops if the socket is gone.
 	SendPacket(FHapbeatProtocol::BuildStreamBegin(
-		NextSeq(), 16000, 1, FHapbeatProtocol::AudioFormatPcm16, 0, 1.0f, Target));
+		NextSeq(), 16000, 1, FHapbeatProtocol::AudioFormatPcm16, 0, 1.0f, ResolvedTarget));
 	SendPacket(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
+}
+
+void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPersist)
+{
+	OverridePlayer = NormalizeAddressOverride(Player);
+	OverrideGroup = NormalizeAddressOverride(InGroup);
+
+	if (bPersist)
+	{
+		GConfig->SetInt(AddressOverrideConfigSection, AddressOverridePlayerKey, OverridePlayer, GGameUserSettingsIni);
+		GConfig->SetInt(AddressOverrideConfigSection, AddressOverrideGroupKey, OverrideGroup, GGameUserSettingsIni);
+		GConfig->Flush(false, GGameUserSettingsIni);
+	}
+
+	UE_LOG(LogHapbeat, Log, TEXT("Address override set: player=%d, group=%d, persist=%d"),
+		OverridePlayer, OverrideGroup, bPersist ? 1 : 0);
+
+	// Keep the device's CONNECT_STATUS (OLED) group display in sync with the new
+	// routing immediately, instead of waiting up to PingInterval seconds for the
+	// next periodic push. Mirrors HapbeatManager.SetAddressOverride (Unity SDK).
+	if (Socket != nullptr && !bShuttingDown && !AppName.IsEmpty())
+	{
+		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppName, FString()));
+	}
+}
+
+void UHapbeatSubsystem::ClearPersistedAddressOverride()
+{
+	GConfig->RemoveKey(AddressOverrideConfigSection, AddressOverridePlayerKey, GGameUserSettingsIni);
+	GConfig->RemoveKey(AddressOverrideConfigSection, AddressOverrideGroupKey, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
+
+	// Reuses SetAddressOverride (bPersist: false, so the just-cleared keys
+	// aren't immediately re-saved) to push the reverted values to the runtime
+	// state — same path a normal override change takes. Mirrors
+	// HapbeatManager.ClearPersistedAddressOverride (Unity SDK).
+	SetAddressOverride(AddressOverrideDisabled, AddressOverrideDisabled, /*bPersist=*/false);
+
+	UE_LOG(LogHapbeat, Log, TEXT("Persisted address override cleared - reverted to disabled."));
 }
 
 bool UHapbeatSubsystem::TickKeepAlive(float /*DeltaSeconds*/)
@@ -332,7 +409,7 @@ bool UHapbeatSubsystem::TickKeepAlive(float /*DeltaSeconds*/)
 	Ping();
 	// Periodic presence beacon so the device shows this app on its OLED. Per the
 	// v1 design the device_name field is left empty (the OLED shows app_name).
-	SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, Group, AppName, FString()));
+	SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppName, FString()));
 
 	// A device may have aged out since the last PONG even if none arrived this
 	// tick, so re-evaluate liveness here too (drives OnDisconnected on timeout).

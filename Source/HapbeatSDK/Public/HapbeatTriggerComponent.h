@@ -51,10 +51,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat")
 	TObjectPtr<UHapbeatEventMap> EventMap;
 
-	// TODO(Phase 5): a friendly entry-name dropdown via a detail customization /
-	// meta=(GetOptions=...) so designers pick the event by DisplayName instead of
-	// pasting a raw GUID. For now EntryId is set in code, by the Phase-6 samples,
-	// or pasted from the EventMap entry's VisibleAnywhere Id field.
+	// Phase 5: the HapbeatSDKEditor module's FHapbeatTriggerComponentCustomization
+	// (a detail customization registered on this base class, which also covers
+	// UHapbeatCollisionTriggerComponent / UHapbeatSequenceComponent) replaces this
+	// row with a friendly dropdown of the assigned EventMap's entries (by
+	// DisplayName, falling back to the event id, falling back to a short guid)
+	// whenever EventMap is set. With no EventMap assigned there is nothing to
+	// pick from, so this raw FGuid field is shown as-is -- still settable in
+	// code, from the Phase-6 samples, or pasted from the EventMap entry's
+	// VisibleAnywhere Id field.
 	/** Stable GUID of the referenced entry. Invalid (all-zero) = unassigned. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat")
 	FGuid EntryId;

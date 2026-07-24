@@ -18,6 +18,11 @@
 			"Name": "HapbeatSDK",
 			"Type": "Runtime",
 			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "HapbeatSDKEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
 		}
 	]
 }

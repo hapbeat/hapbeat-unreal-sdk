@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Hapbeat. MIT License.
+#include "HapbeatSDKEditorModule.h"
+
+#include "HapbeatEditorSender.h"
+#include "HapbeatEventMap.h"
+#include "HapbeatEventMapCustomization.h"
+#include "HapbeatTriggerComponent.h"
+#include "HapbeatTriggerComponentCustomization.h"
+
+#include "Editor.h"
+#include "Modules/ModuleManager.h"
+#include "PropertyEditorModule.h"
+
+void FHapbeatSDKEditorModule::StartupModule()
+{
+	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
+
+	PropertyModule.RegisterCustomClassLayout(UHapbeatEventMap::StaticClass()->GetFName(),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FHapbeatEventMapCustomization::MakeInstance));
+
+	// Registered once on the BASE trigger class: PropertyEditor's
+	// DetailLayoutHelpers::QueryCustomDetailLayout climbs GetSuperStruct() for
+	// every customized object's class and always queries any base class that
+	// has a registered layout, even if that base class owns none of the
+	// object's own properties -- so this single registration also fires for
+	// UHapbeatCollisionTriggerComponent and UHapbeatSequenceComponent
+	// instances (verified against Editor/PropertyEditor/Private/
+	// DetailLayoutHelpers.cpp, "Ensure that the base class and its parents are
+	// always queried" / "Find base classes of queried classes that were not
+	// queried"). No per-subclass registration needed.
+	PropertyModule.RegisterCustomClassLayout(UHapbeatTriggerComponent::StaticClass()->GetFName(),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FHapbeatTriggerComponentCustomization::MakeInstance));
+
+	PropertyModule.NotifyCustomizationModuleChanged();
+
+	// Belt-and-braces socket cleanup at the end of every PIE session (see
+	// FHapbeatEditorSender's class doc for why this can't actually collide
+	// with UHapbeatSubsystem's runtime socket even without this).
+	EndPieHandle = FEditorDelegates::EndPIE.AddLambda([](bool /*bIsSimulating*/)
+	{
+		FHapbeatEditorSender::Shutdown();
+	});
+}
+
+void FHapbeatSDKEditorModule::ShutdownModule()
+{
+	FEditorDelegates::EndPIE.Remove(EndPieHandle);
+	EndPieHandle.Reset();
+
+	FHapbeatEditorSender::Shutdown();
+
+	// PropertyEditor may already be unloaded during engine shutdown teardown.
+	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
+	{
+		FPropertyEditorModule& PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
+		PropertyModule.UnregisterCustomClassLayout(UHapbeatEventMap::StaticClass()->GetFName());
+		PropertyModule.UnregisterCustomClassLayout(UHapbeatTriggerComponent::StaticClass()->GetFName());
+		PropertyModule.NotifyCustomizationModuleChanged();
+	}
+}
+
+IMPLEMENT_MODULE(FHapbeatSDKEditorModule, HapbeatSDKEditor);

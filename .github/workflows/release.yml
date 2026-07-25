@@ -1,0 +1,39 @@
+name: Release
+
+# Triggered by a semver tag push (e.g. v0.1.0).
+# Extracts release notes from CHANGELOG.md, zips the plugin for non-git install,
+# and publishes a GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract release notes from CHANGELOG.md
+        id: notes
+        run: node .github/scripts/extract-changelog.mjs ${{ github.ref_name }}
+
+      - name: Zip plugin for non-git install
+        # git archive packages exactly what's tracked at this tag, so
+        # .git/Binaries/Intermediate/Saved and dev-only files (CLAUDE.md,
+        # instructions/, .claude/, dev-notes/ — all .gitignore'd) are excluded
+        # without needing a maintained exclude list.
+        run: git archive --format=zip --prefix=HapbeatSDK/ -o HapbeatSDK-${{ github.ref_name }}.zip ${{ github.ref_name }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: HapbeatSDK-${{ github.ref_name }}.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

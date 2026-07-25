@@ -77,4 +77,19 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
 	static FString ResolveTarget(const FString& Target, int32 OverridePlayer, int32 OverrideGroup);
+
+	/**
+	 * Replace the "<p>" / "<g>" placeholders in an app name with the current
+	 * address-override player / group number, or "-" when that axis is disabled
+	 * (< 1). Lets one templated name (e.g. "Booth <p>/<g>") show each HMD's own
+	 * override on the device OLED. Pure; returns AppName unchanged when it is
+	 * empty or contains no placeholders. Verbatim port of
+	 * HapbeatManager.ApplyAddressPlaceholders (Unity SDK).
+	 *
+	 * Callers cap the RESULT at FHapbeatProtocol::MaxAppNameLen for the wire
+	 * (BuildConnectStatus already does), so substitute BEFORE capping — capping
+	 * the raw template first could cut a placeholder in half.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	static FString ApplyAddressPlaceholders(const FString& AppName, int32 OverridePlayer, int32 OverrideGroup);
 };

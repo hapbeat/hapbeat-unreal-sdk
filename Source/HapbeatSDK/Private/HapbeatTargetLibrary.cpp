@@ -198,3 +198,17 @@ FString UHapbeatTargetLibrary::ResolveTarget(const FString& Target, int32 Overri
 	// actually present.
 	return FString::Join(Segs, TEXT("/"));
 }
+
+FString UHapbeatTargetLibrary::ApplyAddressPlaceholders(const FString& AppName, int32 OverridePlayer, int32 OverrideGroup)
+{
+	if (AppName.IsEmpty())
+	{
+		return AppName;
+	}
+
+	// "-" for a disabled axis, matching Unity ApplyAddressPlaceholders exactly.
+	const FString P = OverridePlayer >= 1 ? FString::FromInt(OverridePlayer) : TEXT("-");
+	const FString G = OverrideGroup >= 1 ? FString::FromInt(OverrideGroup) : TEXT("-");
+	return AppName.Replace(TEXT("<p>"), *P, ESearchCase::CaseSensitive)
+				  .Replace(TEXT("<g>"), *G, ESearchCase::CaseSensitive);
+}

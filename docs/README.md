@@ -1,6 +1,6 @@
 # docs/ — ユーザー向けドキュメント
 
-このディレクトリは、本リポジトリの **ユーザー向け公開ドキュメント** 置き場である（現在 SDK 未着手のためプレースホルダー）。
+このディレクトリは、本リポジトリの **ユーザー向け公開ドキュメント** 置き場である。
 
 - 想定読者: Unreal Engine 開発者
 - 集約先: [hapbeat-devtools-site](https://devtools.hapbeat.com/) が build 時に自動取得し、`/docs/unreal-sdk/` の URL で公開する
@@ -12,9 +12,12 @@
 | `docs/` | ユーザー向け解説（このディレクトリ） | ◯ portal site に掲載 |
 | `dev-notes/` | （存在する場合）内部実装の知見・履歴 | ✗ portal には載らない |
 
-## 書くものの例（実装後）
+## 収録ドキュメント
 
-- プラグインのインストール手順
-- Blueprint からの呼び出し方
-- C++ API リファレンス
-- サンプルプロジェクト
+- [getting-started.md](./getting-started.md) — インストール / 最短の疎通確認 / EventMap とトリガの使い方
+
+リポジトリ直下にも次がある:
+
+- [README.md](../README.md) — 概要・機能一覧・API の入口
+- [AGENTS.md](../AGENTS.md) — AI コーディングエージェント向けの自己完結リファレンス
+- [CHANGELOG.md](../CHANGELOG.md) — 変更履歴

@@ -50,9 +50,7 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		Port = Cfg->Port;
 		PingInterval = Cfg->PingInterval;
 		StreamSendAheadSeconds = Cfg->StreamSendAheadSeconds;
-		// NOTE: UHapbeatConfig::Group is deliberately NOT consumed here. The
-		// CONNECT_STATUS group byte (OLED display) tracks the address override
-		// exclusively — see ConnectStatusGroupByte(), verbatim Unity parity.
+		bStreamUnicast = Cfg->bStreamUnicast;
 
 		// AppName shows on the device OLED. Empty => fall back to the project name
 		// (parity with the Unity SDK's Application.productName fallback), still
@@ -62,7 +60,9 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		{
 			ResolvedAppName = FApp::GetProjectName();
 		}
-		AppName = ResolvedAppName.Left(FHapbeatProtocol::MaxAppNameLen);
+		// Stored RAW (uncapped, placeholders intact): AppNameForWire() substitutes
+		// <p>/<g> per send and BuildConnectStatus applies the 16-char wire cap.
+		AppName = ResolvedAppName;
 	}
 
 	// GConfig (if persisted) restores a per-device address override saved by a
@@ -115,7 +115,7 @@ void UHapbeatSubsystem::Deinitialize()
 		if (!AppName.IsEmpty())
 		{
 			// Tell the device this app is leaving so the OLED clears.
-			SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), false, ConnectStatusGroupByte(), AppName, FString()));
+			SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), false, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 		}
 		Socket->Close();
 		if (ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM))
@@ -135,7 +135,7 @@ void UHapbeatSubsystem::Deinitialize()
 void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 {
 	Port = InPort;
-	AppName = InAppName.Left(FHapbeatProtocol::MaxAppNameLen);
+	AppName = InAppName; // raw/templated; see AppNameForWire()
 
 	if (Socket == nullptr)
 	{
@@ -185,7 +185,7 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 
 	if (!AppName.IsEmpty())
 	{
-		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppName, FString()));
+		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 	}
 
 	// NOTE: deliberately do NOT raise OnConnected here. socket-open != device
@@ -270,8 +270,13 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 		bLoop,
 		TWeakObjectPtr<UHapbeatStreamPlayback>(Playback),
 		[this]() { return NextSeq(); },
-		[this](const TArray<uint8>& Packet) { SendPacket(Packet); },
+		[this](const TArray<uint8>& Packet) { SendStreamPacket(Packet); },
 		StreamSendAheadSeconds);
+
+	// Snapshot the unicast target list for THIS session before the first
+	// STREAM_BEGIN goes out (Unity db6fd31 seeds SetStreamUnicastTargets at the
+	// same point). Empty list => SendStreamPacket falls back to broadcast.
+	RefreshStreamUnicastTargets();
 
 	// Sends STREAM_BEGIN (gain = 1.0) and records the wall-clock start.
 	Streamer->Start(FPlatformTime::Seconds());
@@ -333,6 +338,7 @@ void UHapbeatSubsystem::StopStream()
 		ActivePlayback = nullptr;
 	}
 
+
 	// Remove the ticker explicitly (StopStream is only ever called OUTSIDE the
 	// tick callback — from StreamClip's replace path or Deinitialize — so this is
 	// not reentrant; TickStream itself returns false instead of removing).
@@ -354,9 +360,9 @@ void UHapbeatSubsystem::StopStreamWithFlush(const FString& Target)
 	// > 32 ms), silencing within a few ms. gain = 1.0 (any format works); parity
 	// with Unity StopStreamWithFlush (SendStreamBegin(16000,1,PCM16,0,1.0,target)
 	// + SendStreamEnd()). SendPacket no-ops if the socket is gone.
-	SendPacket(FHapbeatProtocol::BuildStreamBegin(
+	SendStreamPacket(FHapbeatProtocol::BuildStreamBegin(
 		NextSeq(), 16000, 1, FHapbeatProtocol::AudioFormatPcm16, 0, 1.0f, ResolvedTarget));
-	SendPacket(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
+	SendStreamPacket(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
 }
 
 void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPersist)
@@ -379,7 +385,7 @@ void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPe
 	// next periodic push. Mirrors HapbeatManager.SetAddressOverride (Unity SDK).
 	if (Socket != nullptr && !bShuttingDown && !AppName.IsEmpty())
 	{
-		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppName, FString()));
+		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 	}
 }
 
@@ -409,7 +415,7 @@ bool UHapbeatSubsystem::TickKeepAlive(float /*DeltaSeconds*/)
 	Ping();
 	// Periodic presence beacon so the device shows this app on its OLED. Per the
 	// v1 design the device_name field is left empty (the OLED shows app_name).
-	SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppName, FString()));
+	SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 
 	// A device may have aged out since the last PONG even if none arrived this
 	// tick, so re-evaluate liveness here too (drives OnDisconnected on timeout).
@@ -577,6 +583,86 @@ uint16 UHapbeatSubsystem::NextSeq()
 {
 	Seq = static_cast<uint16>((Seq + 1) & 0xFFFF);
 	return Seq;
+}
+
+FString UHapbeatSubsystem::AppNameForWire() const
+{
+	return UHapbeatTargetLibrary::ApplyAddressPlaceholders(AppName, OverridePlayer, OverrideGroup);
+}
+
+void UHapbeatSubsystem::RefreshStreamUnicastTargets()
+{
+	StreamUnicastTargets.Reset();
+	if (!bStreamUnicast)
+	{
+		return; // feature off -> SendStreamPacket broadcasts
+	}
+
+	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+	if (SocketSubsystem == nullptr)
+	{
+		return;
+	}
+
+	// Same liveness window as GetAliveDeviceCount(). Snapshotting ONCE per stream
+	// session (instead of re-reading per packet) matches Unity db6fd31: a device
+	// whose first PONG lands mid-session joins the NEXT session.
+	const double Now = FPlatformTime::Seconds();
+	const double Timeout = AliveTimeoutSeconds();
+	for (const TPair<FString, double>& Pair : DevicePongTimes)
+	{
+		if (Now - Pair.Value > Timeout)
+		{
+			continue;
+		}
+		TSharedPtr<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
+		bool bIsValid = false;
+		Addr->SetIp(*Pair.Key, bIsValid);
+		if (!bIsValid)
+		{
+			continue;
+		}
+		Addr->SetPort(Port);
+		StreamUnicastTargets.Add(Addr);
+	}
+
+	if (StreamUnicastTargets.Num() > 0)
+	{
+		UE_LOG(LogHapbeat, Log, TEXT("Stream unicast: targeting %d known device(s) (broadcast fallback if none respond)."),
+			StreamUnicastTargets.Num());
+	}
+}
+
+void UHapbeatSubsystem::SendStreamPacket(const TArray<uint8>& Packet)
+{
+	// No known devices (nobody has PONGed yet) or the feature is off -> the
+	// normal broadcast path, which also covers the lazy-connect / teardown guards.
+	if (StreamUnicastTargets.Num() == 0)
+	{
+		SendPacket(Packet);
+		return;
+	}
+	if (Socket == nullptr || bShuttingDown)
+	{
+		return;
+	}
+
+	// ONE seq per logical packet (the caller already stamped it) — the same bytes
+	// go to every target, matching Unity SendStreamRaw. Per-target failures are
+	// logged and skipped so one unreachable device can't kill the session.
+	for (const TSharedPtr<FInternetAddr>& Addr : StreamUnicastTargets)
+	{
+		if (!Addr.IsValid())
+		{
+			continue;
+		}
+		int32 BytesSent = 0;
+		if (!Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *Addr))
+		{
+			UE_LOG(LogHapbeat, Verbose, TEXT("Stream unicast send to %s failed; continuing with the other targets."),
+				*Addr->ToString(true));
+		}
+	}
 }
 
 void UHapbeatSubsystem::SendPacket(const TArray<uint8>& Packet)

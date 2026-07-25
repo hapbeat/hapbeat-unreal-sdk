@@ -10,7 +10,7 @@
 	"DocsURL": "https://devtools.hapbeat.com/docs/sdk-integration/",
 	"MarketplaceURL": "",
 	"SupportURL": "https://github.com/hapbeat/hapbeat-unreal-sdk/issues",
-	"CanContainContent": false,
+	"CanContainContent": true,
 	"IsBetaVersion": true,
 	"Installed": false,
 	"Modules": [

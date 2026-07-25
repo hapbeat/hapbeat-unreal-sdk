@@ -216,6 +216,36 @@ public:
 
 private:
 	void SendPacket(const TArray<uint8>& Packet);
+
+	/**
+	 * Send a STREAM_* packet: unicast to each device snapshotted at session start
+	 * when stream-unicast is on and at least one device is known, else fall back
+	 * to the normal broadcast SendPacket. Wi-Fi AP power-save (DTIM) batching can
+	 * hold BROADCAST frames for a whole beacon interval, which shows up as
+	 * periodic ~100-200 ms stutter in streamed haptics; unicast dodges that.
+	 * Only STREAM_BEGIN/DATA/END take this path (Unity SDK: SendStreamRaw,
+	 * commit db6fd31) — Play/Stop/StopAll/PING/CONNECT_STATUS stay broadcast.
+	 * A per-target send failure is logged and skipped; it never kills the session.
+	 */
+	void SendStreamPacket(const TArray<uint8>& Packet);
+
+	/**
+	 * AppName as it goes on the wire: the stored (raw, templated) name with the
+	 * "<p>" / "<g>" address-override placeholders substituted for the CURRENT
+	 * override, so a templated name tracks SetAddressOverride live on the device
+	 * OLED. BuildConnectStatus applies the 16-char cap afterwards. Parity with
+	 * HapbeatManager.AppName (Unity SDK).
+	 */
+	FString AppNameForWire() const;
+
+	/**
+	 * Snapshot the currently-alive device IPs into StreamUnicastTargets (called
+	 * once per stream session start, mirroring Unity's SetStreamUnicastTargets
+	 * seeding). Clears the list when unicast is disabled or nobody has PONGed —
+	 * SendStreamPacket then broadcasts. A device whose first PONG lands mid-session
+	 * is picked up by the NEXT session, exactly like Unity.
+	 */
+	void RefreshStreamUnicastTargets();
 	uint16 NextSeq();
 
 	/** Send PING + CONNECT_STATUS, then diff the alive set and raise events. Bound to the FTSTicker. */
@@ -307,4 +337,10 @@ private:
 
 	/** Send-ahead lead for streaming; seeded from UHapbeatConfig in Initialize. */
 	float StreamSendAheadSeconds = 0.05f;
+
+	/** Config: unicast STREAM_* to known devices instead of broadcasting (UHapbeatConfig::bStreamUnicast). */
+	bool bStreamUnicast = true;
+
+	/** Per-session snapshot of alive device addresses for stream unicast. Empty => broadcast. */
+	TArray<TSharedPtr<FInternetAddr>> StreamUnicastTargets;
 };

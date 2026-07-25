@@ -31,17 +31,8 @@ public:
 	int32 Port = 7700;
 
 	UPROPERTY(EditAnywhere, config, Category = "Connection",
-		meta = (Tooltip = "Reserved (kept for Unity SDK config parity; not consumed by the runtime). The device OLED group display tracks SetAddressOverride exclusively, and routing-group filtering is a trailing /group_N target segment.",
-			ClampMin = "-1", ClampMax = "254"))
-	int32 Group = -1;
-
-	UPROPERTY(EditAnywhere, config, Category = "Connection",
 		meta = (Tooltip = "Shown on the Hapbeat device display. Max 16 chars; the default app_name element shows the first 8. Empty = use the project name."))
 	FString AppName;
-
-	UPROPERTY(EditAnywhere, config, Category = "Connection",
-		meta = (Tooltip = "Discovery timeout in milliseconds.", ClampMin = "1000", ClampMax = "10000"))
-	int32 DiscoveryTimeoutMs = 3000;
 
 	// ---- Behavior ----
 
@@ -53,6 +44,10 @@ public:
 		meta = (Tooltip = "Audio data the SDK keeps queued ahead of real-time while streaming a clip. Smaller = faster stop after StopStream() but more stutter risk on slow links. Typical LAN: 30-60 ms.",
 			ClampMin = "0.01", ClampMax = "0.2"))
 	float StreamSendAheadSeconds = 0.05f;
+
+	UPROPERTY(EditAnywhere, config, Category = "Behavior",
+		meta = (Tooltip = "Send streamed clip packets (STREAM_BEGIN/DATA/END) directly to devices already known from a PONG response, instead of UDP broadcast. Wi-Fi AP power-save (DTIM) batching can hold broadcast frames for one beacon interval, showing up as periodic ~100-200 ms stutter in streamed haptics; unicast avoids that batching. Falls back to broadcast automatically when no device has responded yet. Other commands (Play/Stop/StopAll/PING/CONNECT_STATUS) are unaffected and always broadcast. Default: enabled."))
+	bool bStreamUnicast = true;
 
 	UPROPERTY(EditAnywhere, config, Category = "Behavior",
 		meta = (Tooltip = "Global delay (seconds) added to every Play / StreamClip to match audio output latency (e.g. Bluetooth headphones). Hapbeat haptics go out with ~10 ms latency, so on slow audio paths the haptic can arrive before the sound.",

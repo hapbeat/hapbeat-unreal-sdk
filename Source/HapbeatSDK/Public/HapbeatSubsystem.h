@@ -4,13 +4,15 @@
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
 #include "Common/UdpSocketReceiver.h"         // FUdpSocketReceiver + FArrayReaderPtr typedef
+#include "HAL/CriticalSection.h"              // FCriticalSection (SeqLock — shared with the stream thread)
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "HapbeatSubsystem.generated.h"
 
 class FSocket;
 class FInternetAddr;
-class FHapbeatStreamer;
+class FHapbeatStreamRunnable;
+class FRunnableThread;
 class UHapbeatClip;
 class UHapbeatStreamPlayback;
 
@@ -57,9 +59,10 @@ public:
 	static constexpr int32 AddressOverrideDisabled = -1;
 
 	UHapbeatSubsystem();
-	// Out-of-line dtor (defined in the .cpp where FHapbeatStreamer is complete) so
-	// the owned Streamer pointer can be deleted with only a forward
-	// declaration in this header (the generated dtor would otherwise need the full type).
+	// Out-of-line dtor (defined in the .cpp where FHapbeatStreamRunnable is
+	// complete) so the owned Streamer/thread pointers can be deleted with only
+	// a forward declaration in this header (the generated dtor would otherwise
+	// need the full types).
 	virtual ~UHapbeatSubsystem() override;
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -91,8 +94,10 @@ public:
 	 * gain = 1.0 (the device must not re-apply gain).
 	 *
 	 * Single active session, REPLACE semantics: a new call first stops any active
-	 * stream (STREAM_END) then starts a fresh one (STREAM_BEGIN). Game-thread
-	 * paced via an internal ticker registered only while streaming.
+	 * stream (STREAM_END) then starts a fresh one (STREAM_BEGIN). Paced by a
+	 * DEDICATED background thread (FHapbeatStreamRunnable, since the 2026-07-25
+	 * thread migration) rather than the game thread, so frame hitches (GC /
+	 * render / physics) cannot starve the device's ring buffer.
 	 *
 	 * @param Clip         The PCM16 clip (mono or stereo). Null / empty => warn + nullptr.
 	 * @param BaselineGain Frozen author gain (entry.gain x manifest.intensity). 0..2.
@@ -106,8 +111,10 @@ public:
 		const FString& Target = TEXT(""), bool bLoop = false);
 
 	/**
-	 * Stop the active stream: send STREAM_END, mark the handle stopped, and
-	 * unregister the streaming ticker. No-op if nothing is streaming.
+	 * Stop the active stream: signal the stream thread to send STREAM_END, JOIN
+	 * it (blocks briefly — the thread notices within one ~10ms pacing tick),
+	 * then mark the handle stopped and unregister the watchdog ticker. No-op if
+	 * nothing is streaming.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void StopStream();
@@ -192,7 +199,7 @@ public:
 
 	/** True while a clip stream session is active. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
-	bool IsStreaming() const { return Streamer != nullptr; }
+	bool IsStreaming() const { return StreamRunnable != nullptr; }
 
 	/** Handle to the active stream playback, or nullptr if nothing is streaming. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
@@ -218,14 +225,21 @@ private:
 	void SendPacket(const TArray<uint8>& Packet);
 
 	/**
-	 * Send a STREAM_* packet: unicast to each device snapshotted at session start
-	 * when stream-unicast is on and at least one device is known, else fall back
-	 * to the normal broadcast SendPacket. Wi-Fi AP power-save (DTIM) batching can
-	 * hold BROADCAST frames for a whole beacon interval, which shows up as
-	 * periodic ~100-200 ms stutter in streamed haptics; unicast dodges that.
-	 * Only STREAM_BEGIN/DATA/END take this path (Unity SDK: SendStreamRaw,
-	 * commit db6fd31) — Play/Stop/StopAll/PING/CONNECT_STATUS stay broadcast.
-	 * A per-target send failure is logged and skipped; it never kills the session.
+	 * Send a STREAM_* packet on the GAME THREAD: unicast to each device
+	 * snapshotted at session start when stream-unicast is on and at least one
+	 * device is known, else fall back to the normal broadcast SendPacket.
+	 * Wi-Fi AP power-save (DTIM) batching can hold BROADCAST frames for a whole
+	 * beacon interval, which shows up as periodic ~100-200 ms stutter in
+	 * streamed haptics; unicast dodges that.
+	 *
+	 * Since the 2026-07-25 thread migration, the ACTIVE stream's own
+	 * STREAM_BEGIN/DATA/END no longer go through here — FHapbeatStreamRunnable
+	 * sends those itself from its dedicated thread (via its own locally-owned
+	 * FInternetAddr targets, never these). This game-thread path now serves
+	 * only StopStreamWithFlush()'s flush BEGIN+END pair, sent AFTER the stream
+	 * thread has already been joined (see StopStream()). Unity SDK parity:
+	 * SendStreamRaw, commit db6fd31. A per-target send failure is logged and
+	 * skipped; it never kills the session.
 	 */
 	void SendStreamPacket(const TArray<uint8>& Packet);
 
@@ -246,15 +260,26 @@ private:
 	 * is picked up by the NEXT session, exactly like Unity.
 	 */
 	void RefreshStreamUnicastTargets();
+
+	/**
+	 * Thread-safe: guarded by SeqLock so both the game thread (Play/Stop/
+	 * StopAll/Ping/CONNECT_STATUS/StopStreamWithFlush) and the dedicated stream
+	 * thread's STREAM_BEGIN/DATA/END draw from the SAME monotonic counter,
+	 * matching Unity's single locked _sequenceNumber (HapbeatClient.cs
+	 * _seqLock) shared across its main + background mixer threads.
+	 */
 	uint16 NextSeq();
 
 	/** Send PING + CONNECT_STATUS, then diff the alive set and raise events. Bound to the FTSTicker. */
 	bool TickKeepAlive(float DeltaSeconds);
 
 	/**
-	 * Drive the active streamer one frame. Bound to a dedicated FTSTicker that is
-	 * registered only while streaming. Returns false (auto-unregisters the ticker)
-	 * once the stream finishes; true to keep ticking.
+	 * Game-thread watchdog: polls whether the active FHapbeatStreamRunnable has
+	 * finished on its own (natural EOF on a non-loop clip, or the handle's own
+	 * Stop() was called) and, if so, calls StopStream() to join + clean up
+	 * (harmlessly idempotent if the thread is already gone). Bound to a
+	 * dedicated FTSTicker registered only while streaming. Returns false
+	 * (auto-unregisters the ticker) once nothing is streaming; true to keep polling.
 	 */
 	bool TickStream(float DeltaSeconds);
 
@@ -290,6 +315,8 @@ private:
 	uint8 ConnectStatusGroupByte() const { return OverrideGroup >= 1 ? static_cast<uint8>(OverrideGroup) : 0; }
 	FString AppName;
 	uint16 Seq = 0;
+	/** Guards Seq — shared by the game thread and the stream thread since 2026-07-25 (see NextSeq()). */
+	FCriticalSection SeqLock;
 	float PingInterval = 5.0f; // seeded from UHapbeatConfig::PingInterval in Initialize
 
 	FTSTicker::FDelegateHandle KeepAliveHandle;
@@ -314,25 +341,32 @@ private:
 	/** Effective (already-normalized) forced group. AddressOverrideDisabled (-1) = disabled. */
 	int32 OverrideGroup = AddressOverrideDisabled;
 
-	// --- streaming (Phase 3); game-thread only ---
+	// --- streaming; game-thread-owned handles, but the actual pacing/sending
+	//     runs on a dedicated stream thread since the 2026-07-25 migration
+	//     (see FHapbeatStreamRunnable's class doc for the full threading contract) ---
 
 	/**
 	 * The active stream handle. A UPROPERTY so it is a GC root while streaming
-	 * (the caller may not retain it). Cleared when the stream ends.
+	 * (the caller may not retain it). Cleared when the stream ends. Its
+	 * Gain/Pan/bStopped are mirrored (GetMirror()) for the stream thread to
+	 * read — this UObject itself is never touched off the game thread.
 	 */
 	UPROPERTY()
 	TObjectPtr<UHapbeatStreamPlayback> ActivePlayback = nullptr;
 
 	/**
-	 * The single active streamer (PCM copy + pacing). Null when not streaming.
-	 * Owned raw pointer (deleted in StopStream/TickStream/dtor), same pattern as
-	 * Receiver above. Deliberately NOT a TUniquePtr: UHT's gen.cpp includes this
-	 * header with FHapbeatStreamer still incomplete and instantiates the smart
-	 * pointer's deleter there -> C4150 "deletion of incomplete type" as-error.
+	 * The active stream's dedicated FRunnable + thread. Null when not
+	 * streaming. Owned raw pointers (deleted in StopStream/dtor), same pattern
+	 * as Receiver above. Deliberately not TUniquePtr: UHT's gen.cpp includes
+	 * this header with FHapbeatStreamRunnable still forward-declared and would
+	 * instantiate the smart pointer's deleter there -> C4150 "deletion of
+	 * incomplete type" as-error (identical reasoning to the earlier Streamer
+	 * pointer this replaces).
 	 */
-	FHapbeatStreamer* Streamer = nullptr;
+	FHapbeatStreamRunnable* StreamRunnable = nullptr;
+	FRunnableThread* StreamThread = nullptr;
 
-	/** Per-frame ticker driving TickStream; valid only while a stream is active. */
+	/** Game-thread watchdog ticker driving TickStream; valid only while a stream is active. */
 	FTSTicker::FDelegateHandle StreamTickHandle;
 
 	/** Send-ahead lead for streaming; seeded from UHapbeatConfig in Initialize. */

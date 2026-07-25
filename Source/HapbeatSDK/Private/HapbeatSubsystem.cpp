@@ -5,14 +5,16 @@
 #include "HapbeatConfig.h"
 #include "HapbeatClip.h"
 #include "HapbeatStreamPlayback.h"
-#include "HapbeatStreamer.h"
+#include "HapbeatStreamRunnable.h"
 #include "HapbeatTargetLibrary.h"
 #include "Async/Async.h"
 #include "Common/UdpSocketBuilder.h"
 #include "Common/UdpSocketReceiver.h"
+#include "HAL/RunnableThread.h"   // FRunnableThread::Create/Kill for the dedicated stream thread
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Misc/App.h"
 #include "Misc/ConfigCacheIni.h" // GConfig / GGameUserSettingsIni — address-override persistence
+#include "Misc/ScopeLock.h"      // FScopeLock (SeqLock)
 #include "Sockets.h"
 #include "SocketSubsystem.h"
 
@@ -29,13 +31,19 @@ namespace
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
-// Defined in the .cpp (not the header) where FHapbeatStreamer is a complete
-// type. The dtor delete is a leak guard only — the normal teardown path is
-// Deinitialize() -> StopStream(), which already deletes and nulls Streamer.
+// Defined in the .cpp (not the header) where FHapbeatStreamRunnable is a
+// complete type. The dtor teardown is a leak guard only — the normal teardown
+// path is Deinitialize() -> StopStream(), which already joins + deletes and
+// nulls both StreamThread and StreamRunnable.
 UHapbeatSubsystem::UHapbeatSubsystem() = default;
 UHapbeatSubsystem::~UHapbeatSubsystem()
 {
-	delete Streamer; // null-safe; normally already nullptr via Deinitialize
+	if (StreamThread != nullptr)
+	{
+		StreamThread->Kill(true); // calls StreamRunnable->Stop() then joins; null-safe if already exited
+		delete StreamThread;
+	}
+	delete StreamRunnable; // null-safe; normally already nullptr via Deinitialize
 }
 
 void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -242,10 +250,30 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 		return nullptr;
 	}
 
-	// Single active session, REPLACE semantics: end any current stream first.
-	if (Streamer != nullptr)
+	// Single active session, REPLACE semantics: end any current stream first
+	// (joins the old thread before starting a new one).
+	if (StreamRunnable != nullptr)
 	{
 		StopStream();
+	}
+
+	// The stream thread must NOT lazily Connect() itself (that touches
+	// Receiver/tickers/etc — game-thread-only machinery) — ensure the socket
+	// exists here, on the game thread, before spinning the thread up. Same
+	// teardown guard as SendPacket: never resurrect the socket / receiver /
+	// keep-alive ticker on an already-deinitialized subsystem.
+	if (Socket == nullptr)
+	{
+		if (bShuttingDown)
+		{
+			return nullptr;
+		}
+		Connect(Port, AppName);
+		if (Socket == nullptr)
+		{
+			UE_LOG(LogHapbeat, Warning, TEXT("StreamClip: no socket available; ignoring."));
+			return nullptr;
+		}
 	}
 
 	// GC-rooted via the UPROPERTY for the stream's lifetime (the caller may not retain it).
@@ -260,28 +288,53 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 	// untouched: only the wire-bound copy is rewritten.
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
 
-	// The streamer owns a COPY of the clip bytes (TArray copy ctor -> moved into the
-	// streamer) so the source UHapbeatClip is never mutated by the premultiply.
-	Streamer = new FHapbeatStreamer(
+	// Snapshot the unicast target list for THIS session before the thread
+	// starts (Unity db6fd31 seeds SetStreamUnicastTargets at the same point).
+	// StreamUnicastTargets (FInternetAddr, used elsewhere by StopStreamWithFlush's
+	// game-thread flush pair) is still built here; extract plain IP strings from
+	// it for the runnable — never hand a TSharedPtr<FInternetAddr> to another
+	// thread (see FHapbeatStreamRunnable's threading contract).
+	RefreshStreamUnicastTargets();
+	TArray<FString> UnicastIps;
+	UnicastIps.Reserve(StreamUnicastTargets.Num());
+	for (const TSharedPtr<FInternetAddr>& Addr : StreamUnicastTargets)
+	{
+		if (Addr.IsValid())
+		{
+			UnicastIps.Add(Addr->ToString(/*bAppendPort=*/false));
+		}
+	}
+
+	// The runnable owns a COPY of the clip bytes (TArray copy ctor -> moved in)
+	// so the source UHapbeatClip is never mutated by the premultiply.
+	StreamRunnable = new FHapbeatStreamRunnable(
 		TArray<uint8>(Clip->Pcm16),
 		Clip->SampleRate,
 		Clip->NumChannels,
 		ResolvedTarget,
 		bLoop,
-		TWeakObjectPtr<UHapbeatStreamPlayback>(Playback),
+		Playback->GetMirror(),
 		[this]() { return NextSeq(); },
-		[this](const TArray<uint8>& Packet) { SendStreamPacket(Packet); },
+		Socket,
+		Port,
+		MoveTemp(UnicastIps),
 		StreamSendAheadSeconds);
 
-	// Snapshot the unicast target list for THIS session before the first
-	// STREAM_BEGIN goes out (Unity db6fd31 seeds SetStreamUnicastTargets at the
-	// same point). Empty list => SendStreamPacket falls back to broadcast.
-	RefreshStreamUnicastTargets();
+	// AboveNormal: a short, latency-sensitive pacing loop — not TimeCritical
+	// (which risks starving the game/render/audio threads it shares a core
+	// budget with), just enough priority to avoid being starved itself.
+	StreamThread = FRunnableThread::Create(StreamRunnable, TEXT("HapbeatStreamThread"), 0, TPri_AboveNormal);
+	if (StreamThread == nullptr)
+	{
+		UE_LOG(LogHapbeat, Warning, TEXT("StreamClip: failed to create the stream thread; aborting."));
+		delete StreamRunnable;
+		StreamRunnable = nullptr;
+		ActivePlayback = nullptr;
+		return nullptr;
+	}
 
-	// Sends STREAM_BEGIN (gain = 1.0) and records the wall-clock start.
-	Streamer->Start(FPlatformTime::Seconds());
-
-	// Drive sending every frame (0.0 delay => every tick) until the stream ends.
+	// Watchdog: poll for the thread finishing on its own (natural EOF on a
+	// non-loop clip, or the handle's own Stop()) and clean up when it does.
 	if (!StreamTickHandle.IsValid())
 	{
 		StreamTickHandle = FTSTicker::GetCoreTicker().AddTicker(
@@ -297,39 +350,50 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 
 bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 {
-	if (Streamer == nullptr)
+	if (StreamRunnable == nullptr)
 	{
 		// Nothing to drive — auto-unregister this ticker.
 		StreamTickHandle.Reset();
 		return false;
 	}
 
-	Streamer->Tick(FPlatformTime::Seconds());
-
-	if (Streamer->IsDone())
+	if (StreamRunnable->IsFinished())
 	{
-		// Stream finished (clip end on a non-loop, or a stop was honored). Tear
-		// down and return false so the core ticker removes this delegate for us
-		// (do NOT RemoveTicker from inside the callback — returning false is the
-		// reentrancy-safe way).
-		delete Streamer;
-		Streamer = nullptr;
-		ActivePlayback = nullptr;
+		// The thread ended on its own (clip end on a non-loop, or the handle's
+		// own Stop() was honored) — STREAM_END has already been sent by the
+		// time IsFinished() reports true (see FHapbeatStreamRunnable::Run()'s
+		// class-doc guarantee). Reuse StopStream() for the join (instant —
+		// the thread already exited) + cleanup, same code path as an explicit
+		// user-initiated stop.
+		//
+		// Clear the handle FIRST so StopStream()'s RemoveTicker branch is
+		// skipped: we are inside this very ticker's callback, and returning
+		// false below is the reentrancy-safe way to unregister (never
+		// RemoveTicker on the currently-firing handle).
 		StreamTickHandle.Reset();
+		StopStream();
 		return false;
 	}
 
-	return true; // keep ticking
+	return true; // keep polling
 }
 
 void UHapbeatSubsystem::StopStream()
 {
-	if (Streamer != nullptr)
+	if (StreamThread != nullptr)
 	{
-		// Send STREAM_END (idempotent) before discarding the streamer.
-		Streamer->SendEnd();
-		delete Streamer;
-		Streamer = nullptr;
+		// Kill(true) calls StreamRunnable->Stop() (flags the atomic) then BLOCKS
+		// until Run() returns — by then STREAM_END has already gone out. Brief:
+		// the thread notices within one ~10ms pacing tick at most; instant if it
+		// already finished on its own (TickStream's watchdog path).
+		StreamThread->Kill(true);
+		delete StreamThread;
+		StreamThread = nullptr;
+	}
+	if (StreamRunnable != nullptr)
+	{
+		delete StreamRunnable;
+		StreamRunnable = nullptr;
 	}
 
 	if (ActivePlayback != nullptr)
@@ -338,10 +402,12 @@ void UHapbeatSubsystem::StopStream()
 		ActivePlayback = nullptr;
 	}
 
-
-	// Remove the ticker explicitly (StopStream is only ever called OUTSIDE the
-	// tick callback — from StreamClip's replace path or Deinitialize — so this is
-	// not reentrant; TickStream itself returns false instead of removing).
+	// Remove the ticker explicitly. Callers from OUTSIDE the tick callback
+	// (StreamClip's replace path, Deinitialize) land here with a valid handle.
+	// TickStream's watchdog path deliberately Reset()s the handle before
+	// calling us, so this branch is skipped there and its `return false`
+	// stays the sole unregister mechanism (never RemoveTicker the
+	// currently-firing handle).
 	if (StreamTickHandle.IsValid())
 	{
 		FTSTicker::GetCoreTicker().RemoveTicker(StreamTickHandle);
@@ -581,6 +647,13 @@ int64 UHapbeatSubsystem::UnixMicros() const
 
 uint16 UHapbeatSubsystem::NextSeq()
 {
+	// Locked: since the 2026-07-25 thread migration this is called from both
+	// the game thread (Play/Stop/StopAll/Ping/CONNECT_STATUS/StopStreamWithFlush)
+	// and the dedicated stream thread (STREAM_BEGIN/DATA/END) — the SAME
+	// counter, matching Unity's single locked _sequenceNumber (HapbeatClient.cs
+	// _seqLock) shared across its main + background mixer threads. Contention
+	// is negligible (at most ~100 stream sends/sec vs. rare game-thread sends).
+	FScopeLock Lock(&SeqLock);
 	Seq = static_cast<uint16>((Seq + 1) & 0xFFFF);
 	return Seq;
 }

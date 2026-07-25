@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "HapbeatStreamGainMirror.h"
 #include "HapbeatStreamPlayback.generated.h"
 
 /**
@@ -13,11 +14,16 @@
  * implemented entirely on the SDK side. This is the UE sibling of Unity's
  * Hapbeat.HapbeatStreamPlayback.
  *
- * Threading: GAME THREAD ONLY. Both the writer (a Phase-4 ParameterBinding
- * TickComponent / a trigger's GainMultiplier) and the reader (FHapbeatStreamer,
- * paced by a game-thread FTSTicker) run on the game thread, so Gain / Pan are
- * plain floats with NO atomics (matching the v1 design's threading decision —
- * see unreal-sdk-v1-design.md §3.5).
+ * Threading: the WRITER (a Phase-4 ParameterBinding TickComponent / a trigger's
+ * GainMultiplier / Blueprint) is always GAME THREAD ONLY — this UObject itself
+ * must never be touched off the game thread. The READER, however, is a
+ * dedicated stream-send thread (FHapbeatStreamRunnable, since the 2026-07-25
+ * thread migration — see unreal-sdk-v1-design.md §5) that must NOT dereference
+ * this UObject either (GC safety). So every mutator here ALSO write-throughs to
+ * GetMirror() — a plain (non-UObject) atomic value mirror the stream thread
+ * reads instead. The plain Gain/Pan/bStopped fields below stay as the
+ * BlueprintPure getters' backing store (fast game-thread reads); the mirror is
+ * the cross-thread channel.
  *
  * Pan semantics: -1 = full left, 0 = centered, +1 = full right. For mono clips
  * the pan value is ignored. LINEAR balance is used (center = passthrough,
@@ -94,6 +100,15 @@ public:
 	 */
 	void GetStereoChannelGains(float& OutL, float& OutR) const;
 
+	/**
+	 * Thread-safe atomic mirror of Gain/Pan/bStopped for the stream-send thread
+	 * (FHapbeatStreamRunnable) to read WITHOUT ever touching this UObject off
+	 * the game thread. Created on first access. C++-only (not BlueprintCallable
+	 * — internal plumbing between the playback handle and the streamer); never
+	 * returns null.
+	 */
+	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> GetMirror();
+
 private:
 	/** Live gain (= BaselineGain x modulator), clamped to [0, 2]. */
 	float Gain = 1.0f;
@@ -101,4 +116,7 @@ private:
 	float Pan = 0.0f;
 	/** Set once the stream has been asked to stop / has finished. */
 	bool bStopped = false;
+
+	/** Lazily created in GetMirror(); every mutator write-throughs to it once created. */
+	TSharedPtr<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
 };

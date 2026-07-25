@@ -2,7 +2,14 @@
 #include "HapbeatStreamer.h"
 
 #include "HapbeatProtocol.h"
-#include "HapbeatStreamPlayback.h"
+
+namespace
+{
+	// ~10ms target chunk size (Unity 94ec760 parity): smoother, more even
+	// pacing than the old MTU-cap-sized (~44ms mono) chunks. The MTU cap
+	// remains an upper BOUND only — never exceeded, but no longer the target.
+	constexpr float TargetChunkSeconds = 0.010f;
+}
 
 FHapbeatStreamer::FHapbeatStreamer(
 	TArray<uint8>&& InPcm16,
@@ -10,7 +17,7 @@ FHapbeatStreamer::FHapbeatStreamer(
 	int32 InChannels,
 	const FString& InTarget,
 	bool bInLoop,
-	TWeakObjectPtr<UHapbeatStreamPlayback> InHandle,
+	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror,
 	TFunction<uint16()> InNextSeq,
 	TFunction<void(const TArray<uint8>&)> InSend,
 	float InSendAheadSeconds)
@@ -19,7 +26,7 @@ FHapbeatStreamer::FHapbeatStreamer(
 	, Channels(InChannels)
 	, Target(InTarget)
 	, bLoop(bInLoop)
-	, Handle(InHandle)
+	, Mirror(InMirror)
 	, NextSeqFn(MoveTemp(InNextSeq))
 	, SendFn(MoveTemp(InSend))
 {
@@ -30,21 +37,15 @@ FHapbeatStreamer::FHapbeatStreamer(
 	SampleRate = FMath::Max(1, SampleRate);
 	SendAheadSeconds = InSendAheadSeconds > 0.01f ? InSendAheadSeconds : 0.05f;
 
-	// Size the premultiply scratch buffer ONCE to the maximum chunk size and
-	// keep it for the stream's lifetime. We then write into it and pass an
-	// explicit byte count per chunk — never resizing per-chunk. This avoids the
+	// Size the premultiply scratch buffer ONCE to the maximum possible chunk
+	// size (the MTU cap, which is always >= the ~10ms target) and keep it for
+	// the stream's lifetime. We then write into it and pass an explicit byte
+	// count per chunk — never resizing per-chunk. This avoids the
 	// SetNumUninitialized shrink-argument overload, which differs between UE
 	// versions (bool bAllowShrinking on 5.3/5.4 vs EAllowShrinking on 5.5+),
 	// keeping the streamer source-compatible across 5.3 -> latest.
 	const int32 MaxFramesPerChunk = FMath::Max(1, FHapbeatProtocol::StreamDataMaxPayload / BytesPerFrame);
 	Scratch.SetNumUninitialized(MaxFramesPerChunk * BytesPerFrame);
-}
-
-bool FHapbeatStreamer::IsHandleStopped() const
-{
-	// A GC'd handle (null weak ptr) is treated as a stop request.
-	const UHapbeatStreamPlayback* Pb = Handle.Get();
-	return Pb == nullptr || Pb->IsStopped();
 }
 
 void FHapbeatStreamer::Start(double NowSeconds)
@@ -77,8 +78,10 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 		return;
 	}
 
-	// Stop requested (or handle GC'd) -> finalize this frame.
-	if (IsHandleStopped())
+	// Stop requested via the mirror (e.g. a Blueprint call to the playback
+	// handle's own Stop(), independent of the subsystem-level StopStream()
+	// path FHapbeatStreamRunnable::Run() also polls) -> finalize this call.
+	if (IsMirrorStopped())
 	{
 		SendEnd();
 		return;
@@ -91,22 +94,22 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 		return;
 	}
 
-	// Read the live modulation off the handle once per Tick (Unity reads per
-	// chunk; per-Tick is finer-grained on the receiving end since a Tick may
-	// emit several chunks, and matches the game-thread single-writer model).
-	const UHapbeatStreamPlayback* Pb = Handle.Get();
-	const float G = Pb ? Pb->GetGain() : 1.0f;
-	float GainL = 1.0f;
-	float GainR = 1.0f;
-	if (Pb)
-	{
-		Pb->GetStereoChannelGains(GainL, GainR);
-	}
+	// Read the live modulation off the mirror once per Tick (never touches the
+	// UHapbeatStreamPlayback UObject — see the class doc). Pan-to-L/R-balance is
+	// inlined here (duplicating UHapbeatStreamPlayback::GetStereoChannelGains'
+	// tiny formula) for the same reason: no UObject touch from this thread.
+	const float G = Mirror->Gain.load(std::memory_order_relaxed);
+	const float PanValue = Mirror->Pan.load(std::memory_order_relaxed);
+	const float GainL = PanValue <= 0.0f ? 1.0f : 1.0f - PanValue;
+	const float GainR = PanValue >= 0.0f ? 1.0f : 1.0f + PanValue;
 
-	// Max frames per STREAM_DATA chunk: stay within the spec 1400-byte payload
-	// budget AND frame-aligned (so stereo L/R never splits across packets). This
-	// is StreamDataMaxPayload, NOT the larger MaxStreamPacketSize MTU guardrail.
-	const int32 FramesPerChunk = FMath::Max(1, FHapbeatProtocol::StreamDataMaxPayload / BytesPerFrame);
+	// Max frames per STREAM_DATA chunk: the smaller of (a) the ~10ms pacing
+	// target and (b) the spec's 1400-byte payload budget (StreamDataMaxPayload,
+	// NOT the larger MaxStreamPacketSize MTU guardrail), frame-aligned so
+	// stereo L/R never splits across packets.
+	const int32 MtuFramesCap = FMath::Max(1, FHapbeatProtocol::StreamDataMaxPayload / BytesPerFrame);
+	const int32 TargetFrames = FMath::Max(1, FMath::RoundToInt(static_cast<float>(SampleRate) * TargetChunkSeconds));
+	const int32 FramesPerChunk = FMath::Min(MtuFramesCap, TargetFrames);
 
 	// Pace: keep audio sent ~SendAheadSeconds ahead of wall-clock. sentDuration
 	// is frame-based (TotalFramesSent / SampleRate), equivalent to Unity's
@@ -118,7 +121,7 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 
 	// Bound the number of chunks per Tick as a final safety net against a runaway
 	// loop (e.g. a pathological clock); the lead/SendAhead condition is the real
-	// terminator. 4096 chunks >> any single frame ever needs at 25-45 chunks/s.
+	// terminator. 4096 chunks >> any single call ever needs at ~10ms cadence.
 	int32 SafetyBudget = 4096;
 
 	while (Lead < SendAheadSeconds && !bDone && --SafetyBudget >= 0)

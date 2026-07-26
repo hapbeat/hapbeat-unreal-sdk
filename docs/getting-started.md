@@ -1,269 +1,289 @@
-# Getting Started (Unreal Engine)
+# はじめかた（Unreal Engine）
 
-Drive a Hapbeat device from Unreal Engine 5 — Blueprint or C++, plus the
-authoring tools for event tuning, trigger components, and real-time clip
-streaming.
+Hapbeat デバイスを Unreal Engine 5 から Wi-Fi 経由で鳴らすための導入手順です。
+**上から順に進めれば、最短 15 分で「UE を再生したら Hapbeat が振動する」ところまで到達**します。
 
-## Prerequisites
+このページのゴール:
 
-- Unreal Engine 5.3+ (compile-verified on **5.4**).
-- A C++ toolchain for your project: the plugin ships native Runtime / Samples
-  / Editor modules, so even a Blueprint-only project needs to regenerate
-  project files and build once after adding it.
-- A Hapbeat device on the same Wi-Fi/LAN. Command-mode events (the ones
-  played by event id) need a **kit deployed** via
-  [Hapbeat Studio](https://devtools.hapbeat.com) first; StreamClip events need
-  no kit on the device.
+1. プラグインをプロジェクトに入れてビルドする
+2. 付属サンプルで疎通確認する（**ここまでで「動く」ことが確認できます**）
+3. 自分のプロジェクトから鳴らす
 
-## Install the plugin
+---
 
-1. Copy this repo into `YourProject/Plugins/HapbeatSDK/`.
-2. Regenerate project files, then build (the plugin compiles with your
-   project).
-3. **Edit → Plugins → Hardware → Hapbeat SDK** → Enabled.
-4. C++ only: add `HapbeatSDK` to your module's `PublicDependencyModuleNames`
-   (in your own `*.Build.cs`) to `#include "HapbeatSubsystem.h"`.
+## 0. 事前に用意するもの
 
-Connection settings — port, app name, ping interval, streaming send-ahead,
-haptic delay, logging — are in **Project Settings → Plugins → Hapbeat**
-(`UHapbeatConfig`).
+| 必要なもの | 補足 |
+|---|---|
+| **Unreal Engine 5.3 以降** | 5.4 でビルド・動作確認済み |
+| **C++ が扱えるプロジェクト** | 下の「なぜ C++ プロジェクトが必要か」を参照 |
+| **Hapbeat デバイス**（PC と同じ Wi-Fi / LAN） | ルーター経由でも、Hapbeat の SoftAP でも可 |
+| **[Hapbeat Studio](https://devtools.hapbeat.com)** | Wi-Fi 設定と Kit の書き込みに使用 |
 
-## Quick start: Blueprint
+### なぜ C++ プロジェクトが必要か
 
-The subsystem **auto-connects** during `Initialize()` — before any actor's
-`BeginPlay` — using the Project Settings values above (`AppName` falls back
-to your project's name if left empty), so a device on the LAN already sees a
-`CONNECT_STATUS` by the time your level starts. Calling **Connect** yourself,
-as in step 2 below, is optional: it's safe to call again and lets you
-override the port/app name at runtime.
+本 SDK は**ソース形式のプラグイン**（コンパイル済みバイナリを同梱していない）です。
+そのため Blueprint だけで作るプロジェクトでも、**一度だけ**ビルドが必要になります。
 
-1. **Get Game Instance → Get Subsystem**, class **Hapbeat Subsystem**.
-2. Call **Connect** (Port `7700`, App Name `MyGame`) once, e.g. on BeginPlay.
-3. Call **Play** (Event Id `sample-kit.sine_100hz`, Gain `0.5`) wherever you
-   want haptics — an OnHit event, an input action, a UI button click. Event
-   ids follow `<kit-name>.<file-name>`; `sample-kit.sine_100hz` is the
-   standard test event.
+Blueprint プロジェクトしか無い場合は、エディタで
+**Tools → New C++ Class → None → Create Class** を一度実行すれば C++ プロジェクトになります
+（以降の作業はすべて Blueprint だけで進められます）。
 
-## Quick start: C++
+> Visual Studio 2022（ワークロード「**C++ によるゲーム開発**」）が必要です。
+
+### デバイス側の準備
+
+Studio で以下を済ませておきます（SDK 側の作業ではありません）:
+
+1. デバイスを PC と**同じネットワーク**に接続する（Studio の Wi-Fi 設定）
+2. **Kit を書き込む**
+
+Kit の要否は再生方式で変わります。ここが最初のつまずきポイントなので先に把握してください:
+
+| 再生方式 | Kit の書き込み | 何が起きるか |
+|---|---|---|
+| **Command**（イベント ID で鳴らす） | **必要** | SDK は ID だけ送り、デバイスが内蔵クリップを鳴らす |
+| **StreamClip**（音声を流し込む） | 不要 | SDK が PCM を毎フレーム送る |
+
+疎通確認だけなら **StreamClip は Kit なしで鳴る**ので、まずそちらで確認するのが確実です。
+
+---
+
+## 1. プラグインを入れる
+
+1. 本リポジトリを `あなたのプロジェクト/Plugins/HapbeatSDK/` に配置する
+   （`Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在する形）
+2. `.uproject` を右クリック → **Generate Visual Studio project files**
+3. 生成された `.sln` を Visual Studio で開き、構成 **Development Editor / Win64** でビルド
+   （`.uproject` をダブルクリックして「ビルドしますか？」→ はい、でも可）
+4. エディタを開き **Edit → Plugins → Hardware → Hapbeat SDK** が **Enabled** になっていることを確認
+
+> **ビルドでメモリ不足のエラー**（`C1060` / `PCH の仮想メモリを作成できませんでした`）が出る場合は、
+> UE のビルド並列数が搭載メモリに対して多すぎます。
+> `%APPDATA%\Unreal Engine\UnrealBuildTool\BuildConfiguration.xml` に
+> `<ParallelExecutor><MaxProcessorCount>8</MaxProcessorCount></ParallelExecutor>` を設定してください。
+
+### 設定項目の場所
+
+**Edit → Project Settings → Plugins → Hapbeat**（`UHapbeatConfig`）。
+最初は**すべて既定値のままで動きます**。
+
+| 項目 | 既定値 | 意味 |
+|---|---|---|
+| Port | `7700` | デバイスとの通信ポート |
+| App Name | 空 | デバイスの OLED に出る名前（空ならプロジェクト名）。最大 16 文字 |
+| Ping Interval | `5` 秒 | 死活監視の間隔 |
+| Stream Send Ahead Seconds | `0.05` | ストリーミングで先送りする秒数 |
+| Stream Unicast / Command Unicast | 両方 on | 既知デバイスへ直接送信（Wi-Fi の遅延対策。下記) |
+| Haptic Delay Seconds | `0` | 音の遅延に触覚を合わせたいときだけ使う |
+
+> **Unicast 設定について**: Wi-Fi のブロードキャストは、同じアクセスポイントに省電力状態の端末が
+> 1 台でもいると AP 側で最大 100〜300ms 保留されることがあり、触覚が周期的に途切れる原因になります。
+> 既定では PONG で存在が分かっているデバイスへ直接送ることでこれを回避します。
+> 対象デバイスが 0 台のときは自動でブロードキャストに戻るため、通常は既定のままで構いません。
+
+---
+
+## 2. サンプルで疎通確認する（最重要）
+
+**まずここを通してください。** 自分のコードを書く前に、環境が正しいことを確認できます。
+
+1. 空のレベルを新規作成する（既存のレベルでも可）
+2. **Content Browser → Settings → Show Plugin Content** を有効にする
+3. コンテンツブラウザ上部の検索欄で `HapbeatBasicExample` を検索し、
+   **Hapbeat Basic Example Actor** をレベルにドラッグ&ドロップ
+   （C++ クラスなので **C++ Classes → HapbeatSDKSamples** からでも辿れます）
+4. **Play**（PIE）を押す
+
+画面に次の 2 行が出ます:
+
+```
+Hapbeat BasicExample -- Space: stream 1-shot | R: stream loop | F: command play | S: stop all | C: ping
+Hapbeat devices reachable: 1
+```
+
+**2 行目が緑で `1` 以上**になっていれば、デバイスと通信できています。
+
+### 押すキーと期待される動作
+
+| キー | 動作 | Kit の書き込み |
+|---|---|---|
+| **Space** | 100Hz のクリップを 1 回ストリーミング再生 | **不要** |
+| **R** | 同じクリップをループ再生（もう一度 S で停止） | **不要** |
+| **F** | `basic-exam-kit.sine_200hz_1s` を Command 再生 | **必要** |
+| **S** | すべて停止 | — |
+| **C** | Ping 送信（`reachable` の数が更新される） | — |
+
+**Space で振動すれば導入は成功です。**
+
+F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
+`Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Kit/basic-exam-kit/` を書き込んでください。
+
+### 動かないときの切り分け
+
+上から順に確認してください。
+
+| 症状 | 確認すること |
+|---|---|
+| `reachable: 0` のまま | デバイスの電源と Wi-Fi 接続。PC とデバイスが**同じネットワーク**か。ファイアウォールが UDP 7700 を塞いでいないか |
+| `reachable: 0` だが Studio では見える | **PC が有線と Wi-Fi に同時接続**していると、ブロードキャストが有線側に出て届かないことがあります。一時的に有線を切って確認してください |
+| Space は鳴るが **F だけ鳴らない** | Kit 未書き込み（上記）。イベント ID がデバイス内の Kit と一致しているか |
+| 何も鳴らないが `reachable` は 1 以上 | デバイス本体の音量。Output Log に `LogHapbeat` の警告が出ていないか |
+| 途切れ・ブツブツする | Project Settings の **Stream Unicast** が on か。Wi-Fi の電波状況 |
+
+---
+
+## 3. 自分のプロジェクトから鳴らす
+
+サブシステムは**起動時に自動接続**します（`Initialize()` の時点。レベルの `BeginPlay` より前）。
+そのため `Connect` を呼ばなくても、いきなり `Play` して構いません。
+
+### Blueprint の場合
+
+1. **Get Game Instance** → **Get Subsystem**（Class に `Hapbeat Subsystem` を指定）
+2. そこから **Play** を繋ぐ
+   - `Event Id`: `basic-exam-kit.sine_200hz_1s` のような `<kit名>.<ファイル名>`
+   - `Gain`: `0.0`〜`1.0`
+   - `Target`: 空でよい（全デバイス宛て）
+
+### C++ の場合
+
+自分のモジュールの `*.Build.cs` に `"HapbeatSDK"` を追加してから:
 
 ```cpp
 #include "HapbeatSubsystem.h"
-
-void AMyActor::BeginPlay()
-{
-    Super::BeginPlay();
-    if (UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>())
-    {
-        Hb->Connect(7700, TEXT("MyGame"));
-    }
-}
 
 void AMyActor::OnHit()
 {
     if (UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>())
     {
-        Hb->Play(TEXT("sample-kit.sine_100hz"), 0.8f);
+        Hb->Play(TEXT("basic-exam-kit.sine_200hz_1s"), 0.8f);
     }
 }
 ```
 
-If you call `Play`/`Stop`/etc. before `Connect`, the subsystem lazily connects
-with the last `Port`/`AppName` (defaults `7700` / `""`).
-
-## Authoring an EventMap
-
-`UHapbeatEventMap` is the tuning side: it maps a stable event id to a default
-gain, mode, and target — so gameplay code / trigger components stay one-liners
-you can re-tune without touching them again.
-
-1. **Content Browser → Add → Miscellaneous → Data Asset → Hapbeat Event
-   Map.** Name it whatever you like (e.g. `DA_HapbeatEvents`).
-2. Open it. Under **Entries**, click `+` to add an entry:
-   - **Mode** — `Command` (device plays its own installed clip) or
-     `StreamClip` (SDK streams a `UHapbeatClip` over UDP — see
-     [Streaming a clip](#streaming-a-clip--modulating-it-live) below).
-   - **Display Name** — a human label, e.g. "Landing Impact".
-   - **Category** / **Event Name** — the two halves of the event id
-     (`Category.EventName`, matching the kit deployed to the device).
-   - **Gain** — 0..2 author gain.
-   - **Target** — device address filter, empty = broadcast.
-3. Click **Refresh Intensities** (button above the Entries array). This
-   scans every `*-manifest.json` under your project's `Content/` folder,
-   matches each entry's `(event id, mode)` against the kit manifest's
-   authored `parameters.intensity` (set in Hapbeat Studio), and bakes it into
-   the entry's read-only `Cached Manifest Intensity` field. The device is a
-   pure executor and never reads the manifest itself — this baked value is
-   what makes `Gain × intensity` land on the wire without shipping the
-   manifest at runtime. An entry with no manifest match keeps `-1` (falls
-   back to plain `Gain`).
-4. Use the entry picker + **Test Play / Stop / Stop All / Ping** row to fire
-   the selected entry at a real device straight from the editor, without
-   entering PIE. (StreamClip entries are disabled here — the device has no
-   local clip to test-play; exercise those in PIE.)
-
-Add / remove / reorder / duplicate / multi-select-edit entries with the
-native array UI — there is no separate EventMap window to open.
-
-## Wiring trigger components
-
-Add a `UHapbeatTriggerComponent` (or a subclass) to any Actor, assign the
-**Event Map** and pick an **Entry** from the dropdown (only appears once an
-EventMap is assigned — otherwise you see the raw entry-id field), then wire
-`Fire()` / `Stop()` to whatever should trigger it.
-
-**Collision** (`UHapbeatCollisionTriggerComponent`):
-
-1. Add the component to an actor that has a collider.
-2. Set **Trigger Event** to `Hit` (needs "Simulation Generates Hit Events" on
-   the primitive) or `Begin Overlap` (needs "Generate Overlap Events").
-3. Set **Gain Mode** to `Fixed` (fire at the entry's gain as-is) or
-   `Velocity Scaled` (map impact speed through **Velocity Curve**, gated by
-   **Velocity Threshold** / **Max Velocity**).
-4. Optionally set **Tag Filter** so only actors with a matching Actor Tag
-   trigger it.
-
-No `Fire()` call needed — it fires itself from the physics event.
-
-**Sequence** (`UHapbeatSequenceComponent`, for grab/hold/release):
-
-1. Add the component, assign **Event Map**.
-2. Set the inherited **Entry Id** to the *loop* entry (a looping StreamClip —
-   the sustained "held" feedback).
-3. Set **Start Entry Id** / **Stop Entry Id** to the impact/release one-shots.
-4. Wire your grab-begin event to `Fire()` (plays Start, then starts the
-   loop) and grab-end to `Stop()` (stops the loop, then — after
-   **Stop Shot Delay** seconds, default `0.05` — plays Stop).
-
-**Anything else** — call `Fire()` / `FireWithGain(gain)` /
-`FireScaled(velocity, min, max)` / `FireWithCurve(value, curve)` /
-`Stop()` from any Blueprint event (UI button `OnClick`, an Animation
-Notify, `Player Input` action bindings, …) on a plain
-`UHapbeatTriggerComponent`.
-
-## Streaming a clip + modulating it live
-
-StreamClip sends raw PCM16 audio to the device instead of an event id — no
-kit needs to be installed for it to produce haptics, and you can modulate its
-gain/pan continuously while it plays.
-
-**Building the clip is currently a C++ step** (`UHapbeatClip::CreateFromWavBytes`
-is not `BlueprintCallable`, and there is no in-editor `.wav` import yet):
+主な API:
 
 ```cpp
-#include "HapbeatClip.h"
-#include "Misc/FileHelper.h"
+void Play(const FString& EventId, float Gain = 1.0f, const FString& Target = TEXT(""));
+void Stop(const FString& EventId, const FString& Target = TEXT(""));
+void StopAll(const FString& Target = TEXT(""));
+void Ping();
 
-TArray<uint8> WavBytes;
-if (FFileHelper::LoadFileToArray(WavBytes, *WavPath))
-{
-    UHapbeatClip* Clip = UHapbeatClip::CreateFromWavBytes(GetTransientPackage(), WavBytes);
-    // Keep Clip alive with a UPROPERTY on your actor/component — an
-    // FHapbeatEventEntry only holds it via a TSoftObjectPtr, which is not a
-    // GC-strong reference.
-}
+int32 GetAliveDeviceCount() const;   // 応答のあるデバイス数
+bool  IsAlive() const;               // 1 台以上応答しているか
+bool  IsConnected() const;           // ソケットが開いているか（≠ デバイスの有無）
 ```
 
-Once you have a `UHapbeatClip*`, either:
+> `IsConnected()` は「ソケットが開いているか」であり、**デバイスの有無ではありません**。
+> UDP はコネクションレスのため、デバイスの電源が入っていなくても `true` になります。
+> 実際に届いているかは `IsAlive()` / `GetAliveDeviceCount()` で判断してください。
 
-- assign it to an `FHapbeatEventEntry`'s **Stream Clip** field (Mode =
-  `StreamClip`) and drive it through a trigger component's `Fire()`/`Stop()`
-  as usual, or
-- call the subsystem directly:
+---
+
+## 4. EventMap で「鳴らす場所」と「強さ」を分ける
+
+`Play("...", 0.8f)` を直接書くと、**強さの調整のたびにコードを直す**ことになります。
+SDK はこれを分離する仕組みを持っています。
+
+- **鳴らす場所（起点）** — トリガコンポーネント、または `Play()` の呼び出し
+- **鳴らし方（調整）** — **EventMap** アセットのエントリ（イベント ID・ゲイン・対象デバイス・ループ）
+
+両者は**イベント ID ではなく安定した GUID** で結ばれるため、エントリを並べ替えても壊れません。
+
+### 作り方
+
+1. コンテンツブラウザで右クリック → **Miscellaneous → Data Asset** → **Hapbeat Event Map**
+2. 開いて `Entries` に `+` で追加し、各エントリを設定
+   - `Mode`: `Command`（Kit 必要）か `StreamClip`（Kit 不要）
+   - `Category` / `Event Name`: 合わせて `<Category>.<EventName>` がイベント ID になる
+   - `Gain`: `0`〜`2`
+   - `Target`: 空 = 全デバイス
+3. Details パネル上部の **Refresh Intensities** を押す
+   → Kit の `manifest.json` に書かれた `intensity` を各エントリに焼き込みます
+4. **Test Play** で、再生（PIE）せずにその場で鳴らして確認できます
+
+> 実際にデバイスへ送られるゲインは
+> **`Gain` × `Kit の intensity` × トリガ側の倍率** です。
+> Studio で作り込んだ強さ（intensity）を土台に、UE 側で微調整する設計になっています。
+
+---
+
+## 5. トリガコンポーネントを使う（コードなしで鳴らす）
+
+アクターに **Add Component** から追加できます。いずれも EventMap とエントリを指定して使います。
+
+| コンポーネント | 用途 |
+|---|---|
+| **Hapbeat Trigger** | 基本形。Blueprint から `Fire()` / `Stop()` を呼ぶ |
+| **Hapbeat Collision Trigger** | 物理の衝突・重なりで自動発火。**衝突速度に応じて強さを変えられる** |
+| **Hapbeat Sequence** | 掴む→保持→離す の 3 段階（開始 1 発 → ループ → 終了 1 発） |
+| **Hapbeat Parameter Binding** | 再生中のストリームのゲイン / パンを実行時に変化させる |
+
+`Entry Id` はプルダウンから**エントリ名で選べます**（EventMap を指定すると一覧が出ます）。
+
+---
+
+## 6. クリップをストリーミングする（Kit 不要）
+
+`UHapbeatClip` は 16kHz / PCM16 の WAV をそのまま扱えるアセットです。
+再生中に**ゲインとパンをリアルタイムに変えられる**のが Command 再生との違いです。
 
 ```cpp
-UHapbeatStreamPlayback* Playback = Hb->StreamClip(Clip, /*BaselineGain=*/1.0f,
-    /*InitialGain=*/1.0f, /*Target=*/TEXT(""), /*bLoop=*/true);
+UHapbeatStreamPlayback* Playback =
+    Hb->StreamClip(MyClip, /*BaselineGain=*/1.0f, /*InitialGain=*/1.0f, TEXT(""), /*bLoop=*/true);
+
+// 毎フレーム変調する（例: 速度に応じて強くする）
+Playback->ApplyGainModulation(FMath::Clamp(Speed / 300.0f, 0.0f, 1.0f));
+Playback->SetPan(-1.0f);  // -1 = 左, +1 = 右
+
+Hb->StopStream();  // 停止
 ```
 
-`Playback` is your live handle: `ApplyGainModulation(modulator)` sets
-`Gain = clamp(BaselineGain × modulator, 0, 2)`, `SetPan(pan)` sets stereo
-balance (`-1`..`+1`, linear balance — not equal-power, since Hapbeat's L/R
-actuators don't binaurally sum), `Stop()` ends it. There is a **single active
-stream session** in v1 — starting a new one replaces whatever was playing.
+同時に流せるストリームは **1 本**です。新しく `StreamClip` を呼ぶと前のものは停止します。
 
-To modulate continuously instead of one-shot calls, add a
-`UHapbeatParameterBinding` component to the same actor:
+---
 
-1. **Source Property** — pick what to read each tick (`Local Position X/Y/Z`,
-   `Velocity Magnitude`, `Angular Velocity Magnitude`,
-   `Position Delta Magnitude` for kinematic/code-moved bodies), or
-   **External** to push a value yourself (e.g. a UMG slider's
-   `OnValueChanged` → `SetValue(Value)`).
-2. Set **Input Min** / **Input Max** (the source's expected range) and a
-   **Curve Type** (`Linear` / `Ease In` / `Ease Out` / `Exponential` /
-   `Custom` — the last reads **Custom Curve**, a `UCurveFloat`).
-3. Set **Output Parameter** to `Stream Gain` or `Stream Pan`, and
-   **Output Min** / **Output Max**.
-4. Call `EvaluateNow()` right after your `StreamClip()` call so the first
-   ~100 ms of audio isn't sent at full un-modulated baseline while waiting
-   for the first `Tick`.
+## 7. 応用
 
-The binding writes to the subsystem's single active playback
-(`GetActivePlayback()`) — attach one component per parameter (one for
-`Stream Gain`, another for `Stream Pan`, if you need both at once).
+### 複数の HMD に 1 台ずつ Hapbeat を割り当てる
 
-## Global address override
-
-For deploying **one identical build to many HMDs**, each pinned 1:1 to its own
-Hapbeat device, without touching any EventMap/trigger target string:
+同一ビルドを複数台に配って、**端末ごとに別の Hapbeat へ送る**ための機能です。
+EventMap やトリガを一切書き換えずに、**すべての送信先を実行時に上書き**します。
 
 ```cpp
-Hb->SetAddressOverride(/*Player=*/3, /*InGroup=*/-1, /*bPersist=*/true);
+Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
 ```
 
-This forces `player_3` onto every outgoing `Play`/`Stop`/`StopAll`/
-`StreamClip`/`StopStreamWithFlush` target — pass `-1` for an axis to leave it
-alone. With `bPersist = true` the value survives the next launch (saved to
-the platform's `GameUserSettings` ini). `GetOverridePlayer()` /
-`GetOverrideGroup()` read the current values back;
-`ClearPersistedAddressOverride()` reverts and forgets them. Values outside
-`1..99` normalize to disabled (`UHapbeatSubsystem::AddressOverrideDisabled`,
-`-1`).
+- `-1` = その軸は上書きしない
+- `bPersist = true` で端末に保存され、次回起動時に自動で復元されます
+- App Name に `<p>` / `<g>` を含めておくと、デバイスの OLED に実際の番号が表示されます
+  （例: `Booth <p>` → `Booth 1`）
 
-## Targeting
+### 送信先を絞る（Target）
 
-```cpp
-Hb->Play(TEXT("sample-kit.sine_100hz"), 0.6f, TEXT("player_1/pos_chest")); // one device
-Hb->Play(TEXT("sample-kit.sine_100hz"), 0.6f, TEXT("*/pos_chest"));         // all chest devices
-Hb->Play(TEXT("sample-kit.sine_100hz"));                                    // broadcast (all)
-```
+`Target` は `player_1/pos_chest` のようなパス文字列です。空文字なら全デバイスに送ります。
+`*` はワイルドカードとして使えます（例: `*/pos_neck` = 全プレイヤーの首）。
 
-`UHapbeatTargetLibrary::BuildTarget` / `ParseTarget` are Blueprint-callable
-helpers for composing / decomposing these strings.
+### Showcase サンプル
 
-## Samples
+主要な実装手法をゾーン別に確認できます。BasicExample と同様、アクターをレベルに置いて再生します。
 
-Both ship as C++-authored actors with engine-primitive visuals (no imported
-meshes, no binary Blueprint assets) — drop the actor(s) into any level and
-hit Play. **Deploy the sample's kit to your device via Hapbeat Studio first**
-so its Command-mode events produce haptics (StreamClip events work with no
-kit installed):
+| アクター | 内容 | キー |
+|---|---|---|
+| `Z1 Bowling` | 衝突トリガ（速度連動）。**スクリプト無しで鳴る例** | `B` 発射 |
+| `Z2 Door` | 状態遷移に合わせた発火 | `F` 開閉 / `G` 強打 / `L` 施錠 |
+| `Z3 Fishing` | 掴む→保持→離す + 速度でゲイン変調 | `H` |
+| `Z4 Stream Console` | ストリームのゲイン / パンを実行時操作 | `T` 開始 / `U` `J` 強弱 / `N` `M` 左右 |
+| `Z5 Charge Shot` | コードから直接 API を叩く例（溜め→発射） | `V` 長押し |
 
-- **BasicExample** — place a single `AHapbeatBasicExampleActor` in an empty
-  level. Space = stream one-shot, R = stream loop, F = command play, S = stop
-  everything, C = ping. Kit: `Content/HapbeatSamples/BasicExample/Kit/basic-exam-kit/`.
-- **Showcase** — place any of the 5 zone actors
-  (`AHapbeatShowcaseZ1BowlingActor` … `Z5ChargeShotActor`), each independent
-  and demonstrating a different authoring pattern (pure collision-trigger
-  wiring, imperative state-machine fires, sequence + parameter binding,
-  live stream modulation, fully imperative charge/fire). See the README's
-  [Samples](../README.md#samples) table for the exact key bindings per zone.
-  Kit: `Content/HapbeatSamples/Showcase/Kit/showcase-kit/`.
+Showcase のイベントは Command が中心のため、
+`Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Kit/showcase-kit/` の書き込みが必要です。
 
-## The orthogonal design
+---
 
-- **Trigger** = any UE event (OnHit, input action, UI click, gameplay code).
-- **Tuning** = the EventMap entry (or the event id + gain you pass directly).
+## 次に読むもの
 
-These stay separable, matching the Hapbeat Unity SDK.
-
-## Notes
-
-- The plugin is authored against the UE5 API and marked `IsBetaVersion` in
-  `HapbeatSDK.uplugin` — build it in your project to verify. It uses only the
-  engine's `Sockets`/`Networking` modules (no external deps).
-- `UHapbeatConfig::HapticDelaySeconds` and
-  `FHapbeatEventEntry::DelayOffsetSeconds` are reserved fields — v1 does not
-  defer sends by them yet; every fire goes out immediately.
-- StreamClip is a single-session, REPLACE-semantics feature in v1 — starting
-  a new stream stops whatever was already playing.
+- [README](../README.md) — 機能一覧と API の入口
+- [AGENTS.md](../AGENTS.md) — AI コーディングエージェント向けの自己完結リファレンス
+- [公式ドキュメントポータル](https://devtools.hapbeat.com/) — 他 SDK と共通の概念解説

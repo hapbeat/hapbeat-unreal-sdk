@@ -23,8 +23,20 @@ Initial release. Hapbeat Unity SDK の Unreal 版として、wire protocol・Eve
   `Connect` / `Play` / `Stop` / `StopAll` / `Ping`、PONG ベースの疎通判定
   (`AliveDeviceCount` / `IsAlive`)、`OnConnected` / `OnDisconnected` / `OnError` /
   `OnPong` の Blueprint delegate。
-- `UHapbeatConfig` — Port・Group・AppName・PingInterval・
-  StreamSendAheadSeconds・HapticDelaySeconds 等の接続設定。
+- `UHapbeatConfig` — Port・AppName・PingInterval・StreamSendAheadSeconds・
+  HapticDelaySeconds・StreamUnicast・CommandUnicast 等の接続設定。
+- **専用スレッドによる CLIP 送出** — STREAM_DATA を game thread ではなく専用
+  スレッドから ~10ms 等間隔で送出（`FHapbeatStreamRunnable`）。フレームヒッチ
+  （GC / 描画 / 物理）でデバイスのリングバッファが枯渇して起きる不定期な途切れを
+  根治。Gain/Pan は atomic ミラー経由で読むため送出スレッドは UObject に触れない。
+- **unicast 送信（DTIM 対策）** — Wi-Fi AP の省電力バッチングでブロードキャストが
+  最大 1 ビーコン間隔（~100-300ms）保留される問題を回避するため、PONG で既知の
+  デバイスへ直接送信。`StreamUnicast`（CLIP）と `CommandUnicast`（Play/Stop/
+  StopAll）を個別に制御でき、既定は両方 on。宛先はデバイスが PONG で報告した
+  アドレスで絞り込み（未報告のデバイスは fail-open で送信対象に残す）。
+  該当デバイスが 0 件のとき、コマンドはブロードキャストにフォールバック
+  （デバイス側が同じ target フィルタを再適用するため誤発火しない）。
+  PING / CONNECT_STATUS は discovery のため常にブロードキャスト。
 - **Address Override（player/group の実行時上書き）** —
   `SetAddressOverride(Player, Group, bPersist)` / `ClearPersistedAddressOverride()` /
   `GetOverridePlayer()` / `GetOverrideGroup()`。設定すると EventMap 側の target

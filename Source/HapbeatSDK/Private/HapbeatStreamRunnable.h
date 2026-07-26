@@ -77,6 +77,7 @@ public:
 		FSocket* InSocket,
 		int32 InPort,
 		TArray<FString> InUnicastTargetIps,
+		bool bInHasUnicastSnapshot,
 		float InSendAheadSeconds);
 	virtual ~FHapbeatStreamRunnable() override;
 
@@ -96,6 +97,13 @@ private:
 	FSocket* Socket = nullptr;
 	int32 Port = 0;
 	TArray<FString> UnicastTargetIps;
+	/**
+	 * True when the game thread actually took a unicast snapshot for this
+	 * session. Distinguishes "no snapshot -> broadcast" from "snapshot whose
+	 * targets were all filtered out -> send nowhere" (see SendRaw and
+	 * UHapbeatSubsystem's three-state contract).
+	 */
+	bool bHasUnicastSnapshot = false;
 	float SendAheadSeconds = 0.05f;
 
 	// Built in Init() (on the worker thread itself), from the plain values

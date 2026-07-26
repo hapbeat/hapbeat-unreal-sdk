@@ -92,4 +92,20 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
 	static FString ApplyAddressPlaceholders(const FString& AppName, int32 OverridePlayer, int32 OverrideGroup);
+
+	/**
+	 * Does a device whose reported address is DeviceAddress accept a command
+	 * sent to Target? Mirrors the firmware's addressMatch() (udp_receiver.cpp)
+	 * and Unity HapbeatClient.AddressMatches VERBATIM, so the SDK's send-side
+	 * filter can never drop a device the firmware would have accepted.
+	 *
+	 * Rules: empty Target matches everything; segments are compared left to
+	 * right; "*" matches any one segment; a Target longer than the address is a
+	 * mismatch; a Target that is a front-match of the address passes.
+	 *
+	 * @param Target        Resolved target string (post-ResolveTarget).
+	 * @param DeviceAddress The device's own address, from the PONG extension.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	static bool AddressMatches(const FString& Target, const FString& DeviceAddress);
 };

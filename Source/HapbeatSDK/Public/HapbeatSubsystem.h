@@ -241,6 +241,29 @@ private:
 	 * SendStreamRaw, commit db6fd31. A per-target send failure is logged and
 	 * skipped; it never kills the session.
 	 */
+	/**
+	 * Send a PLAY / STOP / STOP_ALL packet. Routing (verbatim parity with Unity
+	 * HapbeatClient.SendCommandRaw, commit 97c2988):
+	 *   (a) command-unicast disabled            -> broadcast
+	 *   (b) each device whose last PONG is within the liveness window AND whose
+	 *       reported address matches ResolvedTarget -> unicast
+	 *   (c) a known device with NO reported address -> unicast anyway (fail-open:
+	 *       older firmware, or its first PONG carried no address extension)
+	 *   (d) nothing was sent (no live device, or every address mismatched)
+	 *       -> BROADCAST fallback
+	 * Never both (no double delivery: the same PLAY would fire twice).
+	 *
+	 * (d) is deliberately a fallback and NOT "skip": the firmware re-applies
+	 * addressMatch() to every PLAY/STOP/STOP_ALL it receives, so a broadcast can
+	 * never actuate a device the target didn't address — skipping would only save
+	 * airtime, at the price of silently losing a command whenever our cached
+	 * address is stale (the device's group/player was just changed and its next
+	 * PONG hasn't landed). For STOP/STOP_ALL that silent loss means a looping
+	 * event never stops. This is the one place where the command path
+	 * intentionally differs from the stream path (see SendStreamPacket).
+	 */
+	void SendCommandPacket(const TArray<uint8>& Packet, const FString& ResolvedTarget);
+
 	void SendStreamPacket(const TArray<uint8>& Packet);
 
 	/**
@@ -259,7 +282,7 @@ private:
 	 * SendStreamPacket then broadcasts. A device whose first PONG lands mid-session
 	 * is picked up by the NEXT session, exactly like Unity.
 	 */
-	void RefreshStreamUnicastTargets();
+	void RefreshStreamUnicastTargets(const FString& ResolvedTarget);
 
 	/**
 	 * Thread-safe: guarded by SeqLock so both the game thread (Play/Stop/
@@ -375,6 +398,33 @@ private:
 	/** Config: unicast STREAM_* to known devices instead of broadcasting (UHapbeatConfig::bStreamUnicast). */
 	bool bStreamUnicast = true;
 
-	/** Per-session snapshot of alive device addresses for stream unicast. Empty => broadcast. */
+	/** Config: unicast PLAY/STOP/STOP_ALL to known devices instead of broadcasting (UHapbeatConfig::bCommandUnicast). */
+	bool bCommandUnicast = true;
+
+	/**
+	 * Per-session snapshot of the stream's unicast destinations.
+	 *
+	 * Three states, mirroring Unity's _streamUnicastTargets (029efc1) — note this
+	 * differs from the command path on purpose:
+	 *   bStreamTargetsSnapshotted == false -> no snapshot (feature off / nobody
+	 *       has PONGed): SendStreamPacket BROADCASTS.
+	 *   snapshotted && Num() == 0          -> a snapshot WAS taken and every known
+	 *       device's address mismatched this session's target: send NOWHERE. Not a
+	 *       broadcast — that would defeat the filter, and unlike a one-shot STOP a
+	 *       lost stream cannot wedge the device in a looping state.
+	 *   snapshotted && Num()  > 0          -> unicast to exactly these endpoints.
+	 */
 	TArray<TSharedPtr<FInternetAddr>> StreamUnicastTargets;
+	bool bStreamTargetsSnapshotted = false;
+
+	/**
+	 * Last address each device reported in its PONG extension (device-addressing
+	 * §5.4), keyed by sender IP. A device with no entry is "unknown" and is kept
+	 * (fail-open) by both unicast filters — firmware predating the extension, or
+	 * a PONG that hasn't landed yet, must not silently lose its haptics.
+	 * Game-thread only (written from the marshalled PONG handler). Cleared on
+	 * Connect(): device knowledge is per-connection, since after a Wi-Fi change
+	 * the same IPs may belong to different devices.
+	 */
+	TMap<FString, FString> DeviceAddresses;
 };

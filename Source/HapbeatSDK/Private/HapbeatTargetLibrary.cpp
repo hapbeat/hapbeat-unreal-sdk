@@ -212,3 +212,45 @@ FString UHapbeatTargetLibrary::ApplyAddressPlaceholders(const FString& AppName, 
 	return AppName.Replace(TEXT("<p>"), *P, ESearchCase::CaseSensitive)
 				  .Replace(TEXT("<g>"), *G, ESearchCase::CaseSensitive);
 }
+
+bool UHapbeatTargetLibrary::AddressMatches(const FString& Target, const FString& DeviceAddress)
+{
+	if (Target.IsEmpty())
+	{
+		return true;
+	}
+
+	TArray<FString> TargetSegments;
+	Target.ParseIntoArray(TargetSegments, TEXT("/"), /*InCullEmpty=*/false);
+	TArray<FString> AddressSegments;
+	DeviceAddress.ParseIntoArray(AddressSegments, TEXT("/"), /*InCullEmpty=*/false);
+
+	// A single TRAILING '/' terminates the target rather than adding an empty
+	// segment: the firmware's loop advances past the separator and then exits on
+	// `while (*tp)`, so "player_1/" behaves exactly like "player_1". Culling
+	// naively would compare a "" segment against the device's next real segment
+	// and mismatch — i.e. the SDK would drop a device the firmware WOULD have
+	// accepted, silently losing its command. Only the LAST empty segment is
+	// dropped, and only once ("a//" really does compare an empty segment in
+	// firmware, and still mismatches). Verbatim parity with Unity AddressMatches.
+	int32 TargetCount = TargetSegments.Num();
+	if (TargetCount > 1 && TargetSegments[TargetCount - 1].IsEmpty())
+	{
+		--TargetCount;
+	}
+
+	for (int32 i = 0; i < TargetCount; ++i)
+	{
+		if (i >= AddressSegments.Num())
+		{
+			return false; // target longer than address = mismatch
+		}
+		if (TargetSegments[i] != TEXT("*")
+			&& !TargetSegments[i].Equals(AddressSegments[i], ESearchCase::CaseSensitive))
+		{
+			return false;
+		}
+	}
+
+	return true; // front-match or exact match
+}

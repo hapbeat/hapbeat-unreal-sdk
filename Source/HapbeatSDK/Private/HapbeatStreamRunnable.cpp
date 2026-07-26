@@ -61,12 +61,14 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	FSocket* InSocket,
 	int32 InPort,
 	TArray<FString> InUnicastTargetIps,
+	bool bInHasUnicastSnapshot,
 	float InSendAheadSeconds)
 	// Initializer order matches declaration order in the header (Socket ..
 	// Mirror) to avoid -Wreorder; see the header for the full member list.
 	: Socket(InSocket)
 	, Port(InPort)
 	, UnicastTargetIps(MoveTemp(InUnicastTargetIps))
+	, bHasUnicastSnapshot(bInHasUnicastSnapshot)
 	, SendAheadSeconds(InSendAheadSeconds)
 	, NextSeqFn(MoveTemp(InNextSeq))
 	, PendingPcm16(MoveTemp(InPcm16))
@@ -206,6 +208,14 @@ void FHapbeatStreamRunnable::SendRaw(const TArray<uint8>& Packet)
 
 	if (LocalUnicastTargets.Num() == 0)
 	{
+		// Three-state, mirroring UHapbeatSubsystem::SendStreamPacket: only
+		// broadcast when NO snapshot was taken. A snapshot that filtered every
+		// device out means this stream isn't addressed to anyone here — send
+		// nowhere rather than blasting it at everybody.
+		if (bHasUnicastSnapshot)
+		{
+			return;
+		}
 		if (LocalBroadcastAddr.IsValid())
 		{
 			int32 BytesSent = 0;

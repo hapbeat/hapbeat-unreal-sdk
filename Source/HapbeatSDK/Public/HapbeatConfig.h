@@ -50,6 +50,10 @@ public:
 	bool bStreamUnicast = true;
 
 	UPROPERTY(EditAnywhere, config, Category = "Behavior",
+		meta = (Tooltip = "Send Play / Stop / StopAll directly to devices already known from a PONG response, instead of UDP broadcast. Same Wi-Fi AP power-save (DTIM) rationale as Stream Unicast, applied to one-shot commands: a broadcast can sit at the AP until the next beacon, delaying a single command by up to ~300 ms. Falls back to broadcast automatically when no device has responded yet, or when every known device's address mismatches the command's target -- the device applies the same target filter on receipt, so a broadcast can never actuate a device the target did not address. Default: enabled."))
+	bool bCommandUnicast = true;
+
+	UPROPERTY(EditAnywhere, config, Category = "Behavior",
 		meta = (Tooltip = "Global delay (seconds) added to every Play / StreamClip to match audio output latency (e.g. Bluetooth headphones). Hapbeat haptics go out with ~10 ms latency, so on slow audio paths the haptic can arrive before the sound.",
 			ClampMin = "0.0", ClampMax = "0.5"))
 	float HapticDelaySeconds = 0.0f;

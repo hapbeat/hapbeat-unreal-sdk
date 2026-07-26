@@ -59,6 +59,7 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		PingInterval = Cfg->PingInterval;
 		StreamSendAheadSeconds = Cfg->StreamSendAheadSeconds;
 		bStreamUnicast = Cfg->bStreamUnicast;
+		bCommandUnicast = Cfg->bCommandUnicast;
 
 		// AppName shows on the device OLED. Empty => fall back to the project name
 		// (parity with the Unity SDK's Application.productName fallback), still
@@ -175,6 +176,13 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 	BroadcastAddr->SetIp(TEXT("255.255.255.255"), bIsValid);
 	BroadcastAddr->SetPort(Port);
 
+	// Device knowledge is PER-CONNECTION: after a reconnect (Wi-Fi change, AP
+	// switch, hand-off) the previously-seen IPs may belong to entirely different
+	// devices, so unicasting to them would aim at the wrong hosts. Parity with
+	// Unity HapbeatClient.OpenBroadcast.
+	DevicePongTimes.Empty();
+	DeviceAddresses.Empty();
+
 	// Start receiving PONG/ERROR on a worker thread. 100 ms poll matches the
 	// Unity client's Poll() cadence; results are marshalled to the game thread.
 	if (Receiver == nullptr)
@@ -204,19 +212,19 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 void UHapbeatSubsystem::Play(const FString& EventId, float Gain, const FString& Target)
 {
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
-	SendPacket(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolvedTarget, 0, FMath::Clamp(Gain, 0.0f, 1.0f)));
+	SendCommandPacket(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolvedTarget, 0, FMath::Clamp(Gain, 0.0f, 1.0f)), ResolvedTarget);
 }
 
 void UHapbeatSubsystem::Stop(const FString& EventId, const FString& Target)
 {
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
-	SendPacket(FHapbeatProtocol::BuildStop(NextSeq(), EventId, ResolvedTarget));
+	SendCommandPacket(FHapbeatProtocol::BuildStop(NextSeq(), EventId, ResolvedTarget), ResolvedTarget);
 }
 
 void UHapbeatSubsystem::StopAll(const FString& Target)
 {
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
-	SendPacket(FHapbeatProtocol::BuildStopAll(NextSeq(), ResolvedTarget));
+	SendCommandPacket(FHapbeatProtocol::BuildStopAll(NextSeq(), ResolvedTarget), ResolvedTarget);
 }
 
 void UHapbeatSubsystem::Ping()
@@ -294,7 +302,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 	// game-thread flush pair) is still built here; extract plain IP strings from
 	// it for the runnable — never hand a TSharedPtr<FInternetAddr> to another
 	// thread (see FHapbeatStreamRunnable's threading contract).
-	RefreshStreamUnicastTargets();
+	RefreshStreamUnicastTargets(ResolvedTarget);
 	TArray<FString> UnicastIps;
 	UnicastIps.Reserve(StreamUnicastTargets.Num());
 	for (const TSharedPtr<FInternetAddr>& Addr : StreamUnicastTargets)
@@ -318,6 +326,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 		Socket,
 		Port,
 		MoveTemp(UnicastIps),
+		bStreamTargetsSnapshotted,
 		StreamSendAheadSeconds);
 
 	// AboveNormal: a short, latency-sensitive pacing loop — not TimeCritical
@@ -554,6 +563,14 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 				}
 
 				Self->DevicePongTimes.Add(SenderIp, FPlatformTime::Seconds());
+				if (!Address.IsEmpty())
+				{
+					// Only recorded when the PONG actually carried the address
+					// extension. A device with NO entry stays "unknown" and is
+					// kept by both unicast filters (fail-open) — older firmware
+					// must not silently lose its haptics.
+					Self->DeviceAddresses.Add(SenderIp, Address);
+				}
 
 				Self->OnPongGameThread(SenderIp, RttUs, DeviceName, Address, Firmware);
 				Self->EvaluateLivenessTransition();
@@ -663,12 +680,89 @@ FString UHapbeatSubsystem::AppNameForWire() const
 	return UHapbeatTargetLibrary::ApplyAddressPlaceholders(AppName, OverridePlayer, OverrideGroup);
 }
 
-void UHapbeatSubsystem::RefreshStreamUnicastTargets()
+void UHapbeatSubsystem::SendCommandPacket(const TArray<uint8>& Packet, const FString& ResolvedTarget)
+{
+	// (a) Feature off -> plain broadcast, exactly as before this existed.
+	if (!bCommandUnicast)
+	{
+		SendPacket(Packet);
+		return;
+	}
+	if (Socket == nullptr || bShuttingDown)
+	{
+		// Let SendPacket own the lazy-connect / teardown guards (single place).
+		SendPacket(Packet);
+		return;
+	}
+
+	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+	if (SocketSubsystem == nullptr)
+	{
+		SendPacket(Packet);
+		return;
+	}
+
+	const double Now = FPlatformTime::Seconds();
+	const double Timeout = AliveTimeoutSeconds();
+	bool bSentAny = false;
+
+	for (const TPair<FString, double>& Pair : DevicePongTimes)
+	{
+		// Device stopped answering PINGs (powered off, left the network, rebooting
+		// after an OTA). Skip it so we stop aiming datagrams at a dead host — each
+		// one draws an ICMP port-unreachable that Windows reports back on this
+		// socket (see SuppressUdpConnReset) — and so the live set can empty out
+		// and let the broadcast fallback below take over instead of unicasting
+		// into the void.
+		if (Now - Pair.Value > Timeout)
+		{
+			continue;
+		}
+
+		// (c) Fail open: address unknown => send anyway. Known => must match.
+		if (const FString* KnownAddress = DeviceAddresses.Find(Pair.Key))
+		{
+			if (!UHapbeatTargetLibrary::AddressMatches(ResolvedTarget, *KnownAddress))
+			{
+				continue;
+			}
+		}
+
+		TSharedPtr<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
+		bool bIsValid = false;
+		Addr->SetIp(*Pair.Key, bIsValid);
+		if (!bIsValid)
+		{
+			continue;
+		}
+		Addr->SetPort(Port);
+
+		// (b) Unicast. A single unreachable target must not block the rest.
+		bSentAny = true;
+		int32 BytesSent = 0;
+		if (!Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *Addr))
+		{
+			UE_LOG(LogHapbeat, Verbose, TEXT("Command unicast send to %s failed; continuing with the other devices."),
+				*Pair.Key);
+		}
+	}
+
+	// (d) Nothing went out (no live device, or every known address mismatched)
+	// -> BROADCAST. Never in addition to a unicast: the same PLAY would fire
+	// twice. See the header for why this is a fallback and not a skip.
+	if (!bSentAny)
+	{
+		SendPacket(Packet);
+	}
+}
+
+void UHapbeatSubsystem::RefreshStreamUnicastTargets(const FString& ResolvedTarget)
 {
 	StreamUnicastTargets.Reset();
+	bStreamTargetsSnapshotted = false;
 	if (!bStreamUnicast)
 	{
-		return; // feature off -> SendStreamPacket broadcasts
+		return; // feature off -> no snapshot -> SendStreamPacket broadcasts
 	}
 
 	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
@@ -682,12 +776,30 @@ void UHapbeatSubsystem::RefreshStreamUnicastTargets()
 	// whose first PONG lands mid-session joins the NEXT session.
 	const double Now = FPlatformTime::Seconds();
 	const double Timeout = AliveTimeoutSeconds();
+	int32 LiveCount = 0;
+	int32 SkippedByAddress = 0;
 	for (const TPair<FString, double>& Pair : DevicePongTimes)
 	{
 		if (Now - Pair.Value > Timeout)
 		{
 			continue;
 		}
+		++LiveCount;
+
+		// Send-side target filter (Unity 029efc1): don't fan every chunk out to
+		// devices this stream isn't addressed to (one person wearing several
+		// units, or several pairs sharing a LAN). Fail open on an unknown
+		// address — firmware re-applies its own filter on receipt, so the worst
+		// case is one extra unicast, never a silently lost stream.
+		if (const FString* KnownAddress = DeviceAddresses.Find(Pair.Key))
+		{
+			if (!UHapbeatTargetLibrary::AddressMatches(ResolvedTarget, *KnownAddress))
+			{
+				++SkippedByAddress;
+				continue;
+			}
+		}
+
 		TSharedPtr<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
 		bool bIsValid = false;
 		Addr->SetIp(*Pair.Key, bIsValid);
@@ -699,20 +811,38 @@ void UHapbeatSubsystem::RefreshStreamUnicastTargets()
 		StreamUnicastTargets.Add(Addr);
 	}
 
+	// A snapshot counts as "taken" only when at least one device was actually
+	// live. With nobody alive we leave it un-snapshotted so the broadcast
+	// fallback stays available (a device that PONGs later still gets audio);
+	// with live devices that ALL mismatched, the snapshot IS taken and stays
+	// empty => send nowhere. See the header for the three-state contract.
+	bStreamTargetsSnapshotted = LiveCount > 0;
+
 	if (StreamUnicastTargets.Num() > 0)
 	{
-		UE_LOG(LogHapbeat, Log, TEXT("Stream unicast: targeting %d known device(s) (broadcast fallback if none respond)."),
-			StreamUnicastTargets.Num());
+		UE_LOG(LogHapbeat, Log, TEXT("Stream unicast: targeting %d of %d live device(s)."),
+			StreamUnicastTargets.Num(), LiveCount);
+	}
+	else if (SkippedByAddress > 0)
+	{
+		UE_LOG(LogHapbeat, Log,
+			TEXT("Stream unicast: all %d live device(s) filtered out by target '%s'; this session sends nowhere."),
+			SkippedByAddress, *ResolvedTarget);
 	}
 }
 
 void UHapbeatSubsystem::SendStreamPacket(const TArray<uint8>& Packet)
 {
-	// No known devices (nobody has PONGed yet) or the feature is off -> the
-	// normal broadcast path, which also covers the lazy-connect / teardown guards.
-	if (StreamUnicastTargets.Num() == 0)
+	// Three-state (see the header): no snapshot -> broadcast; snapshot with no
+	// surviving target -> send NOWHERE (the filter said this stream isn't for
+	// anyone here); snapshot with targets -> unicast below.
+	if (!bStreamTargetsSnapshotted)
 	{
 		SendPacket(Packet);
+		return;
+	}
+	if (StreamUnicastTargets.Num() == 0)
+	{
 		return;
 	}
 	if (Socket == nullptr || bShuttingDown)

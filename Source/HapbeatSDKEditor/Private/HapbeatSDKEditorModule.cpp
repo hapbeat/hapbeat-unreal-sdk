@@ -1,8 +1,10 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatSDKEditorModule.h"
 
+#include "HapbeatClip.h"
 #include "HapbeatEditorSender.h"
 #include "HapbeatEventMap.h"
+#include "HapbeatClipCustomization.h"
 #include "HapbeatEventMapCustomization.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatTriggerComponentCustomization.h"
@@ -28,6 +30,9 @@ void FHapbeatSDKEditorModule::StartupModule()
 	// DetailLayoutHelpers.cpp, "Ensure that the base class and its parents are
 	// always queried" / "Find base classes of queried classes that were not
 	// queried"). No per-subclass registration needed.
+	PropertyModule.RegisterCustomClassLayout(UHapbeatClip::StaticClass()->GetFName(),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FHapbeatClipCustomization::MakeInstance));
+
 	PropertyModule.RegisterCustomClassLayout(UHapbeatTriggerComponent::StaticClass()->GetFName(),
 		FOnGetDetailCustomizationInstance::CreateStatic(&FHapbeatTriggerComponentCustomization::MakeInstance));
 
@@ -53,6 +58,7 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 	if (FModuleManager::Get().IsModuleLoaded("PropertyEditor"))
 	{
 		FPropertyEditorModule& PropertyModule = FModuleManager::GetModuleChecked<FPropertyEditorModule>("PropertyEditor");
+		PropertyModule.UnregisterCustomClassLayout(UHapbeatClip::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(UHapbeatEventMap::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(UHapbeatTriggerComponent::StaticClass()->GetFName());
 		PropertyModule.NotifyCustomizationModuleChanged();

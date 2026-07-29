@@ -20,6 +20,8 @@ public class HapbeatSDKEditor : ModuleRules
 			"Slate",         // SButton / SComboBox / SHorizontalBox
 			"SlateCore",     // STextBlock, FAppStyle (Runtime/SlateCore)
 			"InputCore",     // EKeys::* referenced by SComboBox/SListView templates instantiated in this module
+			"DesktopPlatform", // IDesktopPlatform::OpenFileDialog (UHapbeatClip WAV import)
+			"Projects",      // IPluginManager (default the WAV dialog to the bundled samples)
 			"HapbeatSDK",    // the runtime module this customizes
 		});
 	}

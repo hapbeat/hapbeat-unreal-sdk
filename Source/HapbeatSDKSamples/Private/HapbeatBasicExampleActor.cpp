@@ -40,6 +40,42 @@ void AHapbeatBasicExampleActor::BeginPlay()
 
 void AHapbeatBasicExampleActor::BuildEventMap()
 {
+	// An EventMap asset was assigned in the Details panel: use it verbatim and
+	// skip the code-built map entirely. This is the flow a real project uses —
+	// gains / targets / modes authored in the editor GUI — and the sample only
+	// falls back to building one in code so it can run with zero setup.
+	// Entries map to keys BY ORDER: [0] Space, [1] R, [2] F.
+	if (EventMapOverride != nullptr)
+	{
+		EventMap = EventMapOverride;
+		const int32 NumEntries = EventMap->Entries.Num();
+		if (NumEntries < 3)
+		{
+			UE_LOG(LogHapbeatBasicExample, Warning,
+				TEXT("EventMapOverride '%s' has %d entries; this sample wires 3 (Space / R / F) by order. "
+					 "The missing ones will not fire."),
+				*GetNameSafe(EventMap), NumEntries);
+		}
+
+		UHapbeatTriggerComponent* const Triggers[3] = { StreamOneShotTrigger, StreamLoopTrigger, CommandTrigger };
+		for (int32 i = 0; i < 3; ++i)
+		{
+			if (Triggers[i] == nullptr)
+			{
+				continue;
+			}
+			Triggers[i]->EventMap = EventMap;
+			Triggers[i]->EntryId = EventMap->Entries.IsValidIndex(i)
+				? EventMap->Entries[i].Id
+				: FGuid();
+		}
+
+		UE_LOG(LogHapbeatBasicExample, Log,
+			TEXT("Using EventMap asset '%s' (%d entries) instead of the code-built map."),
+			*GetNameSafe(EventMap), NumEntries);
+		return;
+	}
+
 	EventMap = NewObject<UHapbeatEventMap>(this);
 
 	// Shared by the one-shot and loop entries -- same WAV, matching Unity's

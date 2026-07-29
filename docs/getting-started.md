@@ -131,6 +131,14 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 | 何も鳴らないが `reachable` は 1 以上 | デバイス本体の音量。Output Log に `LogHapbeat` の警告が出ていないか |
 | 途切れ・ブツブツする | Project Settings の **Stream Unicast** が on か。Wi-Fi の電波状況 |
 
+> **このサンプルには EventMap アセットがありません。**
+> 「アクターを置くだけで動く」ことを優先し、イベント定義（ゲイン・対象・モード）を
+> **C++ で組み立てています**（`AHapbeatBasicExampleActor::BuildEventMap()`）。
+> そのため **Kit の `manifest.json` を編集しても、このサンプルの強さは変わりません**
+> （intensity の `0.5` はコードに直接書かれています）。
+> 実際の開発では次章の **EventMap アセット**を作り、GUI で編集するのが標準の流れです。
+> このサンプル自体を GUI 編集に切り替えることもできます（§4 の最後を参照）。
+
 ---
 
 ## 3. 自分のプロジェクトから鳴らす
@@ -203,9 +211,63 @@ SDK はこれを分離する仕組みを持っています。
    → Kit の `manifest.json` に書かれた `intensity` を各エントリに焼き込みます
 4. **Test Play** で、再生（PIE）せずにその場で鳴らして確認できます
 
+### GUI で編集できる項目
+
+エントリを開くと、以下がすべて Details パネル上で編集できます（各項目にツールチップ付き）:
+
+| 項目 | 内容 |
+|---|---|
+| `Mode` | `Command` / `StreamClip`（プルダウン） |
+| `Display Name` | 一覧やトリガのプルダウンに出る表示名 |
+| `Category` / `Event Name` | 合わせて `<Category>.<EventName>` がイベント ID |
+| **`Gain`** | **0.0〜2.0** |
+| **`Target`** | **`player_1` / `*/pos_neck` など。空 = 全デバイス** |
+| `Loop` | ループ再生（StreamClip 用） |
+| `Delay Offset Seconds` | このイベントだけ発火を前後させる（±0.2 秒） |
+| `Notes` | 制作メモ（送信されません） |
+| `Stream Clip` | StreamClip モードで流す `UHapbeatClip` |
+
+Details パネル上部には専用の操作列も出ます:
+
+- **[Refresh Intensities]** — Kit の manifest を走査して intensity を全エントリに反映
+- **エントリ選択 + [Test Play] / [Stop] / [Stop All] / [Ping]** — **PIE に入らずその場で試せます**
+
+配列の追加・削除・並べ替え・複製、複数選択しての一括編集は UE 標準の機能がそのまま使えます。
+
+> **なぜ専用ウィンドウではなく Details パネルなのか**
+> Unity SDK は専用のエディタウィンドウを持っていますが、UE ではこれらの操作を
+> Details パネルが標準で提供するため、あえて独自ウィンドウを作っていません。
+> 学習することが少なく、UE の他のアセットと同じ操作感で扱えます。
+
 > 実際にデバイスへ送られるゲインは
 > **`Gain` × `Kit の intensity` × トリガ側の倍率** です。
 > Studio で作り込んだ強さ（intensity）を土台に、UE 側で微調整する設計になっています。
+
+### BasicExample を GUI 編集に切り替える（任意）
+
+疎通確認に使ったサンプルを、そのまま GUI 編集の練習台にできます。
+
+1. **先に触覚クリップのアセットを作る**（StreamClip エントリで使います）
+   - Content Browser → 右クリック → **Miscellaneous → Data Asset** → **Hapbeat Clip**
+   - 開いて **[Import WAV...]** を押し、
+     `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Kit/basic-exam-kit/stream-clips/sine_100hz_1s.wav`
+     を選ぶ（`16000 Hz, 1 ch, 1.00 s` と表示されれば成功。保存を忘れずに）
+2. EventMap アセットを作り、エントリを **3 つ**追加する
+   （順番が固定です: `[0]` Space、`[1]` R、`[2]` F）
+3. 値はコード側と同じにすると挙動が揃います（`Stream Clip` には 1. で作ったアセットを指定）:
+
+   | # | Mode | Category | Event Name | Gain | Loop | Stream Clip |
+   |---|---|---|---|---|---|---|
+   | 0 | StreamClip | `basic-exam-kit` | `sine_100hz_1s` | `1.0` | off | `sine_100hz_1s` |
+   | 1 | StreamClip | `basic-exam-kit` | `sine_100hz_1s_loop` | `1.0` | **on** | `sine_100hz_1s` |
+   | 2 | Command | `basic-exam-kit` | `sine_200hz_1s` | `1.0` | off | — |
+
+4. **Refresh Intensities** を押す（各エントリの intensity が `0.5` になります）
+5. レベルに置いた **Hapbeat Basic Example Actor** を選択し、Details の
+   **Event Map Override** に作った EventMap アセットを指定する
+
+以降このサンプルはアセット側の値で鳴るので、**Gain や Target を変えて即座に体感差を確認**できます。
+未指定（空）のままなら従来どおりコード生成で動きます。
 
 ---
 
@@ -228,6 +290,11 @@ SDK はこれを分離する仕組みを持っています。
 
 `UHapbeatClip` は 16kHz / PCM16 の WAV をそのまま扱えるアセットです。
 再生中に**ゲインとパンをリアルタイムに変えられる**のが Command 再生との違いです。
+
+**クリップアセットの作り方**: Content Browser → 右クリック → **Miscellaneous → Data Asset**
+→ **Hapbeat Clip** で空のアセットを作り、開いて **[Import WAV...]** から `.wav` を読み込みます
+（PCM 16bit であること。Kit と同じ 16kHz を推奨）。
+`.wav` の通常インポート（`USoundWave`）とは別物なので、間違えないよう専用ボタンにしています。
 
 ```cpp
 UHapbeatStreamPlayback* Playback =

@@ -70,6 +70,23 @@ private:
 	/** HUD refresh cadence (~2 Hz per the design doc). */
 	static constexpr float HudRefreshIntervalSeconds = 0.5f;
 
+	/**
+	 * OPTIONAL: assign a UHapbeatEventMap asset here to author this sample's
+	 * gains / targets / modes in the editor GUI instead of in code.
+	 *
+	 * Left empty (the default) the sample builds an equivalent EventMap at
+	 * BeginPlay, so it runs with zero setup — that is the whole point of a
+	 * smoke test. But it also means the Details-panel authoring flow, which is
+	 * how you are meant to work in a real project, stays invisible here.
+	 *
+	 * To try the real flow: Content Browser -> right-click -> Miscellaneous ->
+	 * Data Asset -> Hapbeat Event Map, add 3 entries, assign it here. The
+	 * entries are matched to the keys BY ORDER: [0] = Space (stream one-shot),
+	 * [1] = R (stream loop), [2] = F (command). See docs/getting-started.md §4.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	TObjectPtr<UHapbeatEventMap> EventMapOverride;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;
 

@@ -78,7 +78,8 @@ public:
 		int32 InPort,
 		TArray<FString> InUnicastTargetIps,
 		bool bInHasUnicastSnapshot,
-		float InSendAheadSeconds);
+		float InSendAheadSeconds,
+		const FString& InBroadcastIp);
 	virtual ~FHapbeatStreamRunnable() override;
 
 	// FRunnable
@@ -105,6 +106,14 @@ private:
 	 */
 	bool bHasUnicastSnapshot = false;
 	float SendAheadSeconds = 0.05f;
+	/**
+	 * Where this session broadcasts when it has no unicast snapshot -- the
+	 * subnet a device answered on, or 255.255.255.255 before any has. Passed in
+	 * rather than hardcoded so a stream sent with bStreamUnicast=false (many
+	 * devices firing in lockstep) still reaches a multi-homed host's real
+	 * subnet. See HapbeatNetInterfaces.h.
+	 */
+	FString BroadcastIp;
 
 	// Built in Init() (on the worker thread itself), from the plain values
 	// above — never shared with / touched by the game thread.

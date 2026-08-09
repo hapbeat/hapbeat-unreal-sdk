@@ -4,6 +4,7 @@
 #include "HapbeatProtocol.h"
 #include "HapbeatConfig.h"
 #include "HapbeatClip.h"
+#include "HapbeatNetInterfaces.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamRunnable.h"
 #include "HapbeatTargetLibrary.h"
@@ -124,7 +125,7 @@ void UHapbeatSubsystem::Deinitialize()
 		if (!AppName.IsEmpty())
 		{
 			// Tell the device this app is leaving so the OLED clears.
-			SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), false, ConnectStatusGroupByte(), AppNameForWire(), FString()));
+			SendDiscoveryPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), false, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 		}
 		Socket->Close();
 		if (ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM))
@@ -176,6 +177,13 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 	BroadcastAddr->SetIp(TEXT("255.255.255.255"), bIsValid);
 	BroadcastAddr->SetPort(Port);
 
+	// Discovery destinations for this connection: one per local IPv4 subnet
+	// plus the limited broadcast above as a catch-all. On a multi-homed host
+	// 255.255.255.255 only leaves through the lowest-metric interface, which
+	// may have no Hapbeat behind it (DEC-054).
+	BroadcastRoutes = HapbeatEnumerateBroadcastRoutes(Port);
+	LockedRouteIndex = INDEX_NONE;
+
 	// Device knowledge is PER-CONNECTION: after a reconnect (Wi-Fi change, AP
 	// switch, hand-off) the previously-seen IPs may belong to entirely different
 	// devices, so unicasting to them would aim at the wrong hosts. Parity with
@@ -203,7 +211,7 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 
 	if (!AppName.IsEmpty())
 	{
-		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
+		SendDiscoveryPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 	}
 
 	// NOTE: deliberately do NOT raise OnConnected here. socket-open != device
@@ -248,7 +256,7 @@ void UHapbeatSubsystem::Ping()
 		}
 	}
 	PendingPings.Add(PingSeq, NowMicros());
-	SendPacket(FHapbeatProtocol::BuildPing(PingSeq, TimestampUs));
+	SendDiscoveryPacket(FHapbeatProtocol::BuildPing(PingSeq, TimestampUs));
 }
 
 UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float BaselineGain, float InitialGain,
@@ -329,7 +337,10 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 		Port,
 		MoveTemp(UnicastIps),
 		bStreamTargetsSnapshotted,
-		StreamSendAheadSeconds);
+		StreamSendAheadSeconds,
+		// The subnet a device answered on, so a broadcast-mode stream
+		// (bStreamUnicast=false) still reaches it on a multi-homed host.
+		CurrentBroadcastAddr().IsValid() ? CurrentBroadcastAddr()->ToString(false) : FString());
 
 	// AboveNormal: a short, latency-sensitive pacing loop — not TimeCritical
 	// (which risks starving the game/render/audio threads it shares a core
@@ -462,7 +473,7 @@ void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPe
 	// next periodic push. Mirrors HapbeatManager.SetAddressOverride (Unity SDK).
 	if (Socket != nullptr && !bShuttingDown && !AppName.IsEmpty())
 	{
-		SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
+		SendDiscoveryPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 	}
 }
 
@@ -492,7 +503,7 @@ bool UHapbeatSubsystem::TickKeepAlive(float /*DeltaSeconds*/)
 	Ping();
 	// Periodic presence beacon so the device shows this app on its OLED. Per the
 	// v1 design the device_name field is left empty (the OLED shows app_name).
-	SendPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
+	SendDiscoveryPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 
 	// A device may have aged out since the last PONG even if none arrived this
 	// tick, so re-evaluate liveness here too (drives OnDisconnected on timeout).
@@ -565,6 +576,12 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 				}
 
 				Self->DevicePongTimes.Add(SenderIp, FPlatformTime::Seconds());
+
+				// A reply proves which subnet the device is really on, so pin
+				// broadcasts there. Until this happens a broadcast still goes out
+				// limited, which on a multi-homed host may be leaving through an
+				// interface with no Hapbeat behind it (see HapbeatNetInterfaces.h).
+				Self->LockRouteFor(SenderIp);
 				if (!Address.IsEmpty())
 				{
 					// Only recorded when the PONG actually carried the address
@@ -870,6 +887,80 @@ void UHapbeatSubsystem::SendStreamPacket(const TArray<uint8>& Packet)
 	}
 }
 
+const TSharedPtr<FInternetAddr>& UHapbeatSubsystem::CurrentBroadcastAddr() const
+{
+	// Once a device has answered we know which subnet it is on, so send there
+	// instead of relying on the limited broadcast reaching it. Before that this
+	// is the unchanged 255.255.255.255.
+	if (BroadcastRoutes.IsValidIndex(LockedRouteIndex))
+	{
+		return BroadcastRoutes[LockedRouteIndex].EndPoint;
+	}
+	return BroadcastAddr;
+}
+
+void UHapbeatSubsystem::LockRouteFor(const FString& DeviceIp)
+{
+	// First reply wins, and the lock is dropped with the connection. With
+	// devices on two subnets at once this settles on whichever answered first;
+	// broadcasts do not cross subnets anyway, so the alternative is not
+	// reaching both, it is reaching neither reliably.
+	if (LockedRouteIndex != INDEX_NONE || BroadcastRoutes.Num() == 0)
+	{
+		return;
+	}
+	uint32 Ip = 0;
+	if (!HapbeatParseIPv4(DeviceIp, Ip))
+	{
+		return;
+	}
+	for (int32 Index = 0; Index < BroadcastRoutes.Num(); ++Index)
+	{
+		if (!BroadcastRoutes[Index].Contains(Ip))
+		{
+			continue;
+		}
+		LockedRouteIndex = Index;
+		UE_LOG(LogHapbeat, Log, TEXT("Broadcasting to %s (a device answered from %s)."),
+			*BroadcastRoutes[Index].EndPoint->ToString(false), *DeviceIp);
+		return;
+	}
+}
+
+void UHapbeatSubsystem::SendDiscoveryPacket(const TArray<uint8>& Packet)
+{
+	if (Socket == nullptr)
+	{
+		if (bShuttingDown)
+		{
+			return;
+		}
+		Connect(Port, AppName);
+	}
+	// Already pinned to a subnet, or nothing enumerated to fan out over: one
+	// destination, same as any other packet.
+	if (Socket == nullptr || BroadcastRoutes.Num() == 0 || LockedRouteIndex != INDEX_NONE)
+	{
+		SendPacket(Packet);
+		return;
+	}
+
+	for (const FHapbeatBroadcastRoute& Route : BroadcastRoutes)
+	{
+		if (!Route.EndPoint.IsValid())
+		{
+			continue;
+		}
+		int32 BytesSent = 0;
+		// Failures are routine and deliberately quiet here: most hosts carry an
+		// adapter that can never take a broadcast (Bluetooth PAN, Wi-Fi Direct,
+		// an idle virtual switch). Trying anyway and letting the others through
+		// is exactly what this fan-out is for. Only the single-destination path
+		// below reports outages, because that one carries playback.
+		Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *Route.EndPoint);
+	}
+}
+
 void UHapbeatSubsystem::SendPacket(const TArray<uint8>& Packet)
 {
 	if (Socket == nullptr)
@@ -881,12 +972,13 @@ void UHapbeatSubsystem::SendPacket(const TArray<uint8>& Packet)
 		// Lazily connect with defaults if the caller forgot to.
 		Connect(Port, AppName);
 	}
-	if (Socket == nullptr || !BroadcastAddr.IsValid())
+	const TSharedPtr<FInternetAddr>& Destination = CurrentBroadcastAddr();
+	if (Socket == nullptr || !Destination.IsValid())
 	{
 		return;
 	}
 	int32 BytesSent = 0;
-	if (Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *BroadcastAddr))
+	if (Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *Destination))
 	{
 		if (bLoggedSendError)
 		{
@@ -909,6 +1001,6 @@ void UHapbeatSubsystem::SendPacket(const TArray<uint8>& Packet)
 		bLoggedSendError = true;
 		UE_LOG(LogHapbeat, Warning,
 			TEXT("Send to %s failed. Keeping the socket open; further send errors are silenced until sending recovers."),
-			*BroadcastAddr->ToString(true));
+			*Destination->ToString(true));
 	}
 }

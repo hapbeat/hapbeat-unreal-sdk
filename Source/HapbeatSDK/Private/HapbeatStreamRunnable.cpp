@@ -62,7 +62,8 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	int32 InPort,
 	TArray<FString> InUnicastTargetIps,
 	bool bInHasUnicastSnapshot,
-	float InSendAheadSeconds)
+	float InSendAheadSeconds,
+	const FString& InBroadcastIp)
 	// Initializer order matches declaration order in the header (Socket ..
 	// Mirror) to avoid -Wreorder; see the header for the full member list.
 	: Socket(InSocket)
@@ -70,6 +71,7 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	, UnicastTargetIps(MoveTemp(InUnicastTargetIps))
 	, bHasUnicastSnapshot(bInHasUnicastSnapshot)
 	, SendAheadSeconds(InSendAheadSeconds)
+	, BroadcastIp(InBroadcastIp.IsEmpty() ? FString(TEXT("255.255.255.255")) : InBroadcastIp)
 	, NextSeqFn(MoveTemp(InNextSeq))
 	, PendingPcm16(MoveTemp(InPcm16))
 	, PendingSampleRate(InSampleRate)
@@ -106,7 +108,7 @@ bool FHapbeatStreamRunnable::Init()
 
 	LocalBroadcastAddr = SocketSubsystem->CreateInternetAddr();
 	bool bBroadcastValid = false;
-	LocalBroadcastAddr->SetIp(TEXT("255.255.255.255"), bBroadcastValid);
+	LocalBroadcastAddr->SetIp(*BroadcastIp, bBroadcastValid);
 	LocalBroadcastAddr->SetPort(Port);
 	if (!bBroadcastValid)
 	{

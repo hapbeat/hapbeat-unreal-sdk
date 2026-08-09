@@ -17,5 +17,15 @@ public class HapbeatSDK : ModuleRules
 			"DeveloperSettings", // UHapbeatConfig : UDeveloperSettings (Project Settings page)
 			"PhysicsCore",       // FBodyInstance read in the collision trigger's setup hint
 		});
+
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			// GetAdaptersAddresses (HapbeatNetInterfaces.cpp) is the only
+			// documented way to read a per-address prefix length on Windows,
+			// and it is what lets discovery use a subnet-directed broadcast
+			// instead of 255.255.255.255 -- see DEC-054. Linux/macOS use
+			// getifaddrs, which is in libc and needs no extra library.
+			PublicSystemLibraries.Add("iphlpapi.lib");
+		}
 	}
 }

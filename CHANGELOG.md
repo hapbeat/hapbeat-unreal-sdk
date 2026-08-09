@@ -29,24 +29,36 @@ Unity SDK v0.4.0 で確定した接続まわりの修正を移植した。
   ストリームは 1 秒あたり約 100 パケット送るため、抑制しないと現場調査に使えるログが
   残らない。
 
-### 既知の制限（Known limitations）
-
-- **マルチホーム PC での自動探索は未対応。** `255.255.255.255` は
-  インターフェイスメトリックが最小の 1 本からしか送出されないため、Hyper-V / WSL2 /
-  Docker が作る仮想アダプタ（LAN ケーブルが無くても常時 Connected）が Wi-Fi より
-  優先されると、探索パケットが Hapbeat のいるネットワークに届かない。
-  Python / JS SDK は各 NIC のネットマスクからサブネット指定ブロードキャスト
-  （例 `192.168.0.255`）を算出して自動回避するが、**UE の公開 API はネットマスクを
-  返さない**（`ISocketSubsystem::GetLocalAdapterAddresses` はアドレスのみ）。
-  `/24` と決め打ちするとそれ以外のサブネットで誤った宛先に送ることになるため、推測はしない。
-  - 対応するには `#if PLATFORM_WINDOWS` で `GetAdaptersAddresses`（要 `iphlpapi.lib`
-    リンク）、POSIX で `getifaddrs` を呼ぶプラットフォーム別実装が必要。UE のビルド環境で
-    検証できる状態で別途行う。
-  - 1 台でも応答すれば以後の再生はユニキャストになるため、影響は探索時のみ。
+- **マルチホーム PC でデバイスを 1 台も発見できない問題**を修正した。
+  `255.255.255.255`（limited broadcast）は**インターフェイスメトリックが最小の 1 本から
+  しか送出されない**。Hyper-V / WSL2 / Docker を入れると作られる仮想アダプタは
+  **LAN ケーブルを繋いでいなくても常時 Connected** で、Windows の既定で Wi-Fi より
+  優先されることがある。この場合パケットは Hapbeat のいるネットワークに一生届かない。
+  - 探索（PING / CONNECT_STATUS）を**ローカルの各サブネット宛て**へ送るようにした。
+    宛先は各 NIC の実ネットマスクから `(ip & mask) | ~mask` で算出する（/16 は
+    `x.y.255.255`、/25 は `x.y.z.127` になるため `.255` 決め打ちにはできない）。
+    同一サブネットに NIC が 2 枚ある場合は宛先で重複排除する。
+  - **UE の公開 API はネットマスクを返さない**（`ISocketSubsystem::GetLocalAdapterAddresses`
+    はアドレスのみ）ため、`HapbeatNetInterfaces.cpp` でプラットフォーム API を直接呼ぶ
+    （Windows は `GetAdaptersAddresses`、Linux/macOS は `getifaddrs`）。**プラグイン内で
+    唯一のプラットフォーム依存コードをこの 1 ファイルに隔離**してある。取得できない
+    プラットフォームは空を返し、従来どおり limited broadcast のみで動く。
+  - **PONG が返ったサブネットに確定**し、以後のブロードキャストをそこへ向ける。
+    `bStreamUnicast=false`（複数台を同時発火させる構成）のストリームにも適用される。
+  - **PLAY / STOP / STOP_ALL / STREAM_\* は従来どおり単一宛先**。ファームウェア v0.3.0
+    未満は seq 重複排除を持たないため、複数経路へ送ると触覚が 2 回鳴る。Test Play の
+    ブロードキャストフォールバックも単一宛先のまま（`SendSingleBroadcast`）。
+  - Win64 のみ `iphlpapi.lib` をリンクする（`HapbeatSDK.Build.cs`）。
 
 ### 検証
 
-- **未検証**: UE でのコンパイル・実機とも（手元に UE 環境が無い）。
+- **未検証**: UE でのコンパイル・実機とも。**次の UE セッションでコンパイルを通し、
+  エラーがあれば修正すること。** 特に確認したい箇所:
+  - `HapbeatSDK.Build.cs` の `PublicSystemLibraries`（古い UE では
+    `PublicAdditionalLibraries`）
+  - `HapbeatNetInterfaces.cpp` の Windows ヘッダ取り込み順
+    （`AllowWindowsPlatformTypes.h` → `winsock2.h` → `iphlpapi.h`）
+  - `Socket->HasPendingData` / `RecvFrom`（エディタ送信側の PONG 回収）
 
 ---
 

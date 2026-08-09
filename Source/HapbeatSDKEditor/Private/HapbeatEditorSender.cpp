@@ -2,6 +2,7 @@
 #include "HapbeatEditorSender.h"
 
 #include "HapbeatConfig.h"
+#include "HapbeatNetInterfaces.h"
 #include "HapbeatProtocol.h"
 #include "Common/UdpSocketBuilder.h"
 #include "Interfaces/IPv4/IPv4Address.h"
@@ -13,6 +14,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogHapbeatEditorSender, Log, All);
 FSocket* FHapbeatEditorSender::Socket = nullptr;
 TSharedPtr<FInternetAddr> FHapbeatEditorSender::BroadcastAddr;
 TMap<FString, double> FHapbeatEditorSender::DevicePongTimes;
+TArray<FHapbeatBroadcastRoute> FHapbeatEditorSender::BroadcastRoutes;
 uint16 FHapbeatEditorSender::Seq = 0;
 
 namespace
@@ -68,12 +70,13 @@ bool FHapbeatEditorSender::EnsureSocket()
 	BroadcastAddr->SetPort(Port);
 
 	// Device knowledge belongs to a socket: a fresh one may well be on a
-	// different network than the last.
+	// different network than the last -- and so do the routes.
 	DevicePongTimes.Empty();
+	BroadcastRoutes = HapbeatEnumerateBroadcastRoutes(Port);
 
 	// Probe immediately so the first Test Play click already has somewhere to
 	// aim, instead of broadcasting and only discovering afterwards.
-	SendBroadcast(FHapbeatProtocol::BuildPing(NextSeq(), UnixMicros()));
+	SendDiscoveryBroadcast(FHapbeatProtocol::BuildPing(NextSeq(), UnixMicros()));
 
 	return true;
 }
@@ -113,7 +116,7 @@ void FHapbeatEditorSender::DrainReplies()
 	}
 }
 
-void FHapbeatEditorSender::SendBroadcast(const TArray<uint8>& Packet)
+void FHapbeatEditorSender::SendSingleBroadcast(const TArray<uint8>& Packet)
 {
 	if (!EnsureSocket() || !BroadcastAddr.IsValid())
 	{
@@ -121,6 +124,36 @@ void FHapbeatEditorSender::SendBroadcast(const TArray<uint8>& Packet)
 	}
 	int32 BytesSent = 0;
 	Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *BroadcastAddr);
+}
+
+void FHapbeatEditorSender::SendDiscoveryBroadcast(const TArray<uint8>& Packet)
+{
+	if (!EnsureSocket() || !BroadcastAddr.IsValid())
+	{
+		return;
+	}
+
+	// Fan out across every local subnet rather than trusting 255.255.255.255,
+	// which on a multi-homed host leaves through the lowest-metric interface and
+	// may never reach the device (see HapbeatNetInterfaces.h). Without this,
+	// Test Play on such a machine would discover nothing and fall back to
+	// broadcasting every command forever.
+	if (BroadcastRoutes.Num() == 0)
+	{
+		SendSingleBroadcast(Packet);
+		return;
+	}
+	int32 BytesSent = 0;
+	for (const FHapbeatBroadcastRoute& Route : BroadcastRoutes)
+	{
+		if (Route.EndPoint.IsValid())
+		{
+			// Quiet on failure: a host normally carries an adapter that cannot
+			// take a broadcast (Bluetooth PAN, Wi-Fi Direct, an idle virtual
+			// switch), and letting the others through is the point.
+			Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *Route.EndPoint);
+		}
+	}
 }
 
 void FHapbeatEditorSender::SendRouted(const TArray<uint8>& Packet)
@@ -170,11 +203,15 @@ void FHapbeatEditorSender::SendRouted(const TArray<uint8>& Packet)
 		// group-addressed frames until the next DTIM beacon (100-300 ms)
 		// whenever any client on it is power-saving -- which is exactly why
 		// this path exists at all.
-		SendBroadcast(Packet);
+		//
+		// Single destination, NOT the discovery fan-out: this carries PLAY, and
+		// firmware without (source endpoint, seq) de-duplication would fire the
+		// haptic once per route.
+		SendSingleBroadcast(Packet);
 	}
 
 	// Keep the table warm for the next click.
-	SendBroadcast(FHapbeatProtocol::BuildPing(NextSeq(), UnixMicros()));
+	SendDiscoveryBroadcast(FHapbeatProtocol::BuildPing(NextSeq(), UnixMicros()));
 }
 
 uint16 FHapbeatEditorSender::NextSeq()
@@ -218,7 +255,7 @@ void FHapbeatEditorSender::SendPing()
 {
 	// Discovery, so it broadcasts: it has to reach devices we have not heard
 	// from. Replies land on this socket and are picked up by the next send.
-	SendBroadcast(FHapbeatProtocol::BuildPing(NextSeq(), UnixMicros()));
+	SendDiscoveryBroadcast(FHapbeatProtocol::BuildPing(NextSeq(), UnixMicros()));
 }
 
 void FHapbeatEditorSender::Shutdown()
@@ -234,4 +271,5 @@ void FHapbeatEditorSender::Shutdown()
 	BroadcastAddr.Reset();
 	// Learned on the socket we just closed; the next one may be on another network.
 	DevicePongTimes.Empty();
+	BroadcastRoutes.Empty();
 }

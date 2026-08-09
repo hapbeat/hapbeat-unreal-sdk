@@ -5,6 +5,7 @@
 #include "Containers/Ticker.h"
 #include "Common/UdpSocketReceiver.h"         // FUdpSocketReceiver + FArrayReaderPtr typedef
 #include "HAL/CriticalSection.h"              // FCriticalSection (SeqLock — shared with the stream thread)
+#include "HapbeatNetInterfaces.h"             // FHapbeatBroadcastRoute (held by value in a TArray below)
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "HapbeatSubsystem.generated.h"
@@ -324,9 +325,36 @@ private:
 	/** Seconds within which a PONG counts a device as alive. */
 	double AliveTimeoutSeconds() const { return FMath::Max(5.0, static_cast<double>(PingInterval) * 3.0); }
 
+	/**
+	 * Send on every candidate broadcast destination.
+	 *
+	 * Reserved for PING and CONNECT_STATUS: both are idempotent, so a device
+	 * reachable on two of them just receives the message twice with no visible
+	 * effect -- whereas duplicating PLAY would fire the haptic twice on firmware
+	 * that predates sequence de-duplication. This fan-out is what reaches a
+	 * device the limited broadcast never gets to on a multi-homed host, and the
+	 * PONG it provokes is what pins playback to the right subnet.
+	 */
+	void SendDiscoveryPacket(const TArray<uint8>& Packet);
+
+	/** Pin broadcasts to the subnet a device actually replied from. First reply wins. */
+	void LockRouteFor(const FString& DeviceIp);
+
+	/** The single address a broadcast currently goes to. */
+	const TSharedPtr<FInternetAddr>& CurrentBroadcastAddr() const;
+
 	FSocket* Socket = nullptr;
 	FUdpSocketReceiver* Receiver = nullptr;
 	TSharedPtr<FInternetAddr> BroadcastAddr;
+	/**
+	 * Candidate broadcast destinations, rebuilt on every Connect(): a host's
+	 * interfaces change when a laptop is docked, a VPN comes up or Wi-Fi moves
+	 * to another network. See HapbeatNetInterfaces.h for why this is not just
+	 * 255.255.255.255.
+	 */
+	TArray<FHapbeatBroadcastRoute> BroadcastRoutes;
+	/** Index into BroadcastRoutes once a device has answered; INDEX_NONE until then. */
+	int32 LockedRouteIndex = INDEX_NONE;
 	/**
 	 * Whether the current send outage has already been reported. A link that
 	 * fails keeps failing, and a clip stream sends roughly 100 packets a second,

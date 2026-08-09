@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HapbeatNetInterfaces.h"   // FHapbeatBroadcastRoute (held by value in a TArray below)
 
 class FSocket;
 class FInternetAddr;
@@ -60,8 +61,18 @@ private:
 	 */
 	static void SendRouted(const TArray<uint8>& Packet);
 
-	/** Send to 255.255.255.255:<Port>. Discovery only -- see SendRouted. */
-	static void SendBroadcast(const TArray<uint8>& Packet);
+	/**
+	 * PING every candidate broadcast destination.
+	 *
+	 * DISCOVERY ONLY. PING is idempotent, so a device reachable on two routes
+	 * simply answers twice. A playback command must never come through here --
+	 * firmware older than v0.3.0 has no (source endpoint, seq) de-duplication and
+	 * would fire the haptic once per route. Use SendSingleBroadcast for those.
+	 */
+	static void SendDiscoveryBroadcast(const TArray<uint8>& Packet);
+
+	/** Send to exactly one destination. The playback fallback -- see SendRouted. */
+	static void SendSingleBroadcast(const TArray<uint8>& Packet);
 
 	/**
 	 * Collect any PONGs waiting on the socket.
@@ -75,6 +86,13 @@ private:
 
 	/** Devices that replied, and when (FPlatformTime::Seconds). */
 	static TMap<FString, double> DevicePongTimes;
+
+	/**
+	 * Candidate broadcast destinations, one per local IPv4 subnet plus the
+	 * limited-broadcast catch-all. Rebuilt whenever the socket is (re)opened.
+	 * See HapbeatNetInterfaces.h for why 255.255.255.255 alone is not enough.
+	 */
+	static TArray<FHapbeatBroadcastRoute> BroadcastRoutes;
 
 	static uint16 NextSeq();
 	/** Unix-epoch microseconds for the PING wire field. Mirrors UHapbeatSubsystem::UnixMicros(). */

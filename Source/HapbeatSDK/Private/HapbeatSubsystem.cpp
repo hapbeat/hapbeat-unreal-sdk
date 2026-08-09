@@ -182,6 +182,8 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 	// Unity HapbeatClient.OpenBroadcast.
 	DevicePongTimes.Empty();
 	DeviceAddresses.Empty();
+	// Outage state belongs to the connection we just replaced.
+	bLoggedSendError = false;
 
 	// Start receiving PONG/ERROR on a worker thread. 100 ms poll matches the
 	// Unity client's Poll() cadence; results are marshalled to the game thread.
@@ -884,5 +886,29 @@ void UHapbeatSubsystem::SendPacket(const TArray<uint8>& Packet)
 		return;
 	}
 	int32 BytesSent = 0;
-	Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *BroadcastAddr);
+	if (Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *BroadcastAddr))
+	{
+		if (bLoggedSendError)
+		{
+			// Without this line an unattended installation's log shows when
+			// haptics broke but never whether they came back.
+			bLoggedSendError = false;
+			UE_LOG(LogHapbeat, Log, TEXT("Sending recovered."));
+		}
+		return;
+	}
+
+	// A failed UDP send says nothing about whether the socket is still usable:
+	// the datagram is lost, the socket is not. Nothing is torn down here --
+	// doing so is what turns one Wi-Fi re-association into a session that never
+	// recovers. Reported once per outage because a clip stream pushes roughly
+	// 100 packets a second through here, and an unguarded warning would bury
+	// the very log an operator needs to read.
+	if (!bLoggedSendError)
+	{
+		bLoggedSendError = true;
+		UE_LOG(LogHapbeat, Warning,
+			TEXT("Send to %s failed. Keeping the socket open; further send errors are silenced until sending recovers."),
+			*BroadcastAddr->ToString(true));
+	}
 }

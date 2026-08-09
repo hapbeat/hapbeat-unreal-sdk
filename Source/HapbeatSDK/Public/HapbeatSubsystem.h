@@ -327,6 +327,13 @@ private:
 	FSocket* Socket = nullptr;
 	FUdpSocketReceiver* Receiver = nullptr;
 	TSharedPtr<FInternetAddr> BroadcastAddr;
+	/**
+	 * Whether the current send outage has already been reported. A link that
+	 * fails keeps failing, and a clip stream sends roughly 100 packets a second,
+	 * so an unguarded warning would bury the log an operator needs. Cleared by
+	 * the next successful send, so a later, unrelated outage is still reported.
+	 */
+	bool bLoggedSendError = false;
 	int32 Port = 7700;
 	/**
 	 * Group byte for CONNECT_STATUS (device OLED display only, never routing):

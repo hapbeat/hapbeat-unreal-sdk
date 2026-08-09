@@ -42,7 +42,7 @@ public:
 	/** Send a STOP_ALL. Target "" broadcasts to every device. */
 	static void SendStopAll(const FString& Target = TEXT(""));
 
-	/** Send a PING (connectivity sanity-check from the editor; replies are not read back -- fire-and-forget). */
+	/** Send a PING. Replies ARE read back (see DrainReplies) so subsequent sends can unicast. */
 	static void SendPing();
 
 	/** Close the lazy socket, if open. Safe to call repeatedly. Called from module ShutdownModule and FEditorDelegates::EndPIE. */
@@ -50,7 +50,32 @@ public:
 
 private:
 	static bool EnsureSocket();
-	static void SendPacket(const TArray<uint8>& Packet);
+
+	/**
+	 * Send one PLAY/STOP/STOP_ALL, unicast to devices that answered recently.
+	 *
+	 * Broadcast remains the fallback until a device replies. NEVER both: firmware
+	 * older than the (source endpoint, seq) de-duplication would fire the same
+	 * PLAY twice.
+	 */
+	static void SendRouted(const TArray<uint8>& Packet);
+
+	/** Send to 255.255.255.255:<Port>. Discovery only -- see SendRouted. */
+	static void SendBroadcast(const TArray<uint8>& Packet);
+
+	/**
+	 * Collect any PONGs waiting on the socket.
+	 *
+	 * This sender has no tick, so replies are drained opportunistically just
+	 * before each send. That is enough: every send is preceded by a PING, so by
+	 * the time a designer clicks Test Play a second time the reply from the
+	 * first is already queued.
+	 */
+	static void DrainReplies();
+
+	/** Devices that replied, and when (FPlatformTime::Seconds). */
+	static TMap<FString, double> DevicePongTimes;
+
 	static uint16 NextSeq();
 	/** Unix-epoch microseconds for the PING wire field. Mirrors UHapbeatSubsystem::UnixMicros(). */
 	static int64 UnixMicros();

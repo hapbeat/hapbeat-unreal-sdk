@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatSDKEditorModule.h"
 
+#include "HapbeatAssetFactories.h"
 #include "HapbeatClip.h"
 #include "HapbeatEditorSender.h"
 #include "HapbeatEventMap.h"
@@ -9,12 +10,25 @@
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatTriggerComponentCustomization.h"
 
+#include "AssetToolsModule.h"
 #include "Editor.h"
+#include "IAssetTools.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 
+#define LOCTEXT_NAMESPACE "HapbeatSDKEditor"
+
 void FHapbeatSDKEditorModule::StartupModule()
 {
+	// Give UHapbeatEventMap / UHapbeatClip their own Content Browser entries.
+	// IAssetTools allocates the category bit at runtime, so the factories read
+	// it back through HapbeatEditor::GetAssetCategory() when the menu is built
+	// (they are constructed by the engine, not by us). Registering here is in
+	// time because GetMenuCategories() is only queried on menu construction.
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	HapbeatEditor::SetAssetCategory(AssetTools.RegisterAdvancedAssetCategory(
+		FName(TEXT("Hapbeat")), LOCTEXT("HapbeatAssetCategory", "Hapbeat")));
+
 	FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 
 	PropertyModule.RegisterCustomClassLayout(UHapbeatEventMap::StaticClass()->GetFName(),
@@ -64,5 +78,7 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 		PropertyModule.NotifyCustomizationModuleChanged();
 	}
 }
+
+#undef LOCTEXT_NAMESPACE
 
 IMPLEMENT_MODULE(FHapbeatSDKEditorModule, HapbeatSDKEditor);

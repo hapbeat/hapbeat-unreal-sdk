@@ -15,7 +15,8 @@ public class HapbeatSDKEditor : ModuleRules
 			"Sockets",       // FSocket (editor Test Play sender)
 			"Networking",    // FUdpSocketBuilder / FIPv4Address
 			"Json",          // FJsonSerializer / FJsonObject (manifest.json parsing)
-			"UnrealEd",      // FEditorDelegates::EndPIE, FScopedTransaction
+			"UnrealEd",      // FEditorDelegates::EndPIE, FScopedTransaction, UFactory
+			"AssetTools",    // IAssetTools::RegisterAdvancedAssetCategory (Content Browser "Hapbeat" category)
 			"PropertyEditor",// IDetailCustomization, FPropertyEditorModule
 			"Slate",         // SButton / SComboBox / SHorizontalBox
 			"SlateCore",     // STextBlock, FAppStyle (Runtime/SlateCore)

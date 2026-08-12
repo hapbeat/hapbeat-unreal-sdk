@@ -219,7 +219,31 @@ void AMyHapticActor::BeginPlay()
 }
 ```
 
-（`BeginPlay()` は Actor のヘッダで `virtual void BeginPlay() override;` の宣言も必要です）
+ヘッダ側はこうなります:
+
+```cpp
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Actor.h"
+#include "MyHapticActor.generated.h"
+
+UCLASS()
+class あなたのプロジェクト名_API AMyHapticActor : public AActor
+{
+    GENERATED_BODY()
+
+protected:
+    virtual void BeginPlay() override;
+};
+```
+
+> `あなたのプロジェクト名_API` は、UE が生成したクラスに元から入っている
+> マクロ（例: プロジェクト名が `MyGame` なら `MYGAME_API`）をそのまま使ってください。
+
+> **リビルド時に `Unable to build while Live Coding is active` と出たら**、
+> エディタがまだ起動しています。完全に終了してからビルドし直してください。
+> `Build.cs` の変更・クラスの新規追加は Live Coding では反映できません。
 
 主な API:
 

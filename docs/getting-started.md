@@ -192,7 +192,26 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 1. エディタで **ツール → 新規 C++ クラス → Actor** を選び、名前を付けて作成
    （例: `MyHapticActor`）
 2. **自分のプロジェクトの `*.Build.cs`** を開き、`PublicDependencyModuleNames` に
-   `"HapbeatSDK"` を足す:
+   `"HapbeatSDK"` を足す
+
+   **`Build.cs` は Unreal エディタでは開けません。** ディスク上のテキストファイル
+   （C# のビルド設定）なので、エディタの外で編集します。
+
+   場所（`<>` は自分のプロジェクト名に読み替え）:
+
+   ```
+   <プロジェクトフォルダ>\Source\<プロジェクト名>\<プロジェクト名>.Build.cs
+   ```
+
+   開き方は 3 通り、どれでも構いません:
+
+   | 方法 | 手順 |
+   |---|---|
+   | **エディタから** | **ツール → Visual Studio を開く**（`Open Visual Studio`）→ VS の Solution Explorer で `Games → <プロジェクト名> → Source` を展開 |
+   | **VS から直接** | `.sln` を開き、同じく Solution Explorer から辿る |
+   | **エクスプローラから** | 上のパスのファイルを右クリック → メモ帳や VS Code で開く（ただのテキストです） |
+
+   編集後の中身（既存の行に `"HapbeatSDK"` を足すだけ）:
 
    ```csharp
    PublicDependencyModuleNames.AddRange(new string[] {

@@ -202,17 +202,28 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 		Receiver->Start();
 	}
 
-	// Start the keep-alive ticker (PING + CONNECT_STATUS, then liveness diff).
-	if (!KeepAliveHandle.IsValid() && PingInterval > 0.0f)
+	// Start the keep-alive ticker. It runs at the fast DISCOVERY rate and decides
+	// per tick whether to actually send (see KeepAliveIntervalSeconds), so it
+	// costs nothing once a device is known but finds one quickly on a cold start.
+	if (!KeepAliveHandle.IsValid())
 	{
 		KeepAliveHandle = FTSTicker::GetCoreTicker().AddTicker(
-			FTickerDelegate::CreateUObject(this, &UHapbeatSubsystem::TickKeepAlive), PingInterval);
+			FTickerDelegate::CreateUObject(this, &UHapbeatSubsystem::TickKeepAlive), DiscoveryTickSeconds);
 	}
 
 	if (!AppName.IsEmpty())
 	{
 		SendDiscoveryPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
 	}
+
+	// PING IMMEDIATELY. Devices only ever answer a PING (a CONNECT_STATUS draws no
+	// PONG), so without this the first reply could not arrive until the ticker
+	// first fired -- a full PingInterval (5 s by default) of GetAliveDeviceCount()
+	// == 0. During that window every send falls back to broadcast, which Wi-Fi APs
+	// batch at the DTIM interval: the user-visible symptom is several seconds of
+	// stuttering haptics right after startup, then it suddenly smooths out.
+	Ping();
+	LastKeepAliveSendTime = FPlatformTime::Seconds();
 
 	// NOTE: deliberately do NOT raise OnConnected here. socket-open != device
 	// presence. OnConnected fires only once a device PONGs (liveness 0->positive),
@@ -500,13 +511,22 @@ bool UHapbeatSubsystem::TickKeepAlive(float /*DeltaSeconds*/)
 		return false;
 	}
 
-	Ping();
-	// Periodic presence beacon so the device shows this app on its OLED. Per the
-	// v1 design the device_name field is left empty (the OLED shows app_name).
-	SendDiscoveryPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
+	// The ticker runs at DiscoveryTickSeconds; only send when the adaptive
+	// interval has elapsed (fast while nothing has answered, PingInterval once a
+	// device is known). Evaluated BEFORE the send so a freshly-discovered device
+	// immediately drops us back to the slow cadence.
+	const double Now = FPlatformTime::Seconds();
+	if (Now - LastKeepAliveSendTime >= KeepAliveIntervalSeconds())
+	{
+		LastKeepAliveSendTime = Now;
+		Ping();
+		// Periodic presence beacon so the device shows this app on its OLED. Per the
+		// v1 design the device_name field is left empty (the OLED shows app_name).
+		SendDiscoveryPacket(FHapbeatProtocol::BuildConnectStatus(NextSeq(), true, ConnectStatusGroupByte(), AppNameForWire(), FString()));
+	}
 
-	// A device may have aged out since the last PONG even if none arrived this
-	// tick, so re-evaluate liveness here too (drives OnDisconnected on timeout).
+	// Every tick (not just on send): a device may have aged out since its last
+	// PONG, and at DiscoveryTickSeconds this also makes OnDisconnected prompt.
 	EvaluateLivenessTransition();
 
 	return true; // keep ticking

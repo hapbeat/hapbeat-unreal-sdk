@@ -322,6 +322,24 @@ private:
 	/** Unix-epoch microseconds (the PING timestamp field on the wire). */
 	int64 UnixMicros() const;
 
+	/**
+	 * Ticker period while NO device has answered yet. The keep-alive ticker runs
+	 * at this rate and only actually sends every KeepAliveIntervalSeconds(), so a
+	 * cold start discovers a device in well under a second instead of waiting a
+	 * full PingInterval (devices reply to PING, never to CONNECT_STATUS).
+	 * Also makes liveness/aging re-evaluate at this cadence.
+	 */
+	static constexpr float DiscoveryTickSeconds = 0.25f;
+
+	/** How often to actually send PING + CONNECT_STATUS: fast until a device answers, then PingInterval. */
+	float KeepAliveIntervalSeconds() const
+	{
+		return GetAliveDeviceCount() > 0 ? PingInterval : DiscoveryTickSeconds;
+	}
+
+	/** FPlatformTime::Seconds() of the last keep-alive send (gates the tick above). */
+	double LastKeepAliveSendTime = 0.0;
+
 	/** Seconds within which a PONG counts a device as alive. */
 	double AliveTimeoutSeconds() const { return FMath::Max(5.0, static_cast<double>(PingInterval) * 3.0); }
 

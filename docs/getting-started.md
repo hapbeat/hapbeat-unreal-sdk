@@ -359,15 +359,29 @@ SDK はこれを分離する仕組みを持っています。
 
 ### 作り方
 
-1. コンテンツブラウザで右クリック → **Miscellaneous → Data Asset** → **Hapbeat Event Map**
-2. 開いて `Entries` に `+` で追加し、各エントリを設定
+1. コンテンツブラウザの**何もないところで右クリック**し、
+   **Miscellaneous → Data Asset** を選ぶ
+
+   > メニューが多くて見つからないときは、右クリックメニュー上部の
+   > **検索ボックスに `Data Asset` と入力**すると絞り込めます。
+
+2. **`Pick Class For Data Asset Instance`** というウィンドウが開くので、
+   一覧から **`Hapbeat Event Map`** を選んで **Select**
+
+   > ここが分かれ道です。`Data Asset` は「どの種類のデータアセットを作るか」を
+   > **別ウィンドウで選ばせる**方式なので、右クリックメニューを辿っても
+   > `Hapbeat Event Map` という項目は出てきません。一覧に見当たらない場合は
+   > ウィンドウ上部の検索ボックスに `Hapbeat` と入力してください。
+
+3. 作られたアセットに名前を付ける（例: `DA_HapbeatEventMap`）
+4. 開いて `Entries` に `+` で追加し、各エントリを設定
    - `Mode`: `Command`（Kit 必要）か `StreamClip`（Kit 不要）
    - `Category` / `Event Name`: 合わせて `<Category>.<EventName>` がイベント ID になる
    - `Gain`: `0`〜`2`
    - `Target`: 空 = 全デバイス
-3. Details パネル上部の **Refresh Intensities** を押す
+5. Details パネル上部の **Refresh Intensities** を押す
    → Kit の `manifest.json` に書かれた `intensity` を各エントリに焼き込みます
-4. **Test Play** で、再生（PIE）せずにその場で鳴らして確認できます
+6. **Test Play** で、再生（PIE）せずにその場で鳴らして確認できます
 
 ### GUI で編集できる項目
 

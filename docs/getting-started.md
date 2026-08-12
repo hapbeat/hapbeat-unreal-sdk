@@ -163,29 +163,63 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 サブシステムは**起動時に自動接続**します（`Initialize()` の時点。レベルの `BeginPlay` より前）。
 そのため `Connect` を呼ばなくても、いきなり `Play` して構いません。
 
-### Blueprint の場合
+### Blueprint の場合（最短で試す）
 
-1. **Get Game Instance** → **Get Subsystem**（Class に `Hapbeat Subsystem` を指定）
-2. そこから **Play** を繋ぐ
-   - `Event Id`: `basic-exam-kit.sine_200hz_1s` のような `<kit名>.<ファイル名>`
-   - `Gain`: `0.0`〜`1.0`
-   - `Target`: 空でよい（全デバイス宛て）
+**レベルブループリント**を使うのが一番早く、アセットを一つも作らずに試せます。
+
+1. §2 で作った **Basic** レベルを開いた状態で、ツールバーの
+   **ブループリント → レベルブループリントを開く**
+2. グラフの空白を右クリック → 検索欄に `Hapbeat` と入力 →
+   **Get Hapbeat Subsystem** を追加
+   （サブシステムは UE が自動でノード化するので、この 1 個で取得できます）
+3. そのノードの青いピンから線を引き、`Play` を検索して **Play** を追加
+   - `Event Id`: `basic-exam-kit.sine_200hz_1s`（`<kit名>.<ファイル名>`）
+   - `Gain`: `0.5` など
+   - `Target`: 空のまま（全デバイス宛て）
+4. **発火のきっかけ**を繋ぐ。どちらかで確認できます:
+   - **確実な方法**: 右クリック → `Event BeginPlay` を追加 →
+     `Delay`（Duration `2.0`）→ `Play` の順に白い実行ピンを繋ぐ
+     → **Play を押して 2 秒後に自動で振動**します
+   - **キーで試す**: 右クリック → `Keyboard Events` → `G` などを追加し、
+     その `Pressed` から `Play` に繋ぐ
+5. **コンパイル**（ブループリントエディタ左上）→ レベルに戻って **▶ Play**
+
+> Command モード（イベント ID を送る方式）なので、**Kit の書き込みが必要**です。
+> 書き込んでいない場合は、代わりに §2 の Space（StreamClip）で確認してください。
 
 ### C++ の場合
 
-自分のモジュールの `*.Build.cs` に `"HapbeatSDK"` を追加してから:
+1. エディタで **ツール → 新規 C++ クラス → Actor** を選び、名前を付けて作成
+   （例: `MyHapticActor`）
+2. **自分のプロジェクトの `*.Build.cs`** を開き、`PublicDependencyModuleNames` に
+   `"HapbeatSDK"` を足す:
+
+   ```csharp
+   PublicDependencyModuleNames.AddRange(new string[] {
+       "Core", "CoreUObject", "Engine", "InputCore", "HapbeatSDK" });
+   ```
+
+3. 作った Actor に下のコードを書く
+4. **エディタを閉じてリビルド**（`Build.cs` を変えたので Live Coding では反映されません）
+5. エディタを開き直し、作った Actor をレベルに置いて **▶ Play**
+
 
 ```cpp
 #include "HapbeatSubsystem.h"
+#include "Engine/GameInstance.h"
 
-void AMyActor::OnHit()
+void AMyHapticActor::BeginPlay()
 {
+    Super::BeginPlay();
+
     if (UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>())
     {
-        Hb->Play(TEXT("basic-exam-kit.sine_200hz_1s"), 0.8f);
+        Hb->Play(TEXT("basic-exam-kit.sine_200hz_1s"), 0.5f);
     }
 }
 ```
+
+（`BeginPlay()` は Actor のヘッダで `virtual void BeginPlay() override;` の宣言も必要です）
 
 主な API:
 

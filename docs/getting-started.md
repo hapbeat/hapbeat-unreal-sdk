@@ -264,6 +264,35 @@ protected:
 > エディタがまだ起動しています。完全に終了してからビルドし直してください。
 > `Build.cs` の変更・クラスの新規追加は Live Coding では反映できません。
 
+#### ビルドでつまずいたときのメモ
+
+- **Visual Studio では「Build」を使い、「Rebuild」は使わない。**
+  Rebuild は中間生成物を捨てて共有 PCH から作り直すため、時間がかかるうえに
+  下のツールチェーン起因の失敗を踏みやすくなります。増分 Build で十分です。
+- **VS の「エラー一覧」ウィンドウはあてになりません。** IntelliSense の解析エラー
+  （`識別子 "FTextureBuildSettings" が定義されていません`、根拠のない `override`
+  エラーなど）が混ざります。実際に何が失敗したかは「出力」ウィンドウか、
+  `%LOCALAPPDATA%\UnrealBuildTool\Log.txt` で確認してください。
+- **`ConcurrentLinearAllocator.h` で `__has_feature` が未定義、というエラーが出たら**、
+  それは Hapbeat SDK ではなく MSVC ツールチェーンの問題です。UE 5.4 はこの箇所を
+  `<sanitizer/asan_interface.h>` の有無で切り替えますが、このヘッダを同梱する
+  MSVC と同梱しない MSVC があり、Visual Studio に複数バージョンが入っていると
+  組み合わせによって Clang 専用の分岐に落ちます（UE は `/we4668` で
+  これをエラーに昇格させます）。プロジェクト直下の `BuildConfiguration.xml` で
+  使うツールセットを固定すると再発しません:
+
+  ```xml
+  <?xml version="1.0" encoding="utf-8" ?>
+  <Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+    <WindowsPlatform>
+      <CompilerVersion>14.44.35207</CompilerVersion>
+    </WindowsPlatform>
+  </Configuration>
+  ```
+
+  バージョン番号は `C:\Program Files\Microsoft Visual Studio\2022\<エディション>\VC\Tools\MSVC\`
+  にあるフォルダ名から、`include\sanitizer\` を**持たない**方を選びます。
+
 主な API:
 
 ```cpp

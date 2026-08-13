@@ -224,6 +224,10 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 
 
 ```cpp
+// UE が生成した「自分のヘッダ」を必ず 1 行目に置く。
+// この 2 本はその「後ろ」に足すこと（下の注意を参照）
+#include "MyHapticActor.h"
+
 #include "HapbeatSubsystem.h"
 #include "Engine/GameInstance.h"
 
@@ -237,6 +241,12 @@ void AMyHapticActor::BeginPlay()
     }
 }
 ```
+
+> **include を足す位置に注意。** UE は `.cpp` が**自分のヘッダを最初に
+> include している**ことを要求します。エディタが生成した `.cpp` の先頭には
+> すでに `#include "MyHapticActor.h"` が入っているので、**その下に**
+> `HapbeatSubsystem.h` などを足してください。上に貼ると
+> `Expected MyHapticActor.h to be first header included.` でビルドが止まります。
 
 ヘッダ側はこうなります:
 

@@ -17,6 +17,7 @@ public class HapbeatSDKEditor : ModuleRules
 			"Json",          // FJsonSerializer / FJsonObject (manifest.json parsing)
 			"UnrealEd",      // FEditorDelegates::EndPIE, FScopedTransaction, UFactory
 			"AssetTools",    // IAssetTools::RegisterAdvancedAssetCategory (Content Browser "Hapbeat" category)
+			"AssetDefinition", // UAssetDefinition (asset display name / color for the two authored assets)
 			"PropertyEditor",// IDetailCustomization, FPropertyEditorModule
 			"Slate",         // SButton / SComboBox / SHorizontalBox
 			"SlateCore",     // STextBlock, FAppStyle (Runtime/SlateCore)

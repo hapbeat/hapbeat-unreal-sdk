@@ -37,6 +37,11 @@ uint32 UHapbeatEventMapFactory::GetMenuCategories() const
 	return HapbeatEditor::GetAssetCategory();
 }
 
+FText UHapbeatEventMapFactory::GetDisplayName() const
+{
+	return NSLOCTEXT("HapbeatSDKEditor", "AssetDisplayName_HapbeatEventMap", "Hapbeat Event Map");
+}
+
 UHapbeatClipFactory::UHapbeatClipFactory()
 {
 	bCreateNew = true;
@@ -52,4 +57,9 @@ UObject* UHapbeatClipFactory::FactoryCreateNew(UClass* Class, UObject* InParent,
 uint32 UHapbeatClipFactory::GetMenuCategories() const
 {
 	return HapbeatEditor::GetAssetCategory();
+}
+
+FText UHapbeatClipFactory::GetDisplayName() const
+{
+	return NSLOCTEXT("HapbeatSDKEditor", "AssetDisplayName_HapbeatClip", "Hapbeat Clip");
 }

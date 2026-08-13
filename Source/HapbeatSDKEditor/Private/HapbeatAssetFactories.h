@@ -21,9 +21,13 @@
  * category, making creation a single click with no class picker. The generic
  * Data Asset route still works -- this only adds a shorter path.
  *
- * The menu label comes from UFactory::GetDisplayName(), which falls back to
- * FName::NameToDisplayString() on the supported class (Factory.cpp), so
- * UHapbeatEventMap shows up as "Hapbeat Event Map" with no extra plumbing.
+ * Menu labels are overridden explicitly. UFactory::GetDisplayName() asks
+ * AssetTools for the supported class's registered type first, and only falls
+ * back to the class name when nothing is registered -- so leaving it to the
+ * default made both entries read "Data Asset", inherited from UDataAsset.
+ * HapbeatAssetDefinitions.h now registers proper identities, which would fix
+ * this indirectly, but the label is stated here as well so a menu entry can
+ * never be at the mercy of when that registration happens to run.
  */
 
 namespace HapbeatEditor
@@ -54,6 +58,7 @@ public:
 	//~ Begin UFactory interface
 	virtual UObject* FactoryCreateNew(UClass* Class, UObject* InParent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
 	virtual uint32 GetMenuCategories() const override;
+	virtual FText GetDisplayName() const override;
 	//~ End UFactory interface
 };
 
@@ -69,5 +74,6 @@ public:
 	//~ Begin UFactory interface
 	virtual UObject* FactoryCreateNew(UClass* Class, UObject* InParent, FName Name, EObjectFlags Flags, UObject* Context, FFeedbackContext* Warn) override;
 	virtual uint32 GetMenuCategories() const override;
+	virtual FText GetDisplayName() const override;
 	//~ End UFactory interface
 };

@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatUpdateCheck.h"
 
+#include "HapbeatEditorTools.h"
+
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
@@ -205,6 +207,8 @@ void FHapbeatUpdateCheck::Register()
 			FCanExecuteAction(),
 			FIsActionChecked::CreateLambda([] { return IsAutoCheckEnabled(); })),
 		EUserInterfaceActionType::ToggleButton);
+
+	FHapbeatEditorTools::RegisterMenus(Section);
 }
 
 void FHapbeatUpdateCheck::Unregister()

@@ -27,6 +27,8 @@ public class HapbeatSDKEditor : ModuleRules
 			"WorkspaceMenuStructure", // places the Event Map tab under Window > Tools
 			"ToolMenus",     // Tools menu entries (update check)
 			"HTTP",          // release-feed query (DEC-053 update notification)
+			"ContentBrowser",// selected-asset lookup for the Markdown export
+			"AssetRegistry", // single-Event-Map fallback for the Markdown export
 			"HapbeatSDK",    // the runtime module this customizes
 		});
 	}

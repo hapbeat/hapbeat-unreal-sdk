@@ -389,9 +389,23 @@ SDK はこれを分離する仕組みを持っています。
    - `Category` / `Event Name`: 合わせて `<Category>.<EventName>` がイベント ID になる
    - `Gain`: `0`〜`2`
    - `Target`: 空 = 全デバイス
-5. Details パネル上部の **Refresh Intensities** を押す
+5. 上部の **Refresh Intensities** を押す
    → Kit の `manifest.json` に書かれた `intensity` を各エントリに焼き込みます
 6. **Test Play** で、再生（PIE）せずにその場で鳴らして確認できます
+
+### 専用ウィンドウで編集する（推奨）
+
+エントリが増えると Details パネルは縦一列で見通しが悪くなります。
+**ウィンドウ → Tools → Hapbeat Event Map** に専用エディタがあります。
+
+- **左**: エントリ一覧（表示名・イベント ID・モード）
+- **右**: 選択したエントリだけを、**Identity / Event / Playback / Targeting /
+  Notes / Test** のセクションに分けて表示
+
+上部の **Event Map** 欄でアセットを切り替えられるので、ウィンドウはドッキング
+したまま複数の EventMap を行き来できます。Targeting は `Player` / `Position` /
+`Group` に分解して編集でき、結果の `Target` 文字列もその場で確認・直接編集
+できます。Details パネル側の編集も従来どおり使えます。
 
 > **`Hapbeat Clip`** アセット（§6 のストリーミング用）も、同じ
 > **Hapbeat** カテゴリから同じ手順で作成できます。

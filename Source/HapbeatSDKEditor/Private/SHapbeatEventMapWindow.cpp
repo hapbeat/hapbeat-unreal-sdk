@@ -1,0 +1,1013 @@
+// Copyright (c) 2026 Hapbeat. MIT License.
+#include "SHapbeatEventMapWindow.h"
+
+#include "HapbeatClip.h"
+#include "HapbeatEditorSender.h"
+#include "HapbeatEventMap.h"
+#include "HapbeatManifestIntensityBaker.h"
+#include "HapbeatTargetLibrary.h"
+
+#include "AssetRegistry/AssetData.h"
+#include "Framework/Docking/TabManager.h"
+#include "PropertyCustomizationHelpers.h"
+#include "ScopedTransaction.h"
+#include "Styling/AppStyle.h"
+#include "Widgets/Docking/SDockTab.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Input/SMultiLineEditableTextBox.h"
+#include "Widgets/Input/SSpinBox.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SExpandableArea.h"
+#include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SSeparator.h"
+#include "Widgets/Layout/SSplitter.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Text/STextBlock.h"
+#include "WorkspaceMenuStructure.h"
+#include "WorkspaceMenuStructureModule.h"
+
+#define LOCTEXT_NAMESPACE "SHapbeatEventMapWindow"
+
+const FName SHapbeatEventMapWindow::TabId(TEXT("HapbeatEventMap"));
+
+namespace
+{
+	/** Width of the label column. Fixed so every row's value edge lines up. */
+	constexpr float LabelColumnWidth = 116.0f;
+
+	FText DescribeEntry(const FHapbeatEventEntry& Entry)
+	{
+		if (!Entry.DisplayName.IsEmpty())
+		{
+			return FText::FromString(Entry.DisplayName);
+		}
+		const FString EventId = Entry.GetEventId();
+		if (!EventId.IsEmpty())
+		{
+			return FText::FromString(EventId);
+		}
+		return LOCTEXT("UnnamedEntry", "(unnamed)");
+	}
+
+	FText DescribeMode(EHapticMode Mode)
+	{
+		return Mode == EHapticMode::StreamClip
+			? LOCTEXT("ModeStreamClip", "Stream Clip")
+			: LOCTEXT("ModeCommand", "Command");
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tab registration
+// ---------------------------------------------------------------------------
+
+void SHapbeatEventMapWindow::RegisterTabSpawner()
+{
+	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(TabId,
+		FOnSpawnTab::CreateLambda([](const FSpawnTabArgs&) -> TSharedRef<SDockTab>
+		{
+			return SNew(SDockTab)
+				.TabRole(ETabRole::NomadTab)
+				[
+					SNew(SHapbeatEventMapWindow)
+				];
+		}))
+		.SetDisplayName(LOCTEXT("TabTitle", "Hapbeat Event Map"))
+		.SetTooltipText(LOCTEXT("TabTooltip", "Browse and edit the entries of a Hapbeat Event Map."))
+		.SetGroup(WorkspaceMenu::GetMenuStructure().GetToolsCategory())
+		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"));
+}
+
+void SHapbeatEventMapWindow::UnregisterTabSpawner()
+{
+	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(TabId);
+}
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+void SHapbeatEventMapWindow::Construct(const FArguments& InArgs)
+{
+	ModeOptions.Add(MakeShared<EHapticMode>(EHapticMode::Command));
+	ModeOptions.Add(MakeShared<EHapticMode>(EHapticMode::StreamClip));
+
+	// Leading empty option = "any position" (an empty segment in the spec).
+	PositionOptions.Add(MakeShared<FString>(FString()));
+	for (const FString& Position : FHapbeatEventEntry::StandardPositions())
+	{
+		PositionOptions.Add(MakeShared<FString>(Position));
+	}
+
+	ChildSlot
+	[
+		SNew(SVerticalBox)
+
+		// ---- top bar: which asset, and the manifest bake ----
+		+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(6.0f, 6.0f, 6.0f, 2.0f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(0.0f, 0.0f, 6.0f, 0.0f)
+					[
+						SNew(STextBlock).Text(LOCTEXT("EventMapLabel", "Event Map"))
+					]
+				+ SHorizontalBox::Slot()
+					.FillWidth(1.0f)
+					.VAlign(VAlign_Center)
+					[
+						SNew(SObjectPropertyEntryBox)
+						.AllowedClass(UHapbeatEventMap::StaticClass())
+						.ObjectPath(this, &SHapbeatEventMapWindow::GetEventMapPath)
+						.OnObjectChanged(this, &SHapbeatEventMapWindow::OnEventMapChanged)
+						.AllowClear(true)
+						.DisplayUseSelected(true)
+						.DisplayBrowse(true)
+					]
+				+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("RefreshIntensities", "Refresh Intensities"))
+						.ToolTipText(LOCTEXT("RefreshIntensitiesTooltip",
+							"Re-scan every *-manifest.json under the project and enabled plugins, and bake "
+							"each entry's parameters.intensity into CachedManifestIntensity. Run after (re)deploying a Kit."))
+						.OnClicked(this, &SHapbeatEventMapWindow::OnRefreshIntensitiesClicked)
+					]
+			]
+
+		+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(6.0f, 0.0f, 6.0f, 4.0f)
+			[
+				SNew(STextBlock)
+				.Text(this, &SHapbeatEventMapWindow::GetRefreshSummary)
+				.AutoWrapText(true)
+			]
+
+		+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SNew(SSeparator)
+			]
+
+		// ---- body: entry list | entry detail ----
+		+ SVerticalBox::Slot()
+			.FillHeight(1.0f)
+			[
+				SNew(SSplitter)
+				.Orientation(Orient_Horizontal)
+
+				+ SSplitter::Slot()
+					.Value(0.32f)
+					[
+						SNew(SVerticalBox)
+						+ SVerticalBox::Slot()
+							.FillHeight(1.0f)
+							[
+								SAssignNew(EntryListView, SListView<TSharedPtr<FGuid>>)
+								.ListItemsSource(&EntryIds)
+								.SelectionMode(ESelectionMode::Single)
+								.OnGenerateRow(this, &SHapbeatEventMapWindow::OnGenerateEntryRow)
+								.OnSelectionChanged(this, &SHapbeatEventMapWindow::OnEntrySelectionChanged)
+							]
+						+ SVerticalBox::Slot()
+							.AutoHeight()
+							.Padding(4.0f)
+							[
+								SNew(SHorizontalBox)
+								+ SHorizontalBox::Slot()
+									.AutoWidth()
+									.Padding(0.0f, 0.0f, 4.0f, 0.0f)
+									[
+										SNew(SButton)
+										.Text(LOCTEXT("AddEntry", "Add"))
+										.ToolTipText(LOCTEXT("AddEntryTooltip", "Append a new entry with a fresh stable id."))
+										.OnClicked(this, &SHapbeatEventMapWindow::OnAddEntryClicked)
+									]
+								+ SHorizontalBox::Slot()
+									.AutoWidth()
+									[
+										SNew(SButton)
+										.Text(LOCTEXT("RemoveEntry", "Remove"))
+										.ToolTipText(LOCTEXT("RemoveEntryTooltip",
+											"Delete the selected entry. Triggers referencing its id stop resolving, so check the wiring first."))
+										.OnClicked(this, &SHapbeatEventMapWindow::OnRemoveEntryClicked)
+									]
+							]
+					]
+
+				+ SSplitter::Slot()
+					.Value(0.68f)
+					[
+						BuildDetailPane()
+					]
+			]
+	];
+
+	RefreshEntryList();
+}
+
+// ---------------------------------------------------------------------------
+// Data access
+// ---------------------------------------------------------------------------
+
+FHapbeatEventEntry* SHapbeatEventMapWindow::FindSelectedEntry() const
+{
+	UHapbeatEventMap* Map = WeakEventMap.Get();
+	if (Map == nullptr || !SelectedEntryId.IsValid() || !SelectedEntryId->IsValid())
+	{
+		return nullptr;
+	}
+	return Map->Entries.FindByPredicate(
+		[this](const FHapbeatEventEntry& Candidate) { return Candidate.Id == *SelectedEntryId; });
+}
+
+void SHapbeatEventMapWindow::ModifySelectedEntry(const FText& TransactionLabel, TFunctionRef<void(FHapbeatEventEntry&)> Mutator)
+{
+	UHapbeatEventMap* Map = WeakEventMap.Get();
+	if (Map == nullptr)
+	{
+		return;
+	}
+	FHapbeatEventEntry* Entry = FindSelectedEntry();
+	if (Entry == nullptr)
+	{
+		return;
+	}
+
+	const FScopedTransaction Transaction(TransactionLabel);
+	Map->Modify();
+	Mutator(*Entry);
+	Map->MarkPackageDirty();
+}
+
+void SHapbeatEventMapWindow::RefreshEntryList()
+{
+	EntryIds.Reset();
+
+	if (UHapbeatEventMap* Map = WeakEventMap.Get())
+	{
+		for (const FHapbeatEventEntry& Entry : Map->Entries)
+		{
+			if (Entry.Id.IsValid())
+			{
+				EntryIds.Add(MakeShared<FGuid>(Entry.Id));
+			}
+		}
+	}
+
+	// Keep pointing at the same entry across a rebuild; the shared pointers are
+	// recreated, so match on the guid value rather than pointer identity.
+	TSharedPtr<FGuid> Restored;
+	if (SelectedEntryId.IsValid() && SelectedEntryId->IsValid())
+	{
+		if (TSharedPtr<FGuid>* Found = EntryIds.FindByPredicate(
+			[this](const TSharedPtr<FGuid>& Candidate) { return Candidate.IsValid() && *Candidate == *SelectedEntryId; }))
+		{
+			Restored = *Found;
+		}
+	}
+	if (!Restored.IsValid() && EntryIds.Num() > 0)
+	{
+		Restored = EntryIds[0];
+	}
+	SelectedEntryId = Restored;
+
+	if (EntryListView.IsValid())
+	{
+		EntryListView->RequestListRefresh();
+		if (SelectedEntryId.IsValid())
+		{
+			EntryListView->SetSelection(SelectedEntryId, ESelectInfo::Direct);
+		}
+		else
+		{
+			EntryListView->ClearSelection();
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Top bar
+// ---------------------------------------------------------------------------
+
+FString SHapbeatEventMapWindow::GetEventMapPath() const
+{
+	const UHapbeatEventMap* Map = WeakEventMap.Get();
+	return Map != nullptr ? Map->GetPathName() : FString();
+}
+
+void SHapbeatEventMapWindow::OnEventMapChanged(const FAssetData& AssetData)
+{
+	WeakEventMap = Cast<UHapbeatEventMap>(AssetData.GetAsset());
+	SelectedEntryId.Reset();
+	RefreshSummary = FText::GetEmpty();
+	RefreshEntryList();
+}
+
+FReply SHapbeatEventMapWindow::OnRefreshIntensitiesClicked()
+{
+	if (UHapbeatEventMap* Map = WeakEventMap.Get())
+	{
+		const FHapbeatManifestIntensityBaker::FBakeResult Result = FHapbeatManifestIntensityBaker::BakeIntoEventMap(Map);
+		RefreshSummary = FText::Format(
+			LOCTEXT("RefreshResult", "Scanned {0} manifest(s): {1} resolved, {2} unresolved."),
+			FText::AsNumber(Result.NumManifestsScanned),
+			FText::AsNumber(Result.NumResolved),
+			FText::AsNumber(Result.NumUnresolved));
+	}
+	return FReply::Handled();
+}
+
+FText SHapbeatEventMapWindow::GetRefreshSummary() const
+{
+	return RefreshSummary;
+}
+
+// ---------------------------------------------------------------------------
+// Entry list
+// ---------------------------------------------------------------------------
+
+TSharedRef<ITableRow> SHapbeatEventMapWindow::OnGenerateEntryRow(TSharedPtr<FGuid> InId, const TSharedRef<STableViewBase>& OwnerTable)
+{
+	FText Label = LOCTEXT("MissingEntry", "(missing)");
+	FText Mode = FText::GetEmpty();
+	FText EventId = FText::GetEmpty();
+
+	if (UHapbeatEventMap* Map = WeakEventMap.Get())
+	{
+		if (const FHapbeatEventEntry* Entry = Map->Entries.FindByPredicate(
+			[&InId](const FHapbeatEventEntry& Candidate) { return InId.IsValid() && Candidate.Id == *InId; }))
+		{
+			Label = DescribeEntry(*Entry);
+			Mode = DescribeMode(Entry->Mode);
+			EventId = FText::FromString(Entry->GetEventId());
+		}
+	}
+
+	return SNew(STableRow<TSharedPtr<FGuid>>, OwnerTable)
+		.Padding(FMargin(4.0f, 3.0f))
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				.VAlign(VAlign_Center)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(STextBlock).Text(Label)
+						]
+					+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(STextBlock)
+							.Text(EventId)
+							.Font(FAppStyle::GetFontStyle("SmallFont"))
+							.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+						]
+				]
+			+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(6.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.Text(Mode)
+					.Font(FAppStyle::GetFontStyle("SmallFont"))
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				]
+		];
+}
+
+void SHapbeatEventMapWindow::OnEntrySelectionChanged(TSharedPtr<FGuid> NewSelection, ESelectInfo::Type /*SelectInfo*/)
+{
+	SelectedEntryId = NewSelection;
+}
+
+FReply SHapbeatEventMapWindow::OnAddEntryClicked()
+{
+	if (UHapbeatEventMap* Map = WeakEventMap.Get())
+	{
+		const FScopedTransaction Transaction(LOCTEXT("AddEntryTransaction", "Add Hapbeat Event Entry"));
+		Map->Modify();
+
+		// Ids are normally handed out by the asset's PostEditChangeProperty, which
+		// does not run for a direct array write -- so mint one here, otherwise the
+		// new entry would be invisible to a list keyed on valid ids.
+		FHapbeatEventEntry NewEntry;
+		NewEntry.Id = FGuid::NewGuid();
+		Map->Entries.Add(NewEntry);
+		Map->MarkPackageDirty();
+
+		SelectedEntryId = MakeShared<FGuid>(NewEntry.Id);
+		RefreshEntryList();
+	}
+	return FReply::Handled();
+}
+
+FReply SHapbeatEventMapWindow::OnRemoveEntryClicked()
+{
+	UHapbeatEventMap* Map = WeakEventMap.Get();
+	if (Map != nullptr && SelectedEntryId.IsValid() && SelectedEntryId->IsValid())
+	{
+		const FGuid Doomed = *SelectedEntryId;
+		const FScopedTransaction Transaction(LOCTEXT("RemoveEntryTransaction", "Remove Hapbeat Event Entry"));
+		Map->Modify();
+		Map->Entries.RemoveAll([&Doomed](const FHapbeatEventEntry& Candidate) { return Candidate.Id == Doomed; });
+		Map->MarkPackageDirty();
+
+		SelectedEntryId.Reset();
+		RefreshEntryList();
+	}
+	return FReply::Handled();
+}
+
+// ---------------------------------------------------------------------------
+// Detail pane
+// ---------------------------------------------------------------------------
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::MakeRow(const FText& Label, const FText& Tooltip, TSharedRef<SWidget> Value)
+{
+	return SNew(SHorizontalBox)
+		.ToolTipText(Tooltip)
+		+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			[
+				SNew(SBox)
+				.WidthOverride(LabelColumnWidth)
+				[
+					SNew(STextBlock).Text(Label)
+				]
+			]
+		+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			.VAlign(VAlign_Center)
+			[
+				Value
+			];
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::MakeSection(const FText& Title, TSharedRef<SWidget> Body)
+{
+	return SNew(SExpandableArea)
+		.InitiallyCollapsed(false)
+		.AreaTitle(Title)
+		.Padding(FMargin(10.0f, 6.0f))
+		.BodyContent()
+		[
+			Body
+		];
+}
+
+EVisibility SHapbeatEventMapWindow::GetDetailVisibility() const
+{
+	return FindSelectedEntry() != nullptr ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+EVisibility SHapbeatEventMapWindow::GetStreamClipVisibility() const
+{
+	const FHapbeatEventEntry* Entry = FindSelectedEntry();
+	return (Entry != nullptr && Entry->Mode == EHapticMode::StreamClip) ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+EVisibility SHapbeatEventMapWindow::GetCommandVisibility() const
+{
+	const FHapbeatEventEntry* Entry = FindSelectedEntry();
+	return (Entry != nullptr && Entry->Mode == EHapticMode::Command) ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::BuildDetailPane()
+{
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+			.AutoHeight()
+			.Padding(10.0f, 10.0f, 10.0f, 4.0f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("NoSelection", "Select an entry on the left, or add one."))
+				.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				.Visibility_Lambda([this]
+				{
+					return FindSelectedEntry() != nullptr ? EVisibility::Collapsed : EVisibility::Visible;
+				})
+			]
+		+ SVerticalBox::Slot()
+			.FillHeight(1.0f)
+			[
+				SNew(SScrollBox)
+				.Visibility(this, &SHapbeatEventMapWindow::GetDetailVisibility)
+
+				+ SScrollBox::Slot()[BuildIdentitySection()]
+				+ SScrollBox::Slot()[BuildEventSection()]
+				+ SScrollBox::Slot()[BuildPlaybackSection()]
+				+ SScrollBox::Slot()[BuildTargetingSection()]
+				+ SScrollBox::Slot()[BuildNotesSection()]
+				+ SScrollBox::Slot()[BuildTestSection()]
+			];
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::BuildIdentitySection()
+{
+	TSharedRef<SWidget> NameBox = SNew(SEditableTextBox)
+		.Text_Lambda([this]
+		{
+			const FHapbeatEventEntry* Entry = FindSelectedEntry();
+			return Entry != nullptr ? FText::FromString(Entry->DisplayName) : FText::GetEmpty();
+		})
+		.OnTextCommitted_Lambda([this](const FText& NewText, ETextCommit::Type)
+		{
+			ModifySelectedEntry(LOCTEXT("SetDisplayName", "Set Hapbeat Display Name"),
+				[&NewText](FHapbeatEventEntry& Entry) { Entry.DisplayName = NewText.ToString(); });
+			if (EntryListView.IsValid())
+			{
+				EntryListView->RequestListRefresh();
+			}
+		});
+
+	TSharedRef<SWidget> ModeBox = SNew(SComboBox<TSharedPtr<EHapticMode>>)
+		.OptionsSource(&ModeOptions)
+		.OnGenerateWidget_Lambda([](TSharedPtr<EHapticMode> InMode)
+		{
+			return SNew(STextBlock).Text(DescribeMode(InMode.IsValid() ? *InMode : EHapticMode::Command));
+		})
+		.OnSelectionChanged_Lambda([this](TSharedPtr<EHapticMode> NewMode, ESelectInfo::Type SelectInfo)
+		{
+			// Direct = the programmatic sync below, not a user pick; acting on it
+			// would write the entry back onto itself and dirty the package.
+			if (SelectInfo == ESelectInfo::Direct || !NewMode.IsValid())
+			{
+				return;
+			}
+			const EHapticMode Value = *NewMode;
+			ModifySelectedEntry(LOCTEXT("SetMode", "Set Hapbeat Mode"),
+				[Value](FHapbeatEventEntry& Entry) { Entry.Mode = Value; });
+			if (EntryListView.IsValid())
+			{
+				EntryListView->RequestListRefresh();
+			}
+		})
+		[
+			SNew(STextBlock)
+			.Text_Lambda([this]
+			{
+				const FHapbeatEventEntry* Entry = FindSelectedEntry();
+				return Entry != nullptr ? DescribeMode(Entry->Mode) : FText::GetEmpty();
+			})
+		];
+
+	return MakeSection(LOCTEXT("SectionIdentity", "Identity"),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("DisplayName", "Display Name"),
+					LOCTEXT("DisplayNameTooltip", "Human-readable label for this event (e.g. \"Landing Impact\")."),
+					NameBox)
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("Mode", "Mode"),
+					LOCTEXT("ModeTooltip",
+						"Command: send the event id; the device plays its locally installed clip.\n"
+						"Stream Clip: stream a Hapbeat Clip over UDP (no Kit needed on the device)."),
+					ModeBox)
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("EntryId", "Id"),
+					LOCTEXT("EntryIdTooltip", "Stable GUID triggers reference. Assigned automatically; survives reordering."),
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.Text_Lambda([this]
+					{
+						const FHapbeatEventEntry* Entry = FindSelectedEntry();
+						return Entry != nullptr ? FText::FromString(Entry->Id.ToString(EGuidFormats::DigitsWithHyphens)) : FText::GetEmpty();
+					}))
+			]);
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::BuildEventSection()
+{
+	auto MakeStringRow = [this](const FText& Label, const FText& Tooltip, FString FHapbeatEventEntry::* Field, const FText& TransactionLabel)
+	{
+		return MakeRow(Label, Tooltip,
+			SNew(SEditableTextBox)
+			.Text_Lambda([this, Field]
+			{
+				const FHapbeatEventEntry* Entry = FindSelectedEntry();
+				return Entry != nullptr ? FText::FromString(Entry->*Field) : FText::GetEmpty();
+			})
+			.OnTextCommitted_Lambda([this, Field, TransactionLabel](const FText& NewText, ETextCommit::Type)
+			{
+				ModifySelectedEntry(TransactionLabel,
+					[&NewText, Field](FHapbeatEventEntry& Entry) { Entry.*Field = NewText.ToString(); });
+				if (EntryListView.IsValid())
+				{
+					EntryListView->RequestListRefresh();
+				}
+			}));
+	};
+
+	return MakeSection(LOCTEXT("SectionEvent", "Event"),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeStringRow(LOCTEXT("Category", "Category"),
+					LOCTEXT("CategoryTooltip", "Event id left segment (the Kit name)."),
+					&FHapbeatEventEntry::Category,
+					LOCTEXT("SetCategory", "Set Hapbeat Category"))
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeStringRow(LOCTEXT("EventName", "Event Name"),
+					LOCTEXT("EventNameTooltip", "Event id right segment (the clip file name without extension)."),
+					&FHapbeatEventEntry::EventName,
+					LOCTEXT("SetEventName", "Set Hapbeat Event Name"))
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("EventIdRow", "Event Id"),
+					LOCTEXT("EventIdTooltip", "Computed as <Category>.<Event Name>. This is what goes on the wire in Command mode."),
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.Text_Lambda([this]
+					{
+						const FHapbeatEventEntry* Entry = FindSelectedEntry();
+						if (Entry == nullptr)
+						{
+							return FText::GetEmpty();
+						}
+						const FString EventId = Entry->GetEventId();
+						return EventId.IsEmpty() ? LOCTEXT("EventIdEmpty", "(none -- set Event Name)") : FText::FromString(EventId);
+					}))
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				SNew(SBox)
+				.Visibility(this, &SHapbeatEventMapWindow::GetStreamClipVisibility)
+				[
+					MakeRow(LOCTEXT("StreamClipRow", "Stream Clip"),
+						LOCTEXT("StreamClipTooltip", "Clip streamed over UDP as PCM16 (Stream Clip mode only)."),
+						SNew(SObjectPropertyEntryBox)
+						.AllowedClass(UHapbeatClip::StaticClass())
+						.AllowClear(true)
+						.DisplayUseSelected(true)
+						.DisplayBrowse(true)
+						.ObjectPath_Lambda([this]
+						{
+							const FHapbeatEventEntry* Entry = FindSelectedEntry();
+							return Entry != nullptr ? Entry->StreamClip.ToString() : FString();
+						})
+						.OnObjectChanged_Lambda([this](const FAssetData& AssetData)
+						{
+							ModifySelectedEntry(LOCTEXT("SetStreamClip", "Set Hapbeat Stream Clip"),
+								[&AssetData](FHapbeatEventEntry& Entry)
+								{
+									Entry.StreamClip = Cast<UHapbeatClip>(AssetData.GetAsset());
+								});
+						}))
+				]
+			]);
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::BuildPlaybackSection()
+{
+	return MakeSection(LOCTEXT("SectionPlayback", "Playback"),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("Gain", "Gain"),
+					LOCTEXT("GainTooltip", "Gain multiplier (0.0 - 2.0). Multiplied by the baked manifest intensity before it goes on the wire."),
+					SNew(SSpinBox<float>)
+					.MinValue(0.0f).MaxValue(2.0f)
+					.MinSliderValue(0.0f).MaxSliderValue(2.0f)
+					.Value_Lambda([this]
+					{
+						const FHapbeatEventEntry* Entry = FindSelectedEntry();
+						return Entry != nullptr ? Entry->Gain : 1.0f;
+					})
+					.OnValueChanged_Lambda([this](float NewValue)
+					{
+						ModifySelectedEntry(LOCTEXT("SetGain", "Set Hapbeat Gain"),
+							[NewValue](FHapbeatEventEntry& Entry) { Entry.Gain = NewValue; });
+					}))
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("EffectiveGain", "Effective Gain"),
+					LOCTEXT("EffectiveGainTooltip",
+						"Gain x baked manifest intensity -- the value actually sent. "
+						"Shows plain Gain while the intensity is unresolved (-1); run Refresh Intensities."),
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+					.Text_Lambda([this]
+					{
+						const FHapbeatEventEntry* Entry = FindSelectedEntry();
+						if (Entry == nullptr)
+						{
+							return FText::GetEmpty();
+						}
+						if (Entry->CachedManifestIntensity < 0.0f)
+						{
+							return FText::Format(LOCTEXT("EffectiveGainUnresolved", "{0} (manifest intensity unresolved)"),
+								FText::AsNumber(Entry->GetEffectiveGain()));
+						}
+						return FText::Format(LOCTEXT("EffectiveGainResolved", "{0}  =  {1} x {2}"),
+							FText::AsNumber(Entry->GetEffectiveGain()),
+							FText::AsNumber(Entry->Gain),
+							FText::AsNumber(Entry->CachedManifestIntensity));
+					}))
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				SNew(SBox)
+				.Visibility(this, &SHapbeatEventMapWindow::GetStreamClipVisibility)
+				[
+					MakeRow(LOCTEXT("Loop", "Loop"),
+						LOCTEXT("LoopTooltip", "Re-stream the clip continuously until Stop() is called. For sustained effects (drag, scrape, charge)."),
+						SNew(SCheckBox)
+						.IsChecked_Lambda([this]
+						{
+							const FHapbeatEventEntry* Entry = FindSelectedEntry();
+							return (Entry != nullptr && Entry->bLoop) ? ECheckBoxState::Checked : ECheckBoxState::Unchecked;
+						})
+						.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+						{
+							const bool bNewLoop = (NewState == ECheckBoxState::Checked);
+							ModifySelectedEntry(LOCTEXT("SetLoop", "Set Hapbeat Loop"),
+								[bNewLoop](FHapbeatEventEntry& Entry) { Entry.bLoop = bNewLoop; });
+						}))
+				]
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("DelayOffset", "Delay Offset"),
+					LOCTEXT("DelayOffsetTooltip",
+						"Seconds added to the global Haptic Delay for this entry only. "
+						"Positive fires later, negative earlier; the sum is clamped to >= 0."),
+					SNew(SSpinBox<float>)
+					.MinValue(-0.2f).MaxValue(0.2f)
+					.MinSliderValue(-0.2f).MaxSliderValue(0.2f)
+					.Value_Lambda([this]
+					{
+						const FHapbeatEventEntry* Entry = FindSelectedEntry();
+						return Entry != nullptr ? Entry->DelayOffsetSeconds : 0.0f;
+					})
+					.OnValueChanged_Lambda([this](float NewValue)
+					{
+						ModifySelectedEntry(LOCTEXT("SetDelayOffset", "Set Hapbeat Delay Offset"),
+							[NewValue](FHapbeatEventEntry& Entry) { Entry.DelayOffsetSeconds = NewValue; });
+					}))
+			]);
+}
+
+// ---------------------------------------------------------------------------
+// Targeting
+// ---------------------------------------------------------------------------
+
+int32 SHapbeatEventMapWindow::GetTargetPlayer() const
+{
+	const FHapbeatEventEntry* Entry = FindSelectedEntry();
+	if (Entry == nullptr)
+	{
+		return -1;
+	}
+	int32 Player = -1;
+	int32 Group = -1;
+	FString Position;
+	UHapbeatTargetLibrary::ParseTarget(Entry->Target, Player, Position, Group);
+	return Player;
+}
+
+int32 SHapbeatEventMapWindow::GetTargetGroup() const
+{
+	const FHapbeatEventEntry* Entry = FindSelectedEntry();
+	if (Entry == nullptr)
+	{
+		return -1;
+	}
+	int32 Player = -1;
+	int32 Group = -1;
+	FString Position;
+	UHapbeatTargetLibrary::ParseTarget(Entry->Target, Player, Position, Group);
+	return Group;
+}
+
+FString SHapbeatEventMapWindow::GetTargetPosition() const
+{
+	const FHapbeatEventEntry* Entry = FindSelectedEntry();
+	if (Entry == nullptr)
+	{
+		return FString();
+	}
+	int32 Player = -1;
+	int32 Group = -1;
+	FString Position;
+	UHapbeatTargetLibrary::ParseTarget(Entry->Target, Player, Position, Group);
+	return Position;
+}
+
+void SHapbeatEventMapWindow::SetTargetParts(int32 Player, const FString& Position, int32 Group)
+{
+	const FString NewTarget = UHapbeatTargetLibrary::BuildTarget(Player, Position, Group);
+	ModifySelectedEntry(LOCTEXT("SetTarget", "Set Hapbeat Target"),
+		[&NewTarget](FHapbeatEventEntry& Entry) { Entry.Target = NewTarget; });
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTargetingSection()
+{
+	return MakeSection(LOCTEXT("SectionTargeting", "Targeting"),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("Player", "Player"),
+					LOCTEXT("PlayerTooltip", "Player number to address. -1 = any player."),
+					SNew(SSpinBox<int32>)
+					.MinValue(-1).MaxValue(99)
+					.MinSliderValue(-1).MaxSliderValue(99)
+					.Value_Lambda([this] { return GetTargetPlayer(); })
+					.OnValueChanged_Lambda([this](int32 NewValue)
+					{
+						SetTargetParts(NewValue, GetTargetPosition(), GetTargetGroup());
+					}))
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("Position", "Position"),
+					LOCTEXT("PositionTooltip", "Body position from the device-addressing vocabulary. Empty = any position."),
+					SNew(SComboBox<TSharedPtr<FString>>)
+					.OptionsSource(&PositionOptions)
+					.OnGenerateWidget_Lambda([](TSharedPtr<FString> InPosition)
+					{
+						const bool bEmpty = !InPosition.IsValid() || InPosition->IsEmpty();
+						return SNew(STextBlock).Text(bEmpty
+							? LOCTEXT("AnyPosition", "(any position)")
+							: FText::FromString(*InPosition));
+					})
+					.OnSelectionChanged_Lambda([this](TSharedPtr<FString> NewPosition, ESelectInfo::Type SelectInfo)
+					{
+						if (SelectInfo == ESelectInfo::Direct || !NewPosition.IsValid())
+						{
+							return;
+						}
+						SetTargetParts(GetTargetPlayer(), *NewPosition, GetTargetGroup());
+					})
+					[
+						SNew(STextBlock)
+						.Text_Lambda([this]
+						{
+							const FString Position = GetTargetPosition();
+							return Position.IsEmpty()
+								? LOCTEXT("AnyPosition", "(any position)")
+								: FText::FromString(Position);
+						})
+					])
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("Group", "Group"),
+					LOCTEXT("GroupTooltip", "Group number to address. -1 = any group."),
+					SNew(SSpinBox<int32>)
+					.MinValue(-1).MaxValue(99)
+					.MinSliderValue(-1).MaxSliderValue(99)
+					.Value_Lambda([this] { return GetTargetGroup(); })
+					.OnValueChanged_Lambda([this](int32 NewValue)
+					{
+						SetTargetParts(GetTargetPlayer(), GetTargetPosition(), NewValue);
+					}))
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
+				MakeRow(LOCTEXT("TargetSpec", "Target"),
+					LOCTEXT("TargetSpecTooltip",
+						"The addressing string actually sent. Editable directly for shapes the three "
+						"fields above cannot express. Empty = broadcast to every device."),
+					SNew(SEditableTextBox)
+					.HintText(LOCTEXT("TargetHint", "(broadcast -- all devices)"))
+					.Text_Lambda([this]
+					{
+						const FHapbeatEventEntry* Entry = FindSelectedEntry();
+						return Entry != nullptr ? FText::FromString(Entry->Target) : FText::GetEmpty();
+					})
+					.OnTextCommitted_Lambda([this](const FText& NewText, ETextCommit::Type)
+					{
+						ModifySelectedEntry(LOCTEXT("SetTargetRaw", "Set Hapbeat Target"),
+							[&NewText](FHapbeatEventEntry& Entry) { Entry.Target = NewText.ToString(); });
+					}))
+			]);
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::BuildNotesSection()
+{
+	return MakeSection(LOCTEXT("SectionNotes", "Notes"),
+		SNew(SBox)
+		.HeightOverride(72.0f)
+		[
+			SNew(SMultiLineEditableTextBox)
+			.HintText(LOCTEXT("NotesHint", "Designer notes (never sent to devices)."))
+			.Text_Lambda([this]
+			{
+				const FHapbeatEventEntry* Entry = FindSelectedEntry();
+				return Entry != nullptr ? FText::FromString(Entry->Notes) : FText::GetEmpty();
+			})
+			.OnTextCommitted_Lambda([this](const FText& NewText, ETextCommit::Type)
+			{
+				ModifySelectedEntry(LOCTEXT("SetNotes", "Set Hapbeat Notes"),
+					[&NewText](FHapbeatEventEntry& Entry) { Entry.Notes = NewText.ToString(); });
+			})
+		]);
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
+{
+	return MakeSection(LOCTEXT("SectionTest", "Test"),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("TestPlay", "Test Play"))
+						.IsEnabled_Lambda([this]
+						{
+							const FHapbeatEventEntry* Entry = FindSelectedEntry();
+							return Entry != nullptr && Entry->Mode == EHapticMode::Command;
+						})
+						.ToolTipText_Lambda([this]
+						{
+							const FHapbeatEventEntry* Entry = FindSelectedEntry();
+							if (Entry == nullptr)
+							{
+								return LOCTEXT("TestPlayNoSelection", "Select an entry to test.");
+							}
+							if (Entry->Mode == EHapticMode::StreamClip)
+							{
+								return LOCTEXT("TestPlayStreamNote",
+									"Stream Clip entries can't be test-played from the editor in v1 (the device has no "
+									"local clip for them) -- enter PIE and use the runtime Stream Clip API instead.");
+							}
+							return LOCTEXT("TestPlayHint", "Send a PLAY command for this entry at its effective gain.");
+						})
+						.OnClicked_Lambda([this]
+						{
+							if (const FHapbeatEventEntry* Entry = FindSelectedEntry())
+							{
+								if (Entry->Mode == EHapticMode::Command)
+								{
+									FHapbeatEditorSender::SendPlay(Entry->GetEventId(), Entry->GetEffectiveGain(), Entry->Target);
+								}
+							}
+							return FReply::Handled();
+						})
+					]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("Stop", "Stop"))
+						.ToolTipText(LOCTEXT("StopTooltip", "Send STOP for the selected entry's event id."))
+						.OnClicked_Lambda([this]
+						{
+							if (const FHapbeatEventEntry* Entry = FindSelectedEntry())
+							{
+								FHapbeatEditorSender::SendStop(Entry->GetEventId(), Entry->Target);
+							}
+							return FReply::Handled();
+						})
+					]
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("StopAll", "Stop All"))
+						.ToolTipText(LOCTEXT("StopAllTooltip", "Send STOP_ALL to every device."))
+						.OnClicked_Lambda([]
+						{
+							FHapbeatEditorSender::SendStopAll();
+							return FReply::Handled();
+						})
+					]
+				+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("Ping", "Ping"))
+						.ToolTipText(LOCTEXT("PingTooltip", "Send a PING (connectivity check; replies are not read back here)."))
+						.OnClicked_Lambda([]
+						{
+							FHapbeatEditorSender::SendPing();
+							return FReply::Handled();
+						})
+					]
+			]);
+}
+
+#undef LOCTEXT_NAMESPACE

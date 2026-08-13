@@ -9,6 +9,7 @@
 #include "HapbeatEventMapCustomization.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatTriggerComponentCustomization.h"
+#include "SHapbeatEventMapWindow.h"
 
 #include "AssetToolsModule.h"
 #include "Editor.h"
@@ -52,6 +53,11 @@ void FHapbeatSDKEditorModule::StartupModule()
 
 	PropertyModule.NotifyCustomizationModuleChanged();
 
+	// Window > Tools > Hapbeat Event Map. A nomad tab (rather than an asset
+	// editor) so the window can stay docked while the user switches between
+	// several Event Maps, which is how the Unity window is used in practice.
+	SHapbeatEventMapWindow::RegisterTabSpawner();
+
 	// Belt-and-braces socket cleanup at the end of every PIE session (see
 	// FHapbeatEditorSender's class doc for why this can't actually collide
 	// with UHapbeatSubsystem's runtime socket even without this).
@@ -65,6 +71,8 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 {
 	FEditorDelegates::EndPIE.Remove(EndPieHandle);
 	EndPieHandle.Reset();
+
+	SHapbeatEventMapWindow::UnregisterTabSpawner();
 
 	FHapbeatEditorSender::Shutdown();
 

@@ -6,6 +6,7 @@
 
 #include "HapbeatClip.h"
 #include "HapbeatEventMap.h"
+#include "SHapbeatEventMapWindow.h"
 
 #include "HapbeatAssetDefinitions.generated.h"
 
@@ -40,6 +41,24 @@ public:
 	virtual FLinearColor GetAssetColor() const override { return FLinearColor(FColor(126, 87, 194)); }
 
 	virtual TSoftClassPtr<UObject> GetAssetClass() const override { return UHapbeatEventMap::StaticClass(); }
+
+	/**
+	 * Double-click opens the Hapbeat Event Map window rather than the engine's
+	 * generic Details-panel asset editor.
+	 *
+	 * Those two look nothing alike, and the generic one is what opened before --
+	 * so someone told "the Event Map window is where you edit this" would
+	 * double-click the asset, get the old panel, and reasonably conclude the new
+	 * window had not taken effect. It did happen.
+	 */
+	virtual EAssetCommandResult OpenAssets(const FAssetOpenArgs& OpenArgs) const override
+	{
+		for (UHapbeatEventMap* Map : OpenArgs.LoadObjects<UHapbeatEventMap>())
+		{
+			SHapbeatEventMapWindow::OpenForAsset(Map);
+		}
+		return EAssetCommandResult::Handled;
+	}
 	//~ End UAssetDefinition interface
 };
 

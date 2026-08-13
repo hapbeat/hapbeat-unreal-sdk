@@ -283,6 +283,14 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 	// editor streams would interleave into noise rather than layer.
 	StopStream();
 
+	// Learn who is out there BEFORE the first chunk. Routing only unicasts to
+	// devices that have answered a PING, and nothing else in the editor sends
+	// one -- so without this a test stream goes out as broadcast, which Wi-Fi
+	// access points batch against their DTIM interval and chop the audio into
+	// audible gaps. Replies are drained on every send, so the first chunk or two
+	// may still broadcast before routing settles.
+	SendPing();
+
 	Stream = MakeUnique<FStreamState>();
 	Stream->SampleRate = Clip->SampleRate;
 	Stream->Channels = Clip->NumChannels;

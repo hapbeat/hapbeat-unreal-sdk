@@ -46,6 +46,7 @@
 #define LOCTEXT_NAMESPACE "SHapbeatEventMapWindow"
 
 const FName SHapbeatEventMapWindow::TabId(TEXT("HapbeatEventMap"));
+TWeakPtr<SHapbeatEventMapWindow> SHapbeatEventMapWindow::LastCreated;
 
 namespace
 {
@@ -66,12 +67,30 @@ namespace
 		return LOCTEXT("UnnamedEntry", "(unnamed)");
 	}
 
+	// FIRE / CLIP is the shorthand Studio and the Unity window use, so an author
+	// moving between the tools sees one vocabulary. The engine-side enum names
+	// are kept in parentheses because they are what appears in Blueprint and C++.
 	FText DescribeMode(EHapticMode Mode)
 	{
 		return Mode == EHapticMode::StreamClip
-			? LOCTEXT("ModeStreamClip", "Stream Clip")
-			: LOCTEXT("ModeCommand", "Command");
+			? LOCTEXT("ModeStreamClip", "CLIP (Stream Clip)")
+			: LOCTEXT("ModeCommand", "FIRE (Command)");
 	}
+
+	/** Compact form for the entry list, where the row has no space for the long one. */
+	FText DescribeModeShort(EHapticMode Mode)
+	{
+		return Mode == EHapticMode::StreamClip
+			? LOCTEXT("ModeStreamClipShort", "CLIP")
+			: LOCTEXT("ModeCommandShort", "FIRE");
+	}
+
+	// Button accents, mirroring the Unity window's palette: the primary action
+	// stands out, stopping everything reads as destructive, and the rest stay
+	// neutral so the eye lands on the two that matter.
+	const FLinearColor TestPlayColor(0.20f, 0.55f, 0.30f);
+	const FLinearColor StopAllColor(0.60f, 0.20f, 0.20f);
+	const FLinearColor NeutralColor(0.25f, 0.25f, 0.28f);
 }
 
 // ---------------------------------------------------------------------------
@@ -83,10 +102,12 @@ void SHapbeatEventMapWindow::RegisterTabSpawner()
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(TabId,
 		FOnSpawnTab::CreateLambda([](const FSpawnTabArgs&) -> TSharedRef<SDockTab>
 		{
+			TSharedRef<SHapbeatEventMapWindow> Window = SNew(SHapbeatEventMapWindow);
+			LastCreated = Window;
 			return SNew(SDockTab)
 				.TabRole(ETabRole::NomadTab)
 				[
-					SNew(SHapbeatEventMapWindow)
+					Window
 				];
 		}))
 		.SetDisplayName(LOCTEXT("TabTitle", "Hapbeat Event Map"))
@@ -98,6 +119,29 @@ void SHapbeatEventMapWindow::RegisterTabSpawner()
 void SHapbeatEventMapWindow::UnregisterTabSpawner()
 {
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(TabId);
+}
+
+void SHapbeatEventMapWindow::OpenForAsset(UHapbeatEventMap* Map)
+{
+	// Invoking is also what focuses an already-open tab, so this both opens and
+	// raises. The widget is only reachable afterwards -- TryInvokeTab hands back
+	// the SDockTab, not its content.
+	FGlobalTabmanager::Get()->TryInvokeTab(TabId);
+
+	if (const TSharedPtr<SHapbeatEventMapWindow> Window = LastCreated.Pin())
+	{
+		Window->SetEventMap(Map);
+	}
+}
+
+void SHapbeatEventMapWindow::SetEventMap(UHapbeatEventMap* Map)
+{
+	WeakEventMap = Map;
+	SelectedEntryId.Reset();
+	RefreshSummary = FText::GetEmpty();
+	WiringHits.Reset();
+	WiringScannedFor.Invalidate();
+	RefreshEntryList();
 }
 
 // ---------------------------------------------------------------------------
@@ -364,7 +408,7 @@ TSharedRef<ITableRow> SHapbeatEventMapWindow::OnGenerateEntryRow(TSharedPtr<FGui
 			[&InId](const FHapbeatEventEntry& Candidate) { return InId.IsValid() && Candidate.Id == *InId; }))
 		{
 			Label = DescribeEntry(*Entry);
-			Mode = DescribeMode(Entry->Mode);
+			Mode = DescribeModeShort(Entry->Mode);
 			EventId = FText::FromString(Entry->GetEventId());
 		}
 	}
@@ -734,13 +778,16 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildDetailPane()
 				SNew(SScrollBox)
 				.Visibility(this, &SHapbeatEventMapWindow::GetDetailVisibility)
 
+				// Test first: while tuning an entry the same button is pressed
+				// after every change, so it must not move down the pane as
+				// sections above it expand.
+				+ SScrollBox::Slot()[BuildTestSection()]
 				+ SScrollBox::Slot()[BuildIdentitySection()]
 				+ SScrollBox::Slot()[BuildEventSection()]
 				+ SScrollBox::Slot()[BuildPlaybackSection()]
 				+ SScrollBox::Slot()[BuildTargetingSection()]
 				+ SScrollBox::Slot()[BuildWiringSection()]
 				+ SScrollBox::Slot()[BuildNotesSection()]
-				+ SScrollBox::Slot()[BuildTestSection()]
 			];
 }
 
@@ -1181,6 +1228,7 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 					[
 						SNew(SButton)
 						.Text(LOCTEXT("TestPlay", "Test Play"))
+						.ButtonColorAndOpacity(TestPlayColor)
 						.IsEnabled_Lambda([this] { return FindSelectedEntry() != nullptr; })
 						.ToolTipText_Lambda([this]
 						{
@@ -1222,6 +1270,7 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 					[
 						SNew(SButton)
 						.Text(LOCTEXT("Stop", "Stop"))
+						.ButtonColorAndOpacity(NeutralColor)
 						.ToolTipText(LOCTEXT("StopTooltip", "Stop this entry: STOP for a Command entry, STREAM_END for a stream."))
 						.OnClicked_Lambda([this]
 						{
@@ -1245,6 +1294,7 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 					[
 						SNew(SButton)
 						.Text(LOCTEXT("StopAll", "Stop All"))
+						.ButtonColorAndOpacity(StopAllColor)
 						.ToolTipText(LOCTEXT("StopAllTooltip", "Send STOP_ALL to every device."))
 						.OnClicked_Lambda([]
 						{
@@ -1256,6 +1306,7 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 					[
 						SNew(SButton)
 						.Text(LOCTEXT("Ping", "Ping"))
+						.ButtonColorAndOpacity(NeutralColor)
 						.ToolTipText(LOCTEXT("PingTooltip", "Send a PING (connectivity check; replies are not read back here)."))
 						.OnClicked_Lambda([]
 						{

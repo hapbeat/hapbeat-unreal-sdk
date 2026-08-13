@@ -47,6 +47,19 @@ public:
 	static void RegisterTabSpawner();
 	static void UnregisterTabSpawner();
 
+	/**
+	 * Brings up the window showing Map.
+	 *
+	 * Wired to double-click (see UAssetDefinition_HapbeatEventMap) because the
+	 * engine's generic asset editor would otherwise open instead -- a Details
+	 * panel that looks nothing like this window, which reads as "my edits did
+	 * not take effect" to anyone who has been told this window is the editor.
+	 */
+	static void OpenForAsset(UHapbeatEventMap* Map);
+
+	/** Points the window at an asset (top bar picker equivalent). */
+	void SetEventMap(UHapbeatEventMap* Map);
+
 private:
 	// ---- data access ----
 
@@ -152,4 +165,11 @@ private:
 	TSharedPtr<SListView<TSharedPtr<FHapbeatWiringHit>>> WiringListView;
 	/** Entry the wiring list was built for, so a stale list is never shown. */
 	FGuid WiringScannedFor;
+
+	/**
+	 * The most recently constructed window, so OpenForAsset can retarget the
+	 * existing one. The tab manager hands back the SDockTab, not our widget, and
+	 * only one nomad tab of this id can exist at a time.
+	 */
+	static TWeakPtr<SHapbeatEventMapWindow> LastCreated;
 };

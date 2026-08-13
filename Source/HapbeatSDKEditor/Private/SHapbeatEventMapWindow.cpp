@@ -6,8 +6,11 @@
 #include "HapbeatEventMap.h"
 #include "HapbeatManifestIntensityBaker.h"
 #include "HapbeatTargetLibrary.h"
+#include "HapbeatTriggerComponent.h"
 
 #include "AssetRegistry/AssetData.h"
+#include "Editor.h"
+#include "EngineUtils.h"
 #include "Framework/Docking/TabManager.h"
 #include "PropertyCustomizationHelpers.h"
 #include "ScopedTransaction.h"
@@ -392,6 +395,138 @@ TSharedRef<ITableRow> SHapbeatEventMapWindow::OnGenerateEntryRow(TSharedPtr<FGui
 void SHapbeatEventMapWindow::OnEntrySelectionChanged(TSharedPtr<FGuid> NewSelection, ESelectInfo::Type /*SelectInfo*/)
 {
 	SelectedEntryId = NewSelection;
+
+	// Drop the previous entry's results rather than leaving them on screen
+	// attached to the wrong entry. Scanning itself stays a deliberate action.
+	WiringHits.Reset();
+	WiringScannedFor.Invalidate();
+	if (WiringListView.IsValid())
+	{
+		WiringListView->RequestListRefresh();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Wiring (reverse lookup)
+// ---------------------------------------------------------------------------
+
+void SHapbeatEventMapWindow::RefreshWiring()
+{
+	WiringHits.Reset();
+	WiringScannedFor.Invalidate();
+
+	const FHapbeatEventEntry* Entry = FindSelectedEntry();
+	UWorld* World = GEditor != nullptr ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (Entry != nullptr && World != nullptr)
+	{
+		WiringScannedFor = Entry->Id;
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			TArray<UHapbeatTriggerComponent*> Triggers;
+			It->GetComponents(Triggers);
+			for (UHapbeatTriggerComponent* Trigger : Triggers)
+			{
+				if (Trigger->EntryId == WiringScannedFor)
+				{
+					TSharedPtr<FHapbeatWiringHit> Hit = MakeShared<FHapbeatWiringHit>();
+					Hit->Actor = *It;
+					Hit->Component = Trigger;
+					Hit->ComponentClass = Trigger->GetClass()->GetName();
+					WiringHits.Add(Hit);
+				}
+			}
+		}
+	}
+
+	if (WiringListView.IsValid())
+	{
+		WiringListView->RequestListRefresh();
+	}
+}
+
+TSharedRef<ITableRow> SHapbeatEventMapWindow::OnGenerateWiringRow(TSharedPtr<FHapbeatWiringHit> InHit, const TSharedRef<STableViewBase>& OwnerTable)
+{
+	const FString ActorName = (InHit.IsValid() && InHit->Actor.IsValid())
+		? InHit->Actor->GetActorNameOrLabel()
+		: TEXT("(missing)");
+	const FString ClassName = InHit.IsValid() ? InHit->ComponentClass : FString();
+
+	return SNew(STableRow<TSharedPtr<FHapbeatWiringHit>>, OwnerTable)
+		.Padding(FMargin(4.0f, 2.0f))
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).Text(FText::FromString(ActorName))
+				]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6.0f, 0.0f)
+				[
+					SNew(STextBlock)
+					.Text(FText::FromString(ClassName))
+					.Font(FAppStyle::GetFontStyle("SmallFont"))
+					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+				]
+			+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("SelectActor", "Select"))
+					.ToolTipText(LOCTEXT("SelectActorTooltip", "Select this actor in the level."))
+					.OnClicked_Lambda([InHit]
+					{
+						if (InHit.IsValid() && InHit->Actor.IsValid() && GEditor != nullptr)
+						{
+							GEditor->SelectNone(false, true);
+							GEditor->SelectActor(InHit->Actor.Get(), true, true);
+						}
+						return FReply::Handled();
+					})
+				]
+		];
+}
+
+TSharedRef<SWidget> SHapbeatEventMapWindow::BuildWiringSection()
+{
+	return MakeSection(LOCTEXT("SectionWiring", "Wiring"),
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth()
+					[
+						SNew(SButton)
+						.Text(LOCTEXT("ScanLevel", "Scan Level"))
+						.ToolTipText(LOCTEXT("ScanLevelTooltip",
+							"Find every Hapbeat trigger in the open level that fires this entry. Triggers reference entries by id, so a scan is the only way to see who uses one."))
+						.OnClicked_Lambda([this] { RefreshWiring(); return FReply::Handled(); })
+					]
+				+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(8.0f, 0.0f, 0.0f, 0.0f)
+					[
+						SNew(STextBlock)
+						.ColorAndOpacity(FSlateColor::UseSubduedForeground())
+						.Text_Lambda([this]
+						{
+							const FHapbeatEventEntry* Entry = FindSelectedEntry();
+							if (Entry == nullptr || !WiringScannedFor.IsValid() || Entry->Id != WiringScannedFor)
+							{
+								return LOCTEXT("WiringNotScanned", "not scanned");
+							}
+							return WiringHits.Num() == 0
+								? LOCTEXT("WiringNone", "no trigger in this level fires this entry")
+								: FText::Format(LOCTEXT("WiringCount", "{0} trigger(s)"), FText::AsNumber(WiringHits.Num()));
+						})
+					]
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
+			[
+				SNew(SBox)
+				.MaxDesiredHeight(140.0f)
+				[
+					SAssignNew(WiringListView, SListView<TSharedPtr<FHapbeatWiringHit>>)
+					.ListItemsSource(&WiringHits)
+					.SelectionMode(ESelectionMode::Single)
+					.OnGenerateRow(this, &SHapbeatEventMapWindow::OnGenerateWiringRow)
+				]
+			]);
 }
 
 FReply SHapbeatEventMapWindow::OnAddEntryClicked()
@@ -512,6 +647,7 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildDetailPane()
 				+ SScrollBox::Slot()[BuildEventSection()]
 				+ SScrollBox::Slot()[BuildPlaybackSection()]
 				+ SScrollBox::Slot()[BuildTargetingSection()]
+				+ SScrollBox::Slot()[BuildWiringSection()]
 				+ SScrollBox::Slot()[BuildNotesSection()]
 				+ SScrollBox::Slot()[BuildTestSection()]
 			];

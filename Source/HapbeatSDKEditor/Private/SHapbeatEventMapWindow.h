@@ -10,6 +10,14 @@
 class SWidget;
 class UHapbeatEventMap;
 
+/** One component in the level that fires the scanned entry. */
+struct FHapbeatWiringHit
+{
+	TWeakObjectPtr<class AActor> Actor;
+	TWeakObjectPtr<class UHapbeatTriggerComponent> Component;
+	FString ComponentClass;
+};
+
 /**
  * Dedicated Event Map editor, mirroring the Unity SDK's window.
  *
@@ -79,6 +87,7 @@ private:
 	TSharedRef<SWidget> BuildPlaybackSection();
 	TSharedRef<SWidget> BuildTargetingSection();
 	TSharedRef<SWidget> BuildNotesSection();
+	TSharedRef<SWidget> BuildWiringSection();
 	TSharedRef<SWidget> BuildTestSection();
 
 	/** Label + value row; the fixed label column is what gives the pane its two-column look. */
@@ -117,4 +126,18 @@ private:
 	TArray<TSharedPtr<FString>> PositionOptions;
 
 	FText RefreshSummary;
+
+	// ---- wiring (reverse lookup) ----
+	//
+	// Triggers reference an entry by id, so an EventMap on its own cannot say
+	// who fires it. Answering "is this entry actually used, and by what?"
+	// requires walking the level, which is why this is an explicit scan rather
+	// than something kept live.
+	void RefreshWiring();
+	TSharedRef<ITableRow> OnGenerateWiringRow(TSharedPtr<FHapbeatWiringHit> InHit, const TSharedRef<STableViewBase>& OwnerTable);
+
+	TArray<TSharedPtr<FHapbeatWiringHit>> WiringHits;
+	TSharedPtr<SListView<TSharedPtr<FHapbeatWiringHit>>> WiringListView;
+	/** Entry the wiring list was built for, so a stale list is never shown. */
+	FGuid WiringScannedFor;
 };

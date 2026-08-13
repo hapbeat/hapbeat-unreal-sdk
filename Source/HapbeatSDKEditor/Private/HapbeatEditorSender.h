@@ -46,6 +46,27 @@ public:
 	/** Send a PING. Replies ARE read back (see DrainReplies) so subsequent sends can unicast. */
 	static void SendPing();
 
+	/**
+	 * Stream a clip from the editor, without entering PIE.
+	 *
+	 * Command entries can be sanity-checked with a single PLAY, but a Stream
+	 * Clip only exists as audio the SDK pushes out over time, so without this
+	 * there is no way to feel one while authoring -- which made Stream Clip
+	 * entries effectively unverifiable in the editor. Paced from the core
+	 * ticker, which runs in the bare editor. Parity with Unity's
+	 * HapbeatEditorTransport.StartStream (driven by EditorApplication.update).
+	 *
+	 * Starting a stream replaces any stream already running: the device mixes a
+	 * single ring buffer, so two overlapping editor streams would interleave
+	 * into noise rather than layer.
+	 */
+	static void StartStream(const class UHapbeatClip* Clip, float Gain, const FString& Target, bool bLoop);
+
+	/** Stop the editor stream and emit STREAM_END. Safe when nothing is streaming. */
+	static void StopStream();
+
+	static bool IsStreaming();
+
 	/** Close the lazy socket, if open. Safe to call repeatedly. Called from module ShutdownModule and FEditorDelegates::EndPIE. */
 	static void Shutdown();
 
@@ -97,6 +118,27 @@ private:
 	static uint16 NextSeq();
 	/** Unix-epoch microseconds for the PING wire field. Mirrors UHapbeatSubsystem::UnixMicros(). */
 	static int64 UnixMicros();
+
+	/** Feeds the running stream; returns false to unregister itself when done. */
+	static bool TickStream(float DeltaSeconds);
+
+	/** A stream in progress. Null when idle -- only ever one (see StartStream). */
+	struct FStreamState
+	{
+		/** Already scaled by the requested gain: STREAM_BEGIN carries 1.0 and the
+		 *  sender premultiplies, exactly as the runtime streamer does, so the
+		 *  device must not apply a second factor. */
+		TArray<uint8> Pcm16;
+		int32 SampleRate = 0;
+		int32 Channels = 0;
+		FString Target;
+		bool bLoop = false;
+		int32 Offset = 0;
+		double StartTime = 0.0;
+	};
+
+	static TUniquePtr<FStreamState> Stream;
+	static FTSTicker::FDelegateHandle StreamTickerHandle;
 
 	static FSocket* Socket;
 	static TSharedPtr<FInternetAddr> BroadcastAddr;

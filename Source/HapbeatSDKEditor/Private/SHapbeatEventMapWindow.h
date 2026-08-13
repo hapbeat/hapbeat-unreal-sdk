@@ -79,6 +79,18 @@ private:
 	FReply OnAddEntryClicked();
 	FReply OnRemoveEntryClicked();
 
+	/**
+	 * Pick a .wav, turn it into a Hapbeat Clip asset next to this Event Map, and
+	 * assign it to the selected entry.
+	 *
+	 * Unity points a Stream Clip entry straight at an AudioClip. UE cannot: a
+	 * cooked USoundWave holds platform-compressed audio, not the PCM this
+	 * protocol puts on the wire, so the SDK keeps the samples in its own asset.
+	 * That is an implementation constraint, not something the author should have
+	 * to perform -- hence this one-click path from a file to an assigned clip.
+	 */
+	FReply OnImportWavClicked();
+
 	// ---- detail pane ----
 
 	TSharedRef<SWidget> BuildDetailPane();

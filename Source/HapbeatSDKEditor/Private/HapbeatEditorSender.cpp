@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatEditorSender.h"
 
+#include "HapbeatClip.h"
 #include "HapbeatConfig.h"
 #include "HapbeatNetInterfaces.h"
 #include "HapbeatProtocol.h"
 #include "Common/UdpSocketBuilder.h"
+#include "Containers/Ticker.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -16,6 +18,8 @@ TSharedPtr<FInternetAddr> FHapbeatEditorSender::BroadcastAddr;
 TMap<FString, double> FHapbeatEditorSender::DevicePongTimes;
 TArray<FHapbeatBroadcastRoute> FHapbeatEditorSender::BroadcastRoutes;
 uint16 FHapbeatEditorSender::Seq = 0;
+TUniquePtr<FHapbeatEditorSender::FStreamState> FHapbeatEditorSender::Stream;
+FTSTicker::FDelegateHandle FHapbeatEditorSender::StreamTickerHandle;
 
 namespace
 {
@@ -258,8 +262,149 @@ void FHapbeatEditorSender::SendPing()
 	SendDiscoveryBroadcast(FHapbeatProtocol::BuildPing(NextSeq(), UnixMicros()));
 }
 
+// ---------------------------------------------------------------------------
+// Editor-time streaming
+// ---------------------------------------------------------------------------
+
+void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, const FString& Target, bool bLoop)
+{
+	if (Clip == nullptr || Clip->Pcm16.Num() == 0 || Clip->SampleRate <= 0 || Clip->NumChannels <= 0)
+	{
+		UE_LOG(LogHapbeatEditorSender, Warning,
+			TEXT("[Hapbeat] Editor stream: the entry has no usable clip (import a 16-bit PCM .wav into the Hapbeat Clip asset)."));
+		return;
+	}
+	if (!EnsureSocket())
+	{
+		return;
+	}
+
+	// Only one at a time: the device mixes into a single ring buffer, so two
+	// editor streams would interleave into noise rather than layer.
+	StopStream();
+
+	Stream = MakeUnique<FStreamState>();
+	Stream->SampleRate = Clip->SampleRate;
+	Stream->Channels = Clip->NumChannels;
+	Stream->Target = Target;
+	Stream->bLoop = bLoop;
+	Stream->Offset = 0;
+	Stream->StartTime = FPlatformTime::Seconds();
+
+	// Premultiply here so STREAM_BEGIN can carry 1.0, matching the runtime
+	// streamer -- the device applies the BEGIN gain verbatim, so sending the
+	// gain there as well would square it.
+	Stream->Pcm16 = Clip->Pcm16;
+	if (!FMath::IsNearlyEqual(Gain, 1.0f))
+	{
+		int16* Samples = reinterpret_cast<int16*>(Stream->Pcm16.GetData());
+		const int32 SampleCount = Stream->Pcm16.Num() / 2;
+		for (int32 Index = 0; Index < SampleCount; ++Index)
+		{
+			Samples[Index] = static_cast<int16>(FMath::Clamp(
+				FMath::RoundToInt(static_cast<float>(Samples[Index]) * Gain), -32768, 32767));
+		}
+	}
+
+	const uint32 TotalSamples = static_cast<uint32>(Stream->Pcm16.Num() / 2);
+	SendRouted(FHapbeatProtocol::BuildStreamBegin(
+		NextSeq(),
+		static_cast<uint16>(Stream->SampleRate),
+		static_cast<uint8>(Stream->Channels),
+		FHapbeatProtocol::AudioFormatPcm16,
+		TotalSamples,
+		1.0f,
+		Target));
+
+	StreamTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+		FTickerDelegate::CreateStatic(&FHapbeatEditorSender::TickStream));
+}
+
+bool FHapbeatEditorSender::IsStreaming()
+{
+	return Stream.IsValid();
+}
+
+void FHapbeatEditorSender::StopStream()
+{
+	if (StreamTickerHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(StreamTickerHandle);
+		StreamTickerHandle.Reset();
+	}
+	if (Stream.IsValid())
+	{
+		SendRouted(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
+		Stream.Reset();
+	}
+}
+
+bool FHapbeatEditorSender::TickStream(float /*DeltaSeconds*/)
+{
+	if (!Stream.IsValid())
+	{
+		StreamTickerHandle.Reset();
+		return false;
+	}
+
+	const int32 BytesPerFrame = Stream->Channels * 2;
+	const double BytesPerSecond = static_cast<double>(Stream->SampleRate) * BytesPerFrame;
+
+	// Stay this far ahead of the wall clock. The device plays from a ring
+	// buffer, so the lead has to cover the gap between two editor ticks --
+	// which is not a fixed rate and stalls outright while a modal dialog is up.
+	constexpr double LeadSeconds = 0.15;
+
+	const double Elapsed = FPlatformTime::Seconds() - Stream->StartTime;
+	int32 SendUpTo = static_cast<int32>((Elapsed + LeadSeconds) * BytesPerSecond);
+	SendUpTo -= SendUpTo % BytesPerFrame; // never split a frame
+	SendUpTo = FMath::Min(SendUpTo, Stream->Pcm16.Num());
+
+	while (Stream->Offset < SendUpTo)
+	{
+		int32 ChunkBytes = FMath::Min(SendUpTo - Stream->Offset, FHapbeatProtocol::StreamDataMaxPayload);
+		ChunkBytes -= ChunkBytes % BytesPerFrame;
+		if (ChunkBytes <= 0)
+		{
+			break;
+		}
+		SendRouted(FHapbeatProtocol::BuildStreamData(
+			NextSeq(), static_cast<uint32>(Stream->Offset), Stream->Pcm16.GetData() + Stream->Offset, ChunkBytes));
+		Stream->Offset += ChunkBytes;
+	}
+
+	if (Stream->Offset >= Stream->Pcm16.Num())
+	{
+		if (Stream->bLoop)
+		{
+			// Re-BEGIN rather than continuing the offset: the device treats the
+			// offset as a position inside one clip, so it has to be restarted.
+			Stream->Offset = 0;
+			Stream->StartTime = FPlatformTime::Seconds();
+			SendRouted(FHapbeatProtocol::BuildStreamBegin(
+				NextSeq(),
+				static_cast<uint16>(Stream->SampleRate),
+				static_cast<uint8>(Stream->Channels),
+				FHapbeatProtocol::AudioFormatPcm16,
+				static_cast<uint32>(Stream->Pcm16.Num() / 2),
+				1.0f,
+				Stream->Target));
+			return true;
+		}
+
+		SendRouted(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
+		Stream.Reset();
+		StreamTickerHandle.Reset();
+		return false;
+	}
+
+	return true;
+}
+
 void FHapbeatEditorSender::Shutdown()
 {
+	StopStream();
+
 	if (Socket != nullptr)
 	{
 		if (ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM))

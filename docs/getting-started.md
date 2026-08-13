@@ -396,7 +396,8 @@ SDK はこれを分離する仕組みを持っています。
 ### 専用ウィンドウで編集する（推奨）
 
 エントリが増えると Details パネルは縦一列で見通しが悪くなります。
-**ウィンドウ → Tools → Hapbeat Event Map** に専用エディタがあります。
+**Tools メニュー → Hapbeat Event Map** に専用エディタがあります
+（アセットをダブルクリックして開く Details パネルとは別のウィンドウです）。
 
 - **左**: エントリ一覧（表示名・イベント ID・モード）
 - **右**: 選択したエントリだけを、**Identity / Event / Playback / Targeting /
@@ -406,6 +407,24 @@ SDK はこれを分離する仕組みを持っています。
 したまま複数の EventMap を行き来できます。Targeting は `Player` / `Position` /
 `Group` に分解して編集でき、結果の `Target` 文字列もその場で確認・直接編集
 できます。Details パネル側の編集も従来どおり使えます。
+
+**Test セクションの Test Play は Command / StreamClip の両方に対応**しています。
+StreamClip のエントリでは再生（PIE）に入らずにその場でストリーミングし、
+Stop で止まります。
+
+### StreamClip に音源を割り当てる
+
+`Mode` を **CLIP (Stream Clip)** にすると **Stream Clip** 欄が出ます。
+右の **Import WAV...** を押して 16-bit PCM の `.wav` を選べば、
+**Hapbeat Clip アセットが EventMap の隣に自動生成されて割り当てられます**
+（既にアセットがあるならピッカーから選んでも構いません）。
+
+> **なぜ `.wav` や Sound Wave を直接参照しないのか。**
+> パッケージ後の `USoundWave` はプラットフォーム圧縮された音声しか持たず、
+> このプロトコルが送る生 PCM を安定して取り出せません（エディタでは動いて
+> パッケージ版で無音になる類の壊れ方をします）。そのため SDK 側の
+> `Hapbeat Clip` アセットに PCM を保持しています。上のボタンは、その制約を
+> ユーザーの手作業にしないためのものです。
 
 > **`Hapbeat Clip`** アセット（§6 のストリーミング用）も、同じ
 > **Hapbeat** カテゴリから同じ手順で作成できます。

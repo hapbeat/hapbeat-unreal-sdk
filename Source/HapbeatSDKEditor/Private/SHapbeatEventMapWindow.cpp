@@ -9,9 +9,20 @@
 #include "HapbeatTriggerComponent.h"
 
 #include "AssetRegistry/AssetData.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetToolsModule.h"
+#include "DesktopPlatformModule.h"
 #include "Editor.h"
 #include "EngineUtils.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
+#include "IAssetTools.h"
+#include "IDesktopPlatform.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
+#include "Misc/Paths.h"
+#include "UObject/Package.h"
 #include "PropertyCustomizationHelpers.h"
 #include "ScopedTransaction.h"
 #include "Styling/AppStyle.h"
@@ -550,6 +561,86 @@ FReply SHapbeatEventMapWindow::OnAddEntryClicked()
 	return FReply::Handled();
 }
 
+FReply SHapbeatEventMapWindow::OnImportWavClicked()
+{
+	UHapbeatEventMap* Map = WeakEventMap.Get();
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (Map == nullptr || DesktopPlatform == nullptr || FindSelectedEntry() == nullptr)
+	{
+		return FReply::Handled();
+	}
+
+	// Default to the bundled sample kits: that is where a first-time user's
+	// WAVs actually are.
+	FString DefaultPath;
+	if (const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("HapbeatSDK")))
+	{
+		DefaultPath = FPaths::Combine(Plugin->GetContentDir(), TEXT("HapbeatSamples"));
+	}
+
+	TArray<FString> Filenames;
+	const bool bPicked = DesktopPlatform->OpenFileDialog(
+		FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr),
+		LOCTEXT("ImportWavTitle", "Select a 16-bit PCM .wav").ToString(),
+		DefaultPath, TEXT(""), TEXT("WAV audio (*.wav)|*.wav"),
+		EFileDialogFlags::None, Filenames);
+	if (!bPicked || Filenames.Num() == 0)
+	{
+		return FReply::Handled();
+	}
+
+	TArray<uint8> WavBytes;
+	if (!FFileHelper::LoadFileToArray(WavBytes, *Filenames[0]))
+	{
+		RefreshSummary = FText::Format(LOCTEXT("WavReadFailed", "Could not read {0}"),
+			FText::FromString(FPaths::GetCleanFilename(Filenames[0])));
+		return FReply::Handled();
+	}
+
+	// Create the asset beside the Event Map, named after the WAV. A unique name
+	// keeps importing the same file twice from silently replacing the first.
+	const FString MapPackagePath = FPackageName::GetLongPackagePath(Map->GetOutermost()->GetName());
+	const FString BaseName = FString::Printf(TEXT("HC_%s"),
+		*FPaths::GetBaseFilename(Filenames[0]));
+
+	FString PackageName;
+	FString AssetName;
+	FAssetToolsModule& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	AssetTools.Get().CreateUniqueAssetName(MapPackagePath / BaseName, TEXT(""), PackageName, AssetName);
+
+	UPackage* Package = CreatePackage(*PackageName);
+	if (Package == nullptr)
+	{
+		return FReply::Handled();
+	}
+
+	int32 SampleRate = 0;
+	int32 Channels = 0;
+	TArray<uint8> Pcm16;
+	FString Error;
+	if (!UHapbeatClip::ParseWav(WavBytes, SampleRate, Channels, Pcm16, Error))
+	{
+		RefreshSummary = FText::Format(LOCTEXT("WavParseFailed", "{0}: {1}"),
+			FText::FromString(FPaths::GetCleanFilename(Filenames[0])), FText::FromString(Error));
+		return FReply::Handled();
+	}
+
+	UHapbeatClip* Clip = NewObject<UHapbeatClip>(Package, FName(*AssetName), RF_Public | RF_Standalone);
+	Clip->SampleRate = SampleRate;
+	Clip->NumChannels = Channels;
+	Clip->Pcm16 = MoveTemp(Pcm16);
+	Clip->MarkPackageDirty();
+	FAssetRegistryModule::AssetCreated(Clip);
+
+	ModifySelectedEntry(LOCTEXT("SetStreamClipFromWav", "Import Hapbeat Stream Clip"),
+		[Clip](FHapbeatEventEntry& Entry) { Entry.StreamClip = Clip; });
+
+	RefreshSummary = FText::Format(
+		LOCTEXT("WavImported", "Created {0} ({1} Hz, {2} ch). Save the new asset to keep it."),
+		FText::FromString(AssetName), FText::AsNumber(SampleRate), FText::AsNumber(Channels));
+	return FReply::Handled();
+}
+
 FReply SHapbeatEventMapWindow::OnRemoveEntryClicked()
 {
 	UHapbeatEventMap* Map = WeakEventMap.Get();
@@ -793,25 +884,40 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildEventSection()
 				.Visibility(this, &SHapbeatEventMapWindow::GetStreamClipVisibility)
 				[
 					MakeRow(LOCTEXT("StreamClipRow", "Stream Clip"),
-						LOCTEXT("StreamClipTooltip", "Clip streamed over UDP as PCM16 (Stream Clip mode only)."),
-						SNew(SObjectPropertyEntryBox)
-						.AllowedClass(UHapbeatClip::StaticClass())
-						.AllowClear(true)
-						.DisplayUseSelected(true)
-						.DisplayBrowse(true)
-						.ObjectPath_Lambda([this]
-						{
-							const FHapbeatEventEntry* Entry = FindSelectedEntry();
-							return Entry != nullptr ? Entry->StreamClip.ToString() : FString();
-						})
-						.OnObjectChanged_Lambda([this](const FAssetData& AssetData)
-						{
-							ModifySelectedEntry(LOCTEXT("SetStreamClip", "Set Hapbeat Stream Clip"),
-								[&AssetData](FHapbeatEventEntry& Entry)
+						LOCTEXT("StreamClipTooltip",
+							"Audio streamed to the device as PCM16 (Stream Clip mode only). Import a .wav with the button "
+							"on the right, or pick a Hapbeat Clip asset you already have."),
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center)
+							[
+								SNew(SObjectPropertyEntryBox)
+								.AllowedClass(UHapbeatClip::StaticClass())
+								.AllowClear(true)
+								.DisplayUseSelected(true)
+								.DisplayBrowse(true)
+								.ObjectPath_Lambda([this]
 								{
-									Entry.StreamClip = Cast<UHapbeatClip>(AssetData.GetAsset());
-								});
-						}))
+									const FHapbeatEventEntry* Entry = FindSelectedEntry();
+									return Entry != nullptr ? Entry->StreamClip.ToString() : FString();
+								})
+								.OnObjectChanged_Lambda([this](const FAssetData& AssetData)
+								{
+									ModifySelectedEntry(LOCTEXT("SetStreamClip", "Set Hapbeat Stream Clip"),
+										[&AssetData](FHapbeatEventEntry& Entry)
+										{
+											Entry.StreamClip = Cast<UHapbeatClip>(AssetData.GetAsset());
+										});
+								})
+							]
+						+ SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f, 0.0f, 0.0f)
+							[
+								SNew(SButton)
+								.Text(LOCTEXT("ImportWav", "Import WAV..."))
+								.ToolTipText(LOCTEXT("ImportWavTooltip",
+									"Pick a 16-bit PCM .wav; a Hapbeat Clip asset is created next to this Event Map and assigned here."))
+								.OnClicked(this, &SHapbeatEventMapWindow::OnImportWavClicked)
+							]
+					)
 				]
 			]);
 }
@@ -1075,11 +1181,7 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 					[
 						SNew(SButton)
 						.Text(LOCTEXT("TestPlay", "Test Play"))
-						.IsEnabled_Lambda([this]
-						{
-							const FHapbeatEventEntry* Entry = FindSelectedEntry();
-							return Entry != nullptr && Entry->Mode == EHapticMode::Command;
-						})
+						.IsEnabled_Lambda([this] { return FindSelectedEntry() != nullptr; })
 						.ToolTipText_Lambda([this]
 						{
 							const FHapbeatEventEntry* Entry = FindSelectedEntry();
@@ -1089,20 +1191,29 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 							}
 							if (Entry->Mode == EHapticMode::StreamClip)
 							{
-								return LOCTEXT("TestPlayStreamNote",
-									"Stream Clip entries can't be test-played from the editor in v1 (the device has no "
-									"local clip for them) -- enter PIE and use the runtime Stream Clip API instead.");
+								return LOCTEXT("TestPlayStreamHint",
+									"Stream this entry's clip to the device from here -- no need to enter Play.");
 							}
 							return LOCTEXT("TestPlayHint", "Send a PLAY command for this entry at its effective gain.");
 						})
 						.OnClicked_Lambda([this]
 						{
-							if (const FHapbeatEventEntry* Entry = FindSelectedEntry())
+							const FHapbeatEventEntry* Entry = FindSelectedEntry();
+							if (Entry == nullptr)
 							{
-								if (Entry->Mode == EHapticMode::Command)
-								{
-									FHapbeatEditorSender::SendPlay(Entry->GetEventId(), Entry->GetEffectiveGain(), Entry->Target);
-								}
+								return FReply::Handled();
+							}
+							if (Entry->Mode == EHapticMode::StreamClip)
+							{
+								// LoadSynchronous: the reference is soft, and the
+								// designer clicking Test expects the clip now.
+								FHapbeatEditorSender::StartStream(
+									Entry->StreamClip.LoadSynchronous(),
+									Entry->GetEffectiveGain(), Entry->Target, Entry->bLoop);
+							}
+							else
+							{
+								FHapbeatEditorSender::SendPlay(Entry->GetEventId(), Entry->GetEffectiveGain(), Entry->Target);
 							}
 							return FReply::Handled();
 						})
@@ -1111,10 +1222,19 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 					[
 						SNew(SButton)
 						.Text(LOCTEXT("Stop", "Stop"))
-						.ToolTipText(LOCTEXT("StopTooltip", "Send STOP for the selected entry's event id."))
+						.ToolTipText(LOCTEXT("StopTooltip", "Stop this entry: STOP for a Command entry, STREAM_END for a stream."))
 						.OnClicked_Lambda([this]
 						{
-							if (const FHapbeatEventEntry* Entry = FindSelectedEntry())
+							const FHapbeatEventEntry* Entry = FindSelectedEntry();
+							if (Entry == nullptr)
+							{
+								return FReply::Handled();
+							}
+							if (Entry->Mode == EHapticMode::StreamClip)
+							{
+								FHapbeatEditorSender::StopStream();
+							}
+							else
 							{
 								FHapbeatEditorSender::SendStop(Entry->GetEventId(), Entry->Target);
 							}

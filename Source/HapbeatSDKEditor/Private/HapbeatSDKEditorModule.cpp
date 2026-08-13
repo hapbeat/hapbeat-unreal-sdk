@@ -9,6 +9,7 @@
 #include "HapbeatEventMapCustomization.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatTriggerComponentCustomization.h"
+#include "HapbeatUpdateCheck.h"
 #include "SHapbeatEventMapWindow.h"
 
 #include "AssetToolsModule.h"
@@ -16,6 +17,7 @@
 #include "IAssetTools.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
+#include "ToolMenus.h"
 
 #define LOCTEXT_NAMESPACE "HapbeatSDKEditor"
 
@@ -58,6 +60,11 @@ void FHapbeatSDKEditorModule::StartupModule()
 	// several Event Maps, which is how the Unity window is used in practice.
 	SHapbeatEventMapWindow::RegisterTabSpawner();
 
+	// Tools menu entries + the once-per-session release-feed notice (DEC-053).
+	// Deferred until menus exist: StartupModule can run before UToolMenus is ready.
+	UToolMenus::RegisterStartupCallback(
+		FSimpleMulticastDelegate::FDelegate::CreateStatic(&FHapbeatUpdateCheck::Register));
+
 	// Belt-and-braces socket cleanup at the end of every PIE session (see
 	// FHapbeatEditorSender's class doc for why this can't actually collide
 	// with UHapbeatSubsystem's runtime socket even without this).
@@ -73,6 +80,7 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 	EndPieHandle.Reset();
 
 	SHapbeatEventMapWindow::UnregisterTabSpawner();
+	FHapbeatUpdateCheck::Unregister();
 
 	FHapbeatEditorSender::Shutdown();
 

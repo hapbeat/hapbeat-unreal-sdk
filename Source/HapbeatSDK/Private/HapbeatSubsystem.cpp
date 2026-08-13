@@ -87,6 +87,21 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	OverridePlayer = NormalizeAddressOverride(PersistedPlayer);
 	OverrideGroup = NormalizeAddressOverride(PersistedGroup);
 
+	// A build-pinned axis wins over whatever was persisted: the point of pinning
+	// is that this build always addresses the same seat, so a value left behind
+	// by an earlier run on the same machine must not survive it.
+	if (const UHapbeatConfig* PinConfig = GetDefault<UHapbeatConfig>())
+	{
+		if (NormalizeAddressOverride(PinConfig->ForcedOverridePlayer) != AddressOverrideDisabled)
+		{
+			OverridePlayer = NormalizeAddressOverride(PinConfig->ForcedOverridePlayer);
+		}
+		if (NormalizeAddressOverride(PinConfig->ForcedOverrideGroup) != AddressOverrideDisabled)
+		{
+			OverrideGroup = NormalizeAddressOverride(PinConfig->ForcedOverrideGroup);
+		}
+	}
+
 	// Auto-connect at startup, matching the Unity SDK's Awake() auto-connect.
 	// GameInstanceSubsystems exist only in PIE / packaged game (not the editor
 	// itself), so this never opens a socket in edit mode.

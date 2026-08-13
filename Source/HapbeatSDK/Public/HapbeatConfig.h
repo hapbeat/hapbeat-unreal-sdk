@@ -58,6 +58,23 @@ public:
 			ClampMin = "0.0", ClampMax = "0.5"))
 	float HapticDelaySeconds = 0.0f;
 
+	// ---- Address override pinned by the build ----
+	//
+	// A build shipped for one seat / one booth station wants its player (or
+	// group) fixed, with no way for the wearer to wander off it. A pinned axis
+	// is applied at startup ahead of any persisted value, and the in-game panel
+	// dims that axis rather than pretending it can be edited.
+
+	UPROPERTY(EditAnywhere, config, Category = "Addressing",
+		meta = (Tooltip = "Player number every command is forced to, for builds pinned to one seat. -1 = not pinned (the wearer may choose).",
+			ClampMin = "-1", ClampMax = "99"))
+	int32 ForcedOverridePlayer = -1;
+
+	UPROPERTY(EditAnywhere, config, Category = "Addressing",
+		meta = (Tooltip = "Group number every command is forced to. -1 = not pinned (the wearer may choose).",
+			ClampMin = "-1", ClampMax = "99"))
+	int32 ForcedOverrideGroup = -1;
+
 	// ---- Logging ----
 
 	UPROPERTY(EditAnywhere, config, Category = "Logging",

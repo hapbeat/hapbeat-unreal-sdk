@@ -16,6 +16,8 @@ public class HapbeatSDK : ModuleRules
 			"Networking",
 			"DeveloperSettings", // UHapbeatConfig : UDeveloperSettings (Project Settings page)
 			"PhysicsCore",       // FBodyInstance read in the collision trigger's setup hint
+			"Slate",             // in-game address-override panel (works in packaged builds, no UMG asset to author)
+			"SlateCore",
 		});
 
 		if (Target.Platform == UnrealTargetPlatform.Win64)

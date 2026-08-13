@@ -5,6 +5,7 @@
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "HAL/FileManager.h"
+#include "Interfaces/IPluginManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -16,19 +17,36 @@ TMap<FHapbeatManifestEventKey, float> FHapbeatManifestIntensityBaker::ScanProjec
 {
 	TMap<FHapbeatManifestEventKey, float> Result;
 
+	// Where to look. The project's own Content is the obvious place, but a Kit
+	// can equally ship inside a plugin -- this SDK's own sample Kits do, under
+	// HapbeatSDK/Content/HapbeatSamples/. Scanning only the project directory
+	// made Refresh Intensities report "0 manifests" on a stock install, with
+	// every bundled sample sitting right there but out of reach.
+	TArray<FString> SearchRoots;
+	SearchRoots.Add(FPaths::ProjectContentDir());
+	for (const TSharedRef<IPlugin>& Plugin : IPluginManager::Get().GetEnabledPluginsWithContent())
+	{
+		SearchRoots.AddUnique(Plugin->GetContentDir());
+	}
+
 	// Scan *.json and filter by "manifest" in the filename — the same leniency as
 	// Unity (HapbeatEventMapAutoIntensityRefresher.IsManifestPath), so a bare
 	// "manifest.json" (kit-format.md §3 diagram) is found, not only
 	// "<kit>-manifest.json".
-	TArray<FString> JsonFiles;
-	IFileManager::Get().FindFilesRecursive(JsonFiles, *FPaths::ProjectContentDir(), TEXT("*.json"),
-		/*Files=*/true, /*Directories=*/false);
 	TArray<FString> ManifestFiles;
-	for (const FString& JsonPath : JsonFiles)
+	for (const FString& Root : SearchRoots)
 	{
-		if (FPaths::GetCleanFilename(JsonPath).Contains(TEXT("manifest"), ESearchCase::IgnoreCase))
+		TArray<FString> JsonFiles;
+		IFileManager::Get().FindFilesRecursive(JsonFiles, *Root, TEXT("*.json"),
+			/*Files=*/true, /*Directories=*/false);
+		for (const FString& JsonPath : JsonFiles)
 		{
-			ManifestFiles.Add(JsonPath);
+			if (FPaths::GetCleanFilename(JsonPath).Contains(TEXT("manifest"), ESearchCase::IgnoreCase))
+			{
+				// A plugin mounted inside the project would otherwise be walked
+				// twice, double-counting the scan total.
+				ManifestFiles.AddUnique(JsonPath);
+			}
 		}
 	}
 

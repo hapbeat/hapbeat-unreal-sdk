@@ -39,25 +39,6 @@ namespace
 		return true;
 	}
 
-	/** Shared dispatch. Returns the stream handle when the entry is a Stream Clip. */
-	UHapbeatStreamPlayback* FireEntry(UHapbeatSubsystem* Subsystem, const FHapbeatEventEntry& Entry, float GainMultiplier)
-	{
-		const float Gain = Entry.GetEffectiveGain() * GainMultiplier;
-
-		if (Entry.Mode == EHapticMode::StreamClip)
-		{
-			if (UHapbeatClip* Clip = Entry.StreamClip.LoadSynchronous())
-			{
-				return Subsystem->StreamClip(Clip, Gain, 1.0f, Entry.Target, Entry.bLoop);
-			}
-			UE_LOG(LogHapbeatAnim, Warning,
-				TEXT("[Hapbeat] Entry '%s' is Stream Clip mode but has no clip assigned."), *Entry.GetEventId());
-			return nullptr;
-		}
-
-		Subsystem->Play(Entry.GetEventId(), Gain, Entry.Target);
-		return nullptr;
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +65,7 @@ void UHapbeatAnimNotify::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceB
 			*Entry.GetEventId());
 	}
 
-	FireEntry(Subsystem, Entry, GainMultiplier);
+	Subsystem->PlayEntry(EventMap, EntryId, GainMultiplier);
 }
 
 FString UHapbeatAnimNotify::GetNotifyName_Implementation() const
@@ -116,7 +97,7 @@ void UHapbeatAnimNotifyState::NotifyBegin(USkeletalMeshComponent* MeshComp, UAni
 		return;
 	}
 
-	if (UHapbeatStreamPlayback* Playback = FireEntry(Subsystem, Entry, GainMultiplier))
+	if (UHapbeatStreamPlayback* Playback = Subsystem->PlayEntry(EventMap, EntryId, GainMultiplier))
 	{
 		ActivePlaybacks.Add(MeshComp, Playback);
 	}

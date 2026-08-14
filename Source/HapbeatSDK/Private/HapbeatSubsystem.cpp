@@ -5,6 +5,8 @@
 #include "HapbeatConfig.h"
 #include "HapbeatClip.h"
 #include "HapbeatNetInterfaces.h"
+#include "HapbeatEventEntry.h"
+#include "HapbeatEventMap.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamRunnable.h"
 #include "HapbeatTargetLibrary.h"
@@ -261,6 +263,62 @@ void UHapbeatSubsystem::StopAll(const FString& Target)
 {
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
 	SendCommandPacket(FHapbeatProtocol::BuildStopAll(NextSeq(), ResolvedTarget), ResolvedTarget);
+}
+
+UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier)
+{
+	FHapbeatEventEntry Entry;
+	if (Map == nullptr || !Map->FindById(EntryId, Entry))
+	{
+		UE_LOG(LogHapbeat, Warning,
+			TEXT("PlayEntry: entry %s is not in '%s'. It was probably deleted after the caller was authored."),
+			*EntryId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Map));
+		return nullptr;
+	}
+
+	// Authored gain x this call's multiplier. GetEffectiveGain() already folds in
+	// the manifest intensity, because the device plays req.gain verbatim and
+	// never reads the manifest itself.
+	const float Gain = Entry.GetEffectiveGain() * GainMultiplier;
+
+	if (Entry.Mode == EHapticMode::StreamClip)
+	{
+		UHapbeatClip* Clip = Entry.StreamClip.LoadSynchronous();
+		if (Clip == nullptr)
+		{
+			UE_LOG(LogHapbeat, Warning,
+				TEXT("PlayEntry: entry '%s' is Stream Clip mode but has no clip assigned."), *Entry.GetEventId());
+			return nullptr;
+		}
+		return StreamClip(Clip, Gain, 1.0f, Entry.Target, Entry.bLoop);
+	}
+
+	const FString EventId = Entry.GetEventId();
+	if (EventId.IsEmpty())
+	{
+		UE_LOG(LogHapbeat, Warning, TEXT("PlayEntry: Command entry has an empty event id (set Event Name)."));
+		return nullptr;
+	}
+	Play(EventId, Gain, Entry.Target);
+	return nullptr;
+}
+
+void UHapbeatSubsystem::StopEntry(UHapbeatEventMap* Map, FGuid EntryId)
+{
+	FHapbeatEventEntry Entry;
+	if (Map == nullptr || !Map->FindById(EntryId, Entry))
+	{
+		return;
+	}
+
+	if (Entry.Mode == EHapticMode::StreamClip)
+	{
+		// One stream session at a time, so there is nothing finer to stop here.
+		// Hold the handle PlayEntry returned to stop just that playback instead.
+		StopStream();
+		return;
+	}
+	Stop(Entry.GetEventId(), Entry.Target);
 }
 
 void UHapbeatSubsystem::Ping()

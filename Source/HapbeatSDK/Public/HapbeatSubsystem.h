@@ -15,6 +15,7 @@ class FInternetAddr;
 class FHapbeatStreamRunnable;
 class FRunnableThread;
 class UHapbeatClip;
+class UHapbeatEventMap;
 class UHapbeatStreamPlayback;
 
 /** Raised on the game thread when the device set goes 0 -> positive (liveness, not socket-open). */
@@ -82,6 +83,32 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void StopAll(const FString& Target = TEXT(""));
+
+	/**
+	 * Play an entry of an Event Map -- the native way to fire authored haptics
+	 * from Blueprint or C++.
+	 *
+	 * Everything the entry defines (Command vs Stream Clip, the clip, gain,
+	 * target, loop) comes from the asset, so the caller only says WHICH entry
+	 * and WHEN. That is the whole point of the Event Map: the values stay
+	 * editable by whoever is tuning the feel, without touching code.
+	 *
+	 * Prefer this over Play(EventId): a raw event id bypasses the Event Map, and
+	 * with it the authored gain and target. UHapbeatTriggerComponent builds on
+	 * the same idea and adds cooldown, per-instance gain and stream handles --
+	 * use the component when an actor fires the same entry repeatedly, and this
+	 * when the call site is one-off.
+	 *
+	 * @param GainMultiplier Scales the entry's authored gain for this call only.
+	 * @return The stream handle for a Stream Clip entry (for live gain / pan
+	 *         modulation, or to stop just this playback); null for Command.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (AdvancedDisplay = "2"))
+	UHapbeatStreamPlayback* PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier = 1.0f);
+
+	/** Stop an entry started by PlayEntry: STOP for Command, ends the stream for Stream Clip. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	void StopEntry(UHapbeatEventMap* Map, FGuid EntryId);
 
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void Ping();

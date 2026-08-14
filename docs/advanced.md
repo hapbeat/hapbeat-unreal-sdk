@@ -2,7 +2,7 @@
 
 [はじめかた](./getting-started.md) を一通り終えたあとの話題です。
 
-### 複数の HMD に 1 台ずつ Hapbeat を割り当てる
+## 複数の HMD に 1 台ずつ Hapbeat を割り当てる
 
 同一ビルドを複数台に配って、**端末ごとに別の Hapbeat へ送る**ための機能です。
 EventMap やトリガを一切書き換えずに、**すべての送信先を実行時に上書き**します。
@@ -16,12 +16,12 @@ Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
 - App Name に `<p>` / `<g>` を含めておくと、デバイスの OLED に実際の番号が表示されます
   （例: `Booth <p>` → `Booth 1`）
 
-### 送信先を絞る（Target）
+## 送信先を絞る（Target）
 
 `Target` は `player_1/pos_chest` のようなパス文字列です。空文字なら全デバイスに送ります。
 `*` はワイルドカードとして使えます（例: `*/pos_neck` = 全プレイヤーの首）。
 
-### Showcase サンプル
+## Showcase サンプル
 
 主要な実装手法をゾーン別に確認できます。BasicExample と同様、アクターをレベルに置いて再生します。
 

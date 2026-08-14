@@ -82,6 +82,16 @@ private:
 	 */
 	static void SendRouted(const TArray<uint8>& Packet);
 
+	/** Unicast to known devices, count sent. Shared by SendRouted and SendStreamPacket. */
+	static int32 SendToKnownDevices(const TArray<uint8>& Packet);
+
+	/**
+	 * Route one stream packet. Identical to SendRouted minus the trailing
+	 * discovery PING: a stream sends ~45 packets a second, and a PING after each
+	 * one floods the network badly enough to chop up the very audio it carries.
+	 */
+	static void SendStreamPacket(const TArray<uint8>& Packet);
+
 	/**
 	 * PING every candidate broadcast destination.
 	 *
@@ -135,6 +145,8 @@ private:
 		bool bLoop = false;
 		int32 Offset = 0;
 		double StartTime = 0.0;
+		/** Last discovery PING, so a long loop keeps its unicast destinations. */
+		double LastPingTime = 0.0;
 	};
 
 	static TUniquePtr<FStreamState> Stream;

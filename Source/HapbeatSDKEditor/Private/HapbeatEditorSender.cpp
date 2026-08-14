@@ -160,15 +160,15 @@ void FHapbeatEditorSender::SendDiscoveryBroadcast(const TArray<uint8>& Packet)
 	}
 }
 
-void FHapbeatEditorSender::SendRouted(const TArray<uint8>& Packet)
+int32 FHapbeatEditorSender::SendToKnownDevices(const TArray<uint8>& Packet)
 {
 	if (!EnsureSocket())
 	{
-		return;
+		return 0;
 	}
 
-	// Refresh what we know, then re-arm discovery for the next click. The PING
-	// is idempotent, so sending it alongside a command is free.
+	// Pick up any PONGs that arrived since the last send, so the destination
+	// list is as current as it can be without a receive thread.
 	DrainReplies();
 
 	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
@@ -197,7 +197,12 @@ void FHapbeatEditorSender::SendRouted(const TArray<uint8>& Packet)
 		}
 	}
 
-	if (SentTo == 0)
+	return SentTo;
+}
+
+void FHapbeatEditorSender::SendRouted(const TArray<uint8>& Packet)
+{
+	if (SendToKnownDevices(Packet) == 0)
 	{
 		// Nobody has answered yet. Broadcasting is the fallback, not an
 		// addition: sending both would fire the haptic twice on firmware
@@ -214,8 +219,24 @@ void FHapbeatEditorSender::SendRouted(const TArray<uint8>& Packet)
 		SendSingleBroadcast(Packet);
 	}
 
-	// Keep the table warm for the next click.
+	// Re-arm discovery for the next click. Cheap here because a command is one
+	// packet per click -- see SendStreamPacket for why a stream must not do this.
 	SendDiscoveryBroadcast(FHapbeatProtocol::BuildPing(NextSeq(), UnixMicros()));
+}
+
+void FHapbeatEditorSender::SendStreamPacket(const TArray<uint8>& Packet)
+{
+	// Same routing as SendRouted, WITHOUT the trailing discovery PING.
+	//
+	// A stream is ~45 packets per second, and SendRouted broadcasts a PING after
+	// each one -- so streaming through it flooded the air with broadcast frames
+	// and made every device answer 45 times a second. That congestion, not the
+	// audio path, is what chopped up editor test playback. Discovery for a
+	// stream happens once, in StartStream, plus the slow refresh in TickStream.
+	if (SendToKnownDevices(Packet) == 0)
+	{
+		SendSingleBroadcast(Packet);
+	}
 }
 
 uint16 FHapbeatEditorSender::NextSeq()
@@ -298,6 +319,7 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 	Stream->bLoop = bLoop;
 	Stream->Offset = 0;
 	Stream->StartTime = FPlatformTime::Seconds();
+	Stream->LastPingTime = Stream->StartTime;
 
 	// Premultiply here so STREAM_BEGIN can carry 1.0, matching the runtime
 	// streamer -- the device applies the BEGIN gain verbatim, so sending the
@@ -315,7 +337,7 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 	}
 
 	const uint32 TotalSamples = static_cast<uint32>(Stream->Pcm16.Num() / 2);
-	SendRouted(FHapbeatProtocol::BuildStreamBegin(
+	SendStreamPacket(FHapbeatProtocol::BuildStreamBegin(
 		NextSeq(),
 		static_cast<uint16>(Stream->SampleRate),
 		static_cast<uint8>(Stream->Channels),
@@ -342,7 +364,7 @@ void FHapbeatEditorSender::StopStream()
 	}
 	if (Stream.IsValid())
 	{
-		SendRouted(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
+		SendStreamPacket(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
 		Stream.Reset();
 	}
 }
@@ -353,6 +375,16 @@ bool FHapbeatEditorSender::TickStream(float /*DeltaSeconds*/)
 	{
 		StreamTickerHandle.Reset();
 		return false;
+	}
+
+	// Keep the destination list from expiring under a long loop. Entries only
+	// refresh on a PONG, and only a PING draws one, so a stream running past the
+	// TTL would silently fall back to broadcast. Slow enough not to congest.
+	const double NowSeconds = FPlatformTime::Seconds();
+	if (NowSeconds - Stream->LastPingTime > EditorDeviceTtlSeconds / 3.0)
+	{
+		Stream->LastPingTime = NowSeconds;
+		SendPing();
 	}
 
 	const int32 BytesPerFrame = Stream->Channels * 2;
@@ -376,7 +408,7 @@ bool FHapbeatEditorSender::TickStream(float /*DeltaSeconds*/)
 		{
 			break;
 		}
-		SendRouted(FHapbeatProtocol::BuildStreamData(
+		SendStreamPacket(FHapbeatProtocol::BuildStreamData(
 			NextSeq(), static_cast<uint32>(Stream->Offset), Stream->Pcm16.GetData() + Stream->Offset, ChunkBytes));
 		Stream->Offset += ChunkBytes;
 	}
@@ -389,7 +421,7 @@ bool FHapbeatEditorSender::TickStream(float /*DeltaSeconds*/)
 			// offset as a position inside one clip, so it has to be restarted.
 			Stream->Offset = 0;
 			Stream->StartTime = FPlatformTime::Seconds();
-			SendRouted(FHapbeatProtocol::BuildStreamBegin(
+			SendStreamPacket(FHapbeatProtocol::BuildStreamBegin(
 				NextSeq(),
 				static_cast<uint16>(Stream->SampleRate),
 				static_cast<uint8>(Stream->Channels),
@@ -400,7 +432,7 @@ bool FHapbeatEditorSender::TickStream(float /*DeltaSeconds*/)
 			return true;
 		}
 
-		SendRouted(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
+		SendStreamPacket(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
 		Stream.Reset();
 		StreamTickerHandle.Reset();
 		return false;

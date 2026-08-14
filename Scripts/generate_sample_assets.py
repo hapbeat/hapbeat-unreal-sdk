@@ -35,9 +35,18 @@ def plugin_content_dir():
 
 
 def create_or_replace(package_path, asset_name, asset_class, factory):
+    """
+    Reuse the asset if it is already there, rather than delete-and-recreate.
+
+    Deleting would break every reference to it -- the Event Map points at the
+    clips, and the sample actor points at the Event Map -- and a delete that the
+    editor refuses (because of those references) leaves create_asset returning
+    null. Rewriting the existing object keeps the same package and GUIDs, so a
+    regenerate is safe to run over a working project.
+    """
     full = '{}/{}'.format(package_path, asset_name)
     if unreal.EditorAssetLibrary.does_asset_exist(full):
-        unreal.EditorAssetLibrary.delete_asset(full)
+        return unreal.EditorAssetLibrary.load_asset(full)
     return unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         asset_name, package_path, asset_class, factory)
 
@@ -76,14 +85,24 @@ def parse_wav(data):
     return sample_rate, channels, pcm
 
 
-def make_clip(asset_name, wav_rel_path):
+def find_wav(kit_rel, name):
+    """Stream clips first, then install clips -- a Kit may carry either."""
+    base = plugin_content_dir()
+    for sub in ('stream-clips', 'install-clips', 'clips'):
+        cand = os.path.join(base, kit_rel, sub, name + '.wav')
+        if os.path.isfile(cand):
+            return os.path.relpath(cand, base).replace(os.sep, '/')
+    return None
+
+
+def make_clip(asset_name, wav_rel_path, package=None):
     """A UHapbeatClip holding the WAV's PCM verbatim (see the C++ class doc)."""
     wav = os.path.join(plugin_content_dir(), wav_rel_path)
     with open(wav, 'rb') as f:
         data = f.read()
     sample_rate, channels, pcm = parse_wav(data)
 
-    clip = create_or_replace(PLUGIN_CONTENT + '/BasicExample', asset_name,
+    clip = create_or_replace(package or (PLUGIN_CONTENT + '/BasicExample'), asset_name,
                              unreal.HapbeatClip, unreal.HapbeatClipFactory())
     if not unreal.HapbeatEventMapScripting.import_wav_into_clip(clip, wav):
         raise RuntimeError('import failed for ' + wav)
@@ -110,6 +129,59 @@ def main():
                   1.0, False, MANIFEST_INTENSITY, None, 'demo_command_sine_200hz')
     unreal.EditorAssetLibrary.save_loaded_asset(event_map)
     unreal.log('[Hapbeat] Generated EM_BasicExample with 3 entries.')
+
+    build_showcase()
+
+
+SHOWCASE_KIT = 'Showcase/Kit/showcase-kit'
+
+# (mode, event_name, loop). Order is not load-bearing here -- the Showcase actors
+# look their entries up by event name -- but it is kept zone by zone for reading.
+SHOWCASE_ENTRIES = [
+    ('COMMAND',     'z1_pin_hit',       False),
+    ('STREAM_CLIP', 'z2_door_open',     False),
+    ('STREAM_CLIP', 'z2_door_close',    False),
+    ('COMMAND',     'z2_door_slam',     False),
+    ('COMMAND',     'z2_door_lock',     False),
+    ('COMMAND',     'z2_door_unlock',   False),
+    ('STREAM_CLIP', 'z2_door_rattle',   False),
+    ('STREAM_CLIP', 'z3_hook_start',    False),
+    ('STREAM_CLIP', 'z3_hook_loop',     True),
+    ('STREAM_CLIP', 'z3_hook_release',  False),
+    ('STREAM_CLIP', 'z4_stream_loop',   True),
+    ('STREAM_CLIP', 'z4_slider_tick',   False),
+    ('STREAM_CLIP', 'z5_charge_loop',   True),
+    ('STREAM_CLIP', 'z5_charge_thd',    False),
+    ('STREAM_CLIP', 'z5_shot_light',    False),
+    ('STREAM_CLIP', 'z5_shot_heavy',    False),
+    ('STREAM_CLIP', 'z5_tar_hit_light', False),
+    ('STREAM_CLIP', 'z5_tar_hit_heavy', False),
+]
+
+
+def build_showcase():
+    pkg = PLUGIN_CONTENT + '/Showcase'
+    event_map = create_or_replace(pkg, 'EM_Showcase',
+                                  unreal.HapbeatEventMap, unreal.HapbeatEventMapFactory())
+    api = unreal.HapbeatEventMapScripting
+    api.clear_entries(event_map)
+
+    made = 0
+    for mode_name, event_name, loop in SHOWCASE_ENTRIES:
+        mode = getattr(unreal.HapticMode, mode_name)
+        clip = None
+        if mode_name == 'STREAM_CLIP':
+            rel = find_wav(SHOWCASE_KIT, event_name)
+            if rel is None:
+                unreal.log_warning('[Hapbeat] no wav for {} -- entry left without a clip'.format(event_name))
+            else:
+                clip = make_clip('HC_' + event_name, rel, pkg)
+        api.add_entry(event_map, mode, 'showcase-kit', event_name,
+                      1.0, loop, MANIFEST_INTENSITY, clip, event_name)
+        made += 1
+
+    unreal.EditorAssetLibrary.save_loaded_asset(event_map)
+    unreal.log('[Hapbeat] Generated EM_Showcase with {} entries.'.format(made))
 
 
 main()

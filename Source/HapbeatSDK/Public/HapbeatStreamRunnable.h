@@ -48,7 +48,7 @@ class FInternetAddr;
  *     missing-END race: only this one thread ever calls SendEnd(), and it
  *     always does so before signalling completion to the game-thread poller.
  */
-class FHapbeatStreamRunnable : public FRunnable
+class HAPBEATSDK_API FHapbeatStreamRunnable : public FRunnable
 {
 public:
 	/**

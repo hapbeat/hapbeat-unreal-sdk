@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "HapbeatNetInterfaces.h"   // FHapbeatBroadcastRoute (held by value in a TArray below)
+#include "HapbeatStreamGainMirror.h"
 
 class FSocket;
 class FInternetAddr;
@@ -52,9 +53,16 @@ public:
 	 * Command entries can be sanity-checked with a single PLAY, but a Stream
 	 * Clip only exists as audio the SDK pushes out over time, so without this
 	 * there is no way to feel one while authoring -- which made Stream Clip
-	 * entries effectively unverifiable in the editor. Paced from the core
-	 * ticker, which runs in the bare editor. Parity with Unity's
-	 * HapbeatEditorTransport.StartStream (driven by EditorApplication.update).
+	 * entries effectively unverifiable in the editor.
+	 *
+	 * Paced by the SAME dedicated-thread runnable the runtime uses. An earlier
+	 * version paced from the editor's core ticker and dropped out irregularly:
+	 * the editor tick is not a steady clock (it throttles when the window is not
+	 * being interacted with, and stalls outright behind menus and modal
+	 * dialogs), so the device's ring buffer ran dry at unpredictable moments.
+	 * That is the same failure the runtime already moved off the game thread to
+	 * avoid, so the fix is to share that implementation rather than re-tune a
+	 * second one.
 	 *
 	 * Starting a stream replaces any stream already running: the device mixes a
 	 * single ring buffer, so two overlapping editor streams would interleave
@@ -84,13 +92,6 @@ private:
 
 	/** Unicast to known devices, count sent. Shared by SendRouted and SendStreamPacket. */
 	static int32 SendToKnownDevices(const TArray<uint8>& Packet);
-
-	/**
-	 * Route one stream packet. Identical to SendRouted minus the trailing
-	 * discovery PING: a stream sends ~45 packets a second, and a PING after each
-	 * one floods the network badly enough to chop up the very audio it carries.
-	 */
-	static void SendStreamPacket(const TArray<uint8>& Packet);
 
 	/**
 	 * PING every candidate broadcast destination.
@@ -129,28 +130,22 @@ private:
 	/** Unix-epoch microseconds for the PING wire field. Mirrors UHapbeatSubsystem::UnixMicros(). */
 	static int64 UnixMicros();
 
-	/** Feeds the running stream; returns false to unregister itself when done. */
-	static bool TickStream(float DeltaSeconds);
+	/**
+	 * Blocks briefly for a PONG so the stream can be unicast from its first
+	 * chunk.
+	 *
+	 * The destination list is snapshotted when the stream thread starts, so
+	 * discovering a device a moment later does not help -- the whole stream
+	 * would broadcast, and Wi-Fi access points batch broadcast frames against
+	 * their DTIM interval. A quarter second once, before a test the user just
+	 * asked for, is a fair price for that.
+	 */
+	static void WaitForFirstDevice();
 
-	/** A stream in progress. Null when idle -- only ever one (see StartStream). */
-	struct FStreamState
-	{
-		/** Already scaled by the requested gain: STREAM_BEGIN carries 1.0 and the
-		 *  sender premultiplies, exactly as the runtime streamer does, so the
-		 *  device must not apply a second factor. */
-		TArray<uint8> Pcm16;
-		int32 SampleRate = 0;
-		int32 Channels = 0;
-		FString Target;
-		bool bLoop = false;
-		int32 Offset = 0;
-		double StartTime = 0.0;
-		/** Last discovery PING, so a long loop keeps its unicast destinations. */
-		double LastPingTime = 0.0;
-	};
-
-	static TUniquePtr<FStreamState> Stream;
-	static FTSTicker::FDelegateHandle StreamTickerHandle;
+	/** Live gain for the running stream; also how the thread is told to stop. */
+	static TSharedPtr<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> StreamMirror;
+	static class FHapbeatStreamRunnable* StreamRunnable;
+	static FRunnableThread* StreamThread;
 
 	static FSocket* Socket;
 	static TSharedPtr<FInternetAddr> BroadcastAddr;

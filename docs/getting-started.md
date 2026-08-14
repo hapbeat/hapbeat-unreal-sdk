@@ -318,15 +318,78 @@ Details パネル上部には専用の操作列も出ます:
 
 前章で作った EventMap のエントリを、実際に発火させます。
 
-> **一番手数が少ないのは [§5 のトリガコンポーネント](#5-トリガコンポーネントを使うコードなしで鳴らす)です。**
-> アクターにコンポーネントを足して EventMap とエントリを指定するだけで、
-> Blueprint も C++ も書かずに鳴らせます。この章は「自分のコードから任意の
-> タイミングで鳴らしたい」場合の説明です。
->
-> 以下の最初の例は仕組みを示すためにイベント ID を直接書いていますが、
-> **実運用では EventMap のエントリを参照します**（各項の「実運用の形」を参照）。
+### 3 つの経路と使い分け
 
-### Blueprint の場合（最短で試す）
+| | 経路 | いつ使うか |
+|---|---|---|
+| **A** | **トリガコンポーネント（宣言のみ）** | **既定。** 発火条件が Blueprint / 詳細パネルの配線で完結する場合 |
+| **B** | **トリガコンポーネント + コードから `Fire()`** | 発火条件や強さをコードで計算する場合 |
+| **C** | `Play("<イベント ID>")` を直接呼ぶ | **特殊ケースのみ**（下記） |
+
+**A と B が既定で、どちらも EventMap のエントリを参照します。** 強さ・送信先・
+ループ・遅延はアセット側に残るので、調整のたびにコンパイルし直す必要が
+ありません。A と B は併用できます。
+
+**C は EventMap を経由しない**ため、一元管理の利点（詳細パネルでの値調整、
+Wiring 一覧、遅延補正）をすべて失います。**特別な理由が無い限り使わないでください。**
+妥当なのは、EventMap で扱える範囲を超える規模・動的性が必要なときだけです。
+たとえば「100 人ぶんの心拍をプレイヤー ID 付きで個別管理する」ようなケースでは、
+EventMap に静的に並べると数百エントリになり GUI で管理できず、かつ
+**イベント ID を実行時に組み立てる**（`Play(FString::Printf(TEXT("heartbeat.player_%d"), Id))`）
+必要が出てきます。この 2 つが揃ったときに限り C が有効です。
+
+### A / B: トリガコンポーネント経由（既定）
+
+アクターに **Hapbeat Trigger** コンポーネントを足し、`Event Map` と `Entry Id`
+を指定します。`Entry Id` は**エントリ名から選べます**（GUID を手で貼る必要は
+ありません）。詳細は [§5](#5-トリガコンポーネントを使うコードなしで鳴らす)。
+
+- **A（宣言のみ）** — Blueprint でそのコンポーネントの **`Fire`** を呼ぶ配線をする。
+  コードは書きません
+- **B（コードから）** — C++ / Blueprint から `Fire()` を呼ぶ。強さを動かしたい場合は
+  `SetGainMultiplier()` を併用する
+
+強さを変えたくなったら、Event Map ウィンドウで `Gain` を動かして **Test Play**
+で確認します。Blueprint も再ビルドも触りません。
+
+C++ でコンポーネントを持たせる場合の最小形:
+
+```cpp
+#include "MyHapticActor.h"
+
+#include "HapbeatTriggerComponent.h"
+
+AMyHapticActor::AMyHapticActor()
+{
+    // Event Map と Entry Id は、配置したアクターの詳細パネルで指定する
+    Haptic = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("Haptic"));
+}
+
+void AMyHapticActor::BeginPlay()
+{
+    Super::BeginPlay();
+    Haptic->Fire();
+}
+```
+
+ヘッダには次を足します:
+
+```cpp
+UPROPERTY(VisibleAnywhere)
+TObjectPtr<class UHapbeatTriggerComponent> Haptic;
+```
+
+C++ プロジェクトの準備（`Build.cs` の編集など）がまだなら、次の
+「C++ の場合」の 1〜2 を先に済ませてください。
+
+---
+
+### C: イベント ID を直接送る（特殊ケース）
+
+> **通常はここを使いません。** 上の A / B を使ってください。
+> 以下は、仕組みの確認と、イベント ID を実行時に組み立てる必要がある場合の説明です。
+
+#### Blueprint の場合
 
 **レベルブループリント**を使うのが一番早く、アセットを一つも作らずに試せます。
 
@@ -350,22 +413,7 @@ Details パネル上部には専用の操作列も出ます:
 > Command モード（イベント ID を送る方式）なので、**Kit の書き込みが必要**です。
 > 書き込んでいない場合は、代わりに §2 の Space（StreamClip）で確認してください。
 
-#### EventMap のエントリを鳴らす（実運用の形）
-
-上の `Play` はイベント ID を直接書いているため、強さを変えるたびに
-グラフを直すことになります。EventMap のエントリを使うと、強さ・送信先・
-ループは**アセット側**で調整できます。
-
-1. アクターに **Hapbeat Trigger** コンポーネントを追加する
-   （詳細は [§5](#5-トリガコンポーネントを使うコードなしで鳴らす)）
-2. その `Event Map` に §3 で作ったアセットを指定し、`Entry Id` を選ぶ
-3. Blueprint からは、そのコンポーネントの **`Fire`** を呼ぶだけ
-   （`Play` にイベント ID を書く必要はありません）
-
-強さを変えたくなったら、Event Map ウィンドウで `Gain` を動かして
-**Test Play** で確認します。Blueprint も再ビルドも触りません。
-
-### C++ の場合
+#### C++ の場合
 
 1. エディタで **ツール → 新規 C++ クラス → Actor** を選び、名前を付けて作成
    （例: `MyHapticActor`）
@@ -448,7 +496,7 @@ protected:
 > `あなたのプロジェクト名_API` は、UE が生成したクラスに元から入っている
 > マクロ（例: プロジェクト名が `MyGame` なら `MYGAME_API`）をそのまま使ってください。
 
-#### C++ を編集したあと、どこまでエディタを開いたままにできるか
+##### C++ を編集したあと、どこまでエディタを開いたままにできるか
 
 **▶ Play（PIE）はコンパイルしません。** `.cpp` を保存しただけでは何も変わらず、
 必ずどこかでコンパイルを挟む必要があります。方法は 2 つあり、
@@ -468,7 +516,7 @@ Live Coding は実行中のプロセスに機械語パッチを当てる仕組�
 **初回は必ずエディタを閉じてビルド**が必要です。そのあと `BeginPlay()` の中身を
 調整していく段階からは、下の方法でエディタ上からコンパイルできます。
 
-##### エディタ上でコンパイルする（Unity の `Ctrl` + `R` に相当）
+###### エディタ上でコンパイルする（Unity の `Ctrl` + `R` に相当）
 
 3 通りあり、**どれも同じ Live Coding のコンパイルを呼びます**。好きなものを使ってください。
 
@@ -487,7 +535,7 @@ Live Coding は実行中のプロセスに機械語パッチを当てる仕組�
 > **ビルド時に `Unable to build while Live Coding is active` と出たら**、
 > エディタがまだ起動しています。完全に終了してからビルドし直してください。
 
-#### ビルドでつまずいたときのメモ
+##### ビルドでつまずいたときのメモ
 
 - **Visual Studio では「Build」を使い、「Rebuild」は使わない。**
   Rebuild は中間生成物を捨てて共有 PCH から作り直すため、時間がかかるうえに
@@ -515,40 +563,6 @@ Live Coding は実行中のプロセスに機械語パッチを当てる仕組�
 
   バージョン番号は `C:\Program Files\Microsoft Visual Studio\2022\<エディション>\VC\Tools\MSVC\`
   にあるフォルダ名から、`include\sanitizer\` を**持たない**方を選びます。
-
-#### EventMap のエントリを鳴らす（実運用の形）
-
-C++ でも、イベント ID を書くのではなく **Hapbeat Trigger コンポーネント**を
-持たせて `Fire()` を呼ぶのが標準です。強さや送信先はアセット側に残ります。
-
-```cpp
-#include "MyHapticActor.h"
-
-#include "HapbeatTriggerComponent.h"
-
-AMyHapticActor::AMyHapticActor()
-{
-    // Event Map と Entry Id は、配置したアクターの詳細パネルで指定する
-    Haptic = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("Haptic"));
-}
-
-void AMyHapticActor::BeginPlay()
-{
-    Super::BeginPlay();
-    Haptic->Fire();
-}
-```
-
-ヘッダには次を足します:
-
-```cpp
-UPROPERTY(VisibleAnywhere)
-TObjectPtr<class UHapbeatTriggerComponent> Haptic;
-```
-
-> `Entry Id` は詳細パネルで **EventMap のエントリ名から選べます**（GUID を
-> 手で貼る必要はありません）。EventMap を指定していないときだけ、生の
-> GUID 欄が出ます。
 
 主な API:
 

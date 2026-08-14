@@ -14,6 +14,7 @@ public class HapbeatSDKSamples : ModuleRules
 			"Engine",
 			"InputCore", // EKeys::* for the samples' legacy InputComponent->BindKey wiring
 			"Projects",  // IPluginManager (resolve this plugin's Content dir for raw WAV loads)
+			"UMG",       // UWidgetComponent: the world-space surface the VR sample puts the address panel on
 			"HapbeatSDK", // the runtime module the samples drive
 		});
 	}

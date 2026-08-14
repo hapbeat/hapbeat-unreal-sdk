@@ -18,6 +18,7 @@ public class HapbeatSDK : ModuleRules
 			"PhysicsCore",       // FBodyInstance read in the collision trigger's setup hint
 			"Slate",             // in-game address-override panel (works in packaged builds, no UMG asset to author)
 			"SlateCore",
+			"UMG",               // UWidgetComponent, the world-space (VR) surface the same Slate panel can be handed to
 		});
 
 		if (Target.Platform == UnrealTargetPlatform.Win64)

@@ -3,6 +3,7 @@
 
 #include "HapbeatClip.h"
 #include "HapbeatEventMap.h"
+#include "UObject/ConstructorHelpers.h"
 #include "HapbeatSampleLibrary.h"
 #include "HapbeatSubsystem.h"
 #include "HapbeatTriggerComponent.h"
@@ -28,6 +29,18 @@ AHapbeatBasicExampleActor::AHapbeatBasicExampleActor()
 	StreamOneShotTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("StreamOneShotTrigger"));
 	StreamLoopTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("StreamLoopTrigger"));
 	CommandTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("CommandTrigger"));
+
+	// Default to the Event Map that ships with the plugin, so dropping this actor
+	// into a level shows the same authored asset a real project would edit --
+	// gains and modes visible in the editor rather than buried in the code below.
+	// Still a UPROPERTY, so it can be pointed at a different map in the details
+	// panel; the code-built fallback only runs if this asset ever goes missing.
+	static ConstructorHelpers::FObjectFinder<UHapbeatEventMap> DefaultEventMap(
+		TEXT("/HapbeatSDK/HapbeatSamples/BasicExample/EM_BasicExample.EM_BasicExample"));
+	if (DefaultEventMap.Succeeded())
+	{
+		EventMapOverride = DefaultEventMap.Object;
+	}
 }
 
 void AHapbeatBasicExampleActor::BeginPlay()

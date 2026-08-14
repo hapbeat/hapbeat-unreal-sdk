@@ -243,8 +243,8 @@ Stop で止まります。
 `UHapbeatClip` は 16kHz / PCM16 の WAV をそのまま扱えるアセットです。
 再生中に**ゲインとパンをリアルタイムに変えられる**のが Command 再生との違いです。
 
-**クリップアセットの作り方**: Content Browser → 右クリック → **Miscellaneous → Data Asset**
-→ **Hapbeat Clip** で空のアセットを作り、開いて **[Import WAV...]** から `.wav` を読み込みます
+**クリップアセットの作り方**: Content Browser → 右クリック → **Hapbeat → Hapbeat Clip**
+で空のアセットを作り、開いて **[Import WAV...]** から `.wav` を読み込みます
 （PCM 16bit であること。Kit と同じ 16kHz を推奨）。
 `.wav` の通常インポート（`USoundWave`）とは別物なので、間違えないよう専用ボタンにしています。
 
@@ -286,40 +286,35 @@ Details パネル上部には専用の操作列も出ます:
 
 配列の追加・削除・並べ替え・複製、複数選択しての一括編集は UE 標準の機能がそのまま使えます。
 
-> **なぜ専用ウィンドウではなく Details パネルなのか**
-> Unity SDK は専用のエディタウィンドウを持っていますが、UE ではこれらの操作を
-> Details パネルが標準で提供するため、あえて独自ウィンドウを作っていません。
-> 学習することが少なく、UE の他のアセットと同じ操作感で扱えます。
-
 > 実際にデバイスへ送られるゲインは
 > **`Gain` × `Kit の intensity` × トリガ側の倍率** です。
 > Studio で作り込んだ強さ（intensity）を土台に、UE 側で微調整する設計になっています。
 
-### BasicExample を GUI 編集に切り替える（任意）
+### 同梱サンプルで試す
 
-疎通確認に使ったサンプルを、そのまま GUI 編集の練習台にできます。
+疎通確認に使った BasicExample は、**最初から EventMap アセットで動いています**。
+新しく作らなくても、そのまま練習台になります。
 
-1. **先に触覚クリップのアセットを作る**（StreamClip エントリで使います）
-   - Content Browser → 右クリック → **Miscellaneous → Data Asset** → **Hapbeat Clip**
-   - 開いて **[Import WAV...]** を押し、
-     `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Kit/basic-exam-kit/stream-clips/sine_100hz_1s.wav`
-     を選ぶ（`16000 Hz, 1 ch, 1.00 s` と表示されれば成功。保存を忘れずに）
-2. EventMap アセットを作り、エントリを **3 つ**追加する
-   （順番が固定です: `[0]` Space、`[1]` R、`[2]` F）
-3. 値はコード側と同じにすると挙動が揃います（`Stream Clip` には 1. で作ったアセットを指定）:
+1. コンテンツブラウザで **Show Plugin Content** を有効にする
+2. `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/EM_BasicExample` を開く
+3. `[0]` のエントリの **`Gain`** を `0.3` などに変える
+4. **Test Play** で鳴らす（または ▶ Play して **Space**）
 
-   | # | Mode | Category | Event Name | Gain | Loop | Stream Clip |
-   |---|---|---|---|---|---|---|
-   | 0 | StreamClip | `basic-exam-kit` | `sine_100hz_1s` | `1.0` | off | `sine_100hz_1s` |
-   | 1 | StreamClip | `basic-exam-kit` | `sine_100hz_1s_loop` | `1.0` | **on** | `sine_100hz_1s` |
-   | 2 | Command | `basic-exam-kit` | `sine_200hz_1s` | `1.0` | off | — |
+強さが変われば、コードを触らずに調整できる状態になっています。
+`Target` を `player_1` にして送信先を絞る、なども同じ手順で試せます。
 
-4. **Refresh Intensities** を押す（各エントリの intensity が `0.5` になります）
-5. レベルに置いた **Hapbeat Basic Example Actor** を選択し、Details の
-   **Event Map Override** に作った EventMap アセットを指定する
+同梱の内容は次のとおりです。
 
-以降このサンプルはアセット側の値で鳴るので、**Gain や Target を変えて即座に体感差を確認**できます。
-未指定（空）のままなら従来どおりコード生成で動きます。
+| # | Mode | Category | Event Name | Gain | Loop | Stream Clip |
+|---|---|---|---|---|---|---|
+| 0 | CLIP (Stream Clip) | `basic-exam-kit` | `sine_100hz_1s` | `1.0` | off | `HC_sine_100hz_1s` |
+| 1 | CLIP (Stream Clip) | `basic-exam-kit` | `sine_100hz_1s` | `1.0` | **on** | `HC_sine_100hz_1s` |
+| 2 | FIRE (Command) | `basic-exam-kit` | `sine_200hz_1s` | `1.0` | off | — |
+
+> **このサンプルだけはエントリの順番が固定です。**
+> 上から `[0]` Space / `[1]` R / `[2]` F に対応付けるため、並べ替えると
+> キーの割り当ても変わります（Showcase 側はイベント名で引くので影響しません）。
+> アクターの **Event Map Override** を空にすると、コード生成の EventMap で動きます。
 
 ---
 

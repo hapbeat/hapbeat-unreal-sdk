@@ -5,6 +5,7 @@
 #include "HapbeatEventEntry.h" // FHapbeatEventEntry (by value) + EHapticMode
 
 class UHapbeatClip;
+class UHapbeatEventMap;
 
 /**
  * Shared, non-UObject static helpers for the Hapbeat samples (BasicExample +
@@ -59,6 +60,15 @@ public:
 	static FHapbeatEventEntry MakeEntry(EHapticMode Mode, const FString& Category, const FString& EventName,
 		float Gain, bool bLoop, float CachedIntensity, UHapbeatClip* Clip = nullptr,
 		const FString& DisplayName = FString());
+
+	/**
+	 * Resolve an entry's stable Id by (Mode, Category, EventName) -- the sample
+	 * actors' way of pointing at an authored asset's entries without hardcoding a
+	 * GUID (the generator mints fresh ones on every regenerate). Returns an invalid
+	 * FGuid and logs a warning if no entry matches.
+	 */
+	static FGuid FindEntryId(const UHapbeatEventMap* Map, EHapticMode Mode,
+		const FString& Category, const FString& EventName);
 
 	/**
 	 * Show (or update in place) one line of a persistent on-screen HUD, e.g. a

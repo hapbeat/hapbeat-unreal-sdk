@@ -74,8 +74,11 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	/** Build the transient 1-entry EventMap (showcase-kit.z1_pin_hit, Command mode) every pin's trigger shares. */
+	/** Resolve the EventMap (asset or fallback) and wire the shared z1_pin_hit entry id every pin's trigger uses. */
 	void BuildEventMap();
+
+	/** Build the transient EventMap used when no asset is assigned. */
+	UHapbeatEventMap* BuildFallbackEventMap();
 
 	/** Spawn the 6 AHapbeatShowcaseZ1PinActor instances in a 1-2-3 triangle rack and wire each one's HitTrigger. */
 	void SpawnPinRack();
@@ -96,6 +99,19 @@ private:
 
 	/** Pending ResetBallToSpawn() call, RespawnDelaySeconds after a launch. */
 	FTimerHandle RespawnTimer;
+
+	/**
+	 * The EventMap this zone plays from. Defaults to the plugin's shipped
+	 * EM_Showcase asset (assigned in the constructor), so the gains / modes the
+	 * zone actually uses are visible and editable in the editor instead of being
+	 * buried in code -- that is how a real project works. Point it at your own
+	 * asset to re-author them; clear it and the zone builds an equivalent map in
+	 * code, so the sample still runs if the asset ever goes missing.
+	 *
+	 * Entries are resolved by event name, not by order (see BuildEventMap).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	TObjectPtr<UHapbeatEventMap> EventMapOverride;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;

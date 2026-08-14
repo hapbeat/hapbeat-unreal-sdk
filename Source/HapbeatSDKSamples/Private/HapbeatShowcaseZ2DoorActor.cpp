@@ -13,6 +13,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::*
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ2, Log, All);
 
@@ -57,6 +58,18 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 	LockTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("LockTrigger"));
 	UnlockTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("UnlockTrigger"));
 	RattleTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("RattleTrigger"));
+
+	// Default to the Showcase Event Map that ships with the plugin, so this zone
+	// runs against the same authored asset a real project would edit -- gains and
+	// modes visible in the editor rather than buried in the code below. Still a
+	// UPROPERTY, so it can be pointed at a different map in the details panel;
+	// the code-built fallback only runs if this asset ever goes missing.
+	static ConstructorHelpers::FObjectFinder<UHapbeatEventMap> DefaultEventMap(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/EM_Showcase.EM_Showcase"));
+	if (DefaultEventMap.Succeeded())
+	{
+		EventMapOverride = DefaultEventMap.Object;
+	}
 }
 
 void AHapbeatShowcaseZ2DoorActor::BeginPlay()
@@ -76,8 +89,47 @@ void AHapbeatShowcaseZ2DoorActor::BeginPlay()
 
 void AHapbeatShowcaseZ2DoorActor::BuildEventMap()
 {
-	EventMap = NewObject<UHapbeatEventMap>(this);
-	EventMap->Entries.Reset(6);
+	EventMap = EventMapOverride != nullptr ? ToRawPtr(EventMapOverride) : BuildFallbackEventMap();
+	if (EventMap == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcaseZ2, Warning, TEXT("Z2: no EventMap available; the door's haptics will not fire."));
+		return;
+	}
+
+	// Look the ids up by event name. The fallback map below authors the same
+	// categories / names / modes, so both paths go through this one resolution
+	// step instead of duplicating the wiring.
+	const FGuid OpenId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_open"));
+	const FGuid CloseId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_close"));
+	const FGuid SlamId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_slam"));
+	const FGuid LockId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_lock"));
+	const FGuid UnlockId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_unlock"));
+	const FGuid RattleId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_rattle"));
+
+	OpenTrigger->EventMap = EventMap;
+	OpenTrigger->EntryId = OpenId;
+	CloseTrigger->EventMap = EventMap;
+	CloseTrigger->EntryId = CloseId;
+	SlamTrigger->EventMap = EventMap;
+	SlamTrigger->EntryId = SlamId;
+	LockTrigger->EventMap = EventMap;
+	LockTrigger->EntryId = LockId;
+	UnlockTrigger->EventMap = EventMap;
+	UnlockTrigger->EntryId = UnlockId;
+	RattleTrigger->EventMap = EventMap;
+	RattleTrigger->EntryId = RattleId;
+}
+
+UHapbeatEventMap* AHapbeatShowcaseZ2DoorActor::BuildFallbackEventMap()
+{
+	UHapbeatEventMap* Fallback = NewObject<UHapbeatEventMap>(this);
+	Fallback->Entries.Reset(6);
 
 	OpenClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z2_door_open.wav"));
 	CloseClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z2_door_close.wav"));
@@ -111,25 +163,13 @@ void AHapbeatShowcaseZ2DoorActor::BuildEventMap()
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_rattle"),
 		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, RattleClip, TEXT("z2_door_rattle"));
 
-	EventMap->Entries.Add(OpenEntry);
-	EventMap->Entries.Add(CloseEntry);
-	EventMap->Entries.Add(SlamEntry);
-	EventMap->Entries.Add(LockEntry);
-	EventMap->Entries.Add(UnlockEntry);
-	EventMap->Entries.Add(RattleEntry);
-
-	OpenTrigger->EventMap = EventMap;
-	OpenTrigger->EntryId = OpenEntry.Id;
-	CloseTrigger->EventMap = EventMap;
-	CloseTrigger->EntryId = CloseEntry.Id;
-	SlamTrigger->EventMap = EventMap;
-	SlamTrigger->EntryId = SlamEntry.Id;
-	LockTrigger->EventMap = EventMap;
-	LockTrigger->EntryId = LockEntry.Id;
-	UnlockTrigger->EventMap = EventMap;
-	UnlockTrigger->EntryId = UnlockEntry.Id;
-	RattleTrigger->EventMap = EventMap;
-	RattleTrigger->EntryId = RattleEntry.Id;
+	Fallback->Entries.Add(OpenEntry);
+	Fallback->Entries.Add(CloseEntry);
+	Fallback->Entries.Add(SlamEntry);
+	Fallback->Entries.Add(LockEntry);
+	Fallback->Entries.Add(UnlockEntry);
+	Fallback->Entries.Add(RattleEntry);
+	return Fallback;
 }
 
 void AHapbeatShowcaseZ2DoorActor::BindInput()

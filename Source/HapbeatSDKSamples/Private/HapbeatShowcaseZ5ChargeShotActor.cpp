@@ -16,6 +16,7 @@
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::*
 #include "TimerManager.h"
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ5, Log, All);
 
@@ -46,6 +47,18 @@ AHapbeatShowcaseZ5ChargeShotActor::AHapbeatShowcaseZ5ChargeShotActor()
 	// A low, wide blaster stand -- purely cosmetic, no gameplay meaning.
 	StandMesh->SetRelativeScale3D(FVector(1.2f, 0.8f, 1.0f));
 	StandMesh->SetMobility(EComponentMobility::Static);
+
+	// Default to the Showcase Event Map that ships with the plugin, so this zone
+	// runs against the same authored asset a real project would edit -- gains and
+	// modes visible in the editor rather than buried in the code below. Still a
+	// UPROPERTY, so it can be pointed at a different map in the details panel;
+	// the code-built fallback only runs if this asset ever goes missing.
+	static ConstructorHelpers::FObjectFinder<UHapbeatEventMap> DefaultEventMap(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/EM_Showcase.EM_Showcase"));
+	if (DefaultEventMap.Succeeded())
+	{
+		EventMapOverride = DefaultEventMap.Object;
+	}
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::BeginPlay()
@@ -81,7 +94,33 @@ void AHapbeatShowcaseZ5ChargeShotActor::EndPlay(const EEndPlayReason::Type EndPl
 
 void AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap()
 {
-	EventMap = NewObject<UHapbeatEventMap>(this);
+	EventMap = EventMapOverride != nullptr ? ToRawPtr(EventMapOverride) : BuildFallbackEventMap();
+	if (EventMap == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcaseZ5, Warning, TEXT("Z5: no EventMap available; the blaster's haptics will not fire."));
+		return;
+	}
+
+	// Look the ids up by event name. The fallback map below authors the same
+	// categories / names / modes, so both paths go through this one resolution
+	// step instead of duplicating the wiring.
+	ChargeLoopEntryId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_loop"));
+	ChargeThresholdEntryId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_thd"));
+	ShotLightEntryId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_shot_light"));
+	ShotHeavyEntryId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_shot_heavy"));
+	TarHitLightEntryId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_light"));
+	TarHitHeavyEntryId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_heavy"));
+}
+
+UHapbeatEventMap* AHapbeatShowcaseZ5ChargeShotActor::BuildFallbackEventMap()
+{
+	UHapbeatEventMap* Fallback = NewObject<UHapbeatEventMap>(this);
 	LoadedClips.Reset(6);
 
 	// Loads the WAV, keeps it alive in LoadedClips (see the header's GC note),
@@ -122,20 +161,14 @@ void AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap()
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_heavy"),
 		1.0f, /*bLoop=*/false, 0.40f, LoadAndKeep(TEXT("z5_tar_hit_heavy.wav")), TEXT("z5_tar_hit_heavy"));
 
-	EventMap->Entries.Reset(6);
-	EventMap->Entries.Add(ChargeLoopEntry);
-	EventMap->Entries.Add(ChargeThresholdEntry);
-	EventMap->Entries.Add(ShotLightEntry);
-	EventMap->Entries.Add(ShotHeavyEntry);
-	EventMap->Entries.Add(TarHitLightEntry);
-	EventMap->Entries.Add(TarHitHeavyEntry);
-
-	ChargeLoopEntryId = ChargeLoopEntry.Id;
-	ChargeThresholdEntryId = ChargeThresholdEntry.Id;
-	ShotLightEntryId = ShotLightEntry.Id;
-	ShotHeavyEntryId = ShotHeavyEntry.Id;
-	TarHitLightEntryId = TarHitLightEntry.Id;
-	TarHitHeavyEntryId = TarHitHeavyEntry.Id;
+	Fallback->Entries.Reset(6);
+	Fallback->Entries.Add(ChargeLoopEntry);
+	Fallback->Entries.Add(ChargeThresholdEntry);
+	Fallback->Entries.Add(ShotLightEntry);
+	Fallback->Entries.Add(ShotHeavyEntry);
+	Fallback->Entries.Add(TarHitLightEntry);
+	Fallback->Entries.Add(TarHitHeavyEntry);
+	return Fallback;
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::SpawnTargets()

@@ -76,8 +76,11 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	/** Build the transient 2-entry EventMap (z4_stream_loop, z4_slider_tick) and wire the 2 trigger components. */
+	/** Resolve the EventMap (asset or fallback) and wire the 2 trigger components to z4_stream_loop / z4_slider_tick. */
 	void BuildEventMap();
+
+	/** Build the transient EventMap used when no asset is assigned. */
+	UHapbeatEventMap* BuildFallbackEventMap();
 
 	/** EnableInput on the first PlayerController found, then BindKey the 5 demo keys. Warns (no-op) if none exists. */
 	void BindInput();
@@ -121,14 +124,28 @@ private:
 
 	// BeginPlay-time transient data (built fresh each Play session; not serialized).
 
+	/**
+	 * The EventMap this zone plays from. Defaults to the plugin's shipped
+	 * EM_Showcase asset (assigned in the constructor), so the gains / modes the
+	 * zone actually uses are visible and editable in the editor instead of being
+	 * buried in code -- that is how a real project works. Point it at your own
+	 * asset to re-author them; clear it and the zone builds an equivalent map in
+	 * code, so the sample still runs if the asset ever goes missing.
+	 *
+	 * Entries are resolved by event name, not by order (see BuildEventMap).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	TObjectPtr<UHapbeatEventMap> EventMapOverride;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;
 
 	/**
-	 * Strong references keeping the 2 stream-clip WAVs alive -- entries only
-	 * hold them via a TSoftObjectPtr (not GC-strong; see
-	 * FHapbeatSampleLibrary::LoadSampleClip's GC note), so these actor-owned
-	 * UPROPERTYs are what actually keep them resident.
+	 * Strong references keeping the 2 stream-clip WAVs alive when the code-built
+	 * fallback map is in use -- entries only hold them via a TSoftObjectPtr (not
+	 * GC-strong; see FHapbeatSampleLibrary::LoadSampleClip's GC note), so these
+	 * actor-owned UPROPERTYs are what actually keep them resident. Left null when
+	 * the EM_Showcase asset supplies the clips.
 	 */
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> LoopClip;

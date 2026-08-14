@@ -2,6 +2,7 @@
 #include "HapbeatSampleLibrary.h"
 
 #include "HapbeatClip.h"
+#include "HapbeatEventMap.h"
 #include "HapbeatSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -70,6 +71,37 @@ FHapbeatEventEntry FHapbeatSampleLibrary::MakeEntry(EHapticMode Mode, const FStr
 	}
 	Entry.DisplayName = DisplayName.IsEmpty() ? EventName : DisplayName;
 	return Entry;
+}
+
+FGuid FHapbeatSampleLibrary::FindEntryId(const UHapbeatEventMap* Map, EHapticMode Mode,
+	const FString& Category, const FString& EventName)
+{
+	// Match on the same <category>.<name> string the protocol itself uses, so an
+	// asset authored with the category folded into EventName still resolves.
+	const FString WantedEventId = Category.IsEmpty() ? EventName : Category + TEXT(".") + EventName;
+
+	if (Map == nullptr)
+	{
+		UE_LOG(LogHapbeatSample, Warning,
+			TEXT("FindEntryId('%s'): null EventMap; that event will not fire."), *WantedEventId);
+		return FGuid();
+	}
+
+	for (const FHapbeatEventEntry& Entry : Map->Entries)
+	{
+		// Mode is part of the key, not just a sanity check: an event id can legally
+		// exist twice in one map (a Command variant and a StreamClip variant), and
+		// the caller wires a specific one.
+		if (Entry.Mode == Mode && Entry.GetEventId() == WantedEventId)
+		{
+			return Entry.Id;
+		}
+	}
+
+	UE_LOG(LogHapbeatSample, Warning,
+		TEXT("FindEntryId: EventMap '%s' has no entry for '%s' in the requested mode; that event will not fire."),
+		*GetNameSafe(Map), *WantedEventId);
+	return FGuid();
 }
 
 void FHapbeatSampleLibrary::ShowHudLine(int32 LineKey, const FString& Text, FColor Color, float Duration)

@@ -15,6 +15,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::*
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ4, Log, All);
 
@@ -56,6 +57,18 @@ AHapbeatShowcaseZ4StreamConsoleActor::AHapbeatShowcaseZ4StreamConsoleActor()
 	PanBinding->OutputParameter = EHapbeatBindingOutput::StreamPan;
 	PanBinding->OutputMin = -1.0f;
 	PanBinding->OutputMax = 1.0f;
+
+	// Default to the Showcase Event Map that ships with the plugin, so this zone
+	// runs against the same authored asset a real project would edit -- gains and
+	// modes visible in the editor rather than buried in the code below. Still a
+	// UPROPERTY, so it can be pointed at a different map in the details panel;
+	// the code-built fallback only runs if this asset ever goes missing.
+	static ConstructorHelpers::FObjectFinder<UHapbeatEventMap> DefaultEventMap(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/EM_Showcase.EM_Showcase"));
+	if (DefaultEventMap.Succeeded())
+	{
+		EventMapOverride = DefaultEventMap.Object;
+	}
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::BeginPlay()
@@ -93,7 +106,31 @@ void AHapbeatShowcaseZ4StreamConsoleActor::EndPlay(const EEndPlayReason::Type En
 
 void AHapbeatShowcaseZ4StreamConsoleActor::BuildEventMap()
 {
-	EventMap = NewObject<UHapbeatEventMap>(this);
+	EventMap = EventMapOverride != nullptr ? ToRawPtr(EventMapOverride) : BuildFallbackEventMap();
+	if (EventMap == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcaseZ4, Warning, TEXT("Z4: no EventMap available; the console's haptics will not fire."));
+		return;
+	}
+
+	// Look the ids up by event name. The fallback map below authors the same
+	// categories / names / modes, so both paths go through this one resolution
+	// step instead of duplicating the wiring.
+	const FGuid LoopId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z4_stream_loop"));
+	const FGuid TickId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z4_slider_tick"));
+
+	LoopTrigger->EventMap = EventMap;
+	LoopTrigger->EntryId = LoopId;
+
+	TickTrigger->EventMap = EventMap;
+	TickTrigger->EntryId = TickId;
+}
+
+UHapbeatEventMap* AHapbeatShowcaseZ4StreamConsoleActor::BuildFallbackEventMap()
+{
+	UHapbeatEventMap* Fallback = NewObject<UHapbeatEventMap>(this);
 
 	LoopClip = FHapbeatSampleLibrary::LoadSampleClip(this,
 		TEXT("Showcase/Kit/showcase-kit/stream-clips/z4_stream_loop.wav"));
@@ -113,15 +150,10 @@ void AHapbeatShowcaseZ4StreamConsoleActor::BuildEventMap()
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z4_slider_tick"),
 		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.3f, TickClip, TEXT("z4_slider_tick"));
 
-	EventMap->Entries.Reset(2);
-	EventMap->Entries.Add(LoopEntry);
-	EventMap->Entries.Add(TickEntry);
-
-	LoopTrigger->EventMap = EventMap;
-	LoopTrigger->EntryId = LoopEntry.Id;
-
-	TickTrigger->EventMap = EventMap;
-	TickTrigger->EntryId = TickEntry.Id;
+	Fallback->Entries.Reset(2);
+	Fallback->Entries.Add(LoopEntry);
+	Fallback->Entries.Add(TickEntry);
+	return Fallback;
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::BindInput()

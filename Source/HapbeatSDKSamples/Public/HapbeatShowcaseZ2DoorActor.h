@@ -101,8 +101,11 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	/** Build the transient 6-entry EventMap (z2_door_open/close/slam/lock/unlock/rattle) and wire the 6 trigger components. */
+	/** Resolve the EventMap (asset or fallback) and wire the 6 trigger components to its z2_door_* entries. */
 	void BuildEventMap();
+
+	/** Build the transient EventMap used when no asset is assigned. */
+	UHapbeatEventMap* BuildFallbackEventMap();
 
 	/** EnableInput on the first PlayerController found, then BindKey(F/G/L). Warns (no-op) if none exists. */
 	void BindInput();
@@ -127,11 +130,26 @@ private:
 	static constexpr float HudRefreshIntervalSeconds = 0.5f;
 	float HudRefreshTimer = 0.0f;
 
+	/**
+	 * The EventMap this zone plays from. Defaults to the plugin's shipped
+	 * EM_Showcase asset (assigned in the constructor), so the gains / modes the
+	 * zone actually uses are visible and editable in the editor instead of being
+	 * buried in code -- that is how a real project works. Point it at your own
+	 * asset to re-author them; clear it and the zone builds an equivalent map in
+	 * code, so the sample still runs if the asset ever goes missing.
+	 *
+	 * Entries are resolved by event name, not by order (see BuildEventMap).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	TObjectPtr<UHapbeatEventMap> EventMapOverride;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;
 
-	// Strong refs keeping the 3 StreamClip WAVs alive (entries only hold a
-	// TSoftObjectPtr -- see FHapbeatSampleLibrary::LoadSampleClip's GC note).
+	// Strong refs keeping the 3 StreamClip WAVs alive when the code-built
+	// fallback map is in use (entries only hold a TSoftObjectPtr -- see
+	// FHapbeatSampleLibrary::LoadSampleClip's GC note). Left null when the
+	// EM_Showcase asset supplies the clips.
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> OpenClip;
 	UPROPERTY(Transient)

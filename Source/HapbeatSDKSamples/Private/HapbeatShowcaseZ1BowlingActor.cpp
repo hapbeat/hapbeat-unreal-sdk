@@ -14,6 +14,7 @@
 #include "InputCoreTypes.h" // EKeys::*
 #include "PhysicsEngine/BodyInstance.h" // BodyInstance.bNotifyRigidBodyCollision (pre-BeginPlay flag set)
 #include "TimerManager.h"
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ1, Log, All);
 
@@ -71,6 +72,18 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 	// SetSimulatePhysics() is deferred to BeginPlay (see AHapbeatShowcaseZ1PinActor's
 	// header note) -- calling it here, before BallMesh is registered, is order-
 	// dependent and can log a spurious "no physics body" warning.
+
+	// Default to the Showcase Event Map that ships with the plugin, so this zone
+	// runs against the same authored asset a real project would edit -- gains and
+	// modes visible in the editor rather than buried in the code below. Still a
+	// UPROPERTY, so it can be pointed at a different map in the details panel;
+	// the code-built fallback only runs if this asset ever goes missing.
+	static ConstructorHelpers::FObjectFinder<UHapbeatEventMap> DefaultEventMap(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/EM_Showcase.EM_Showcase"));
+	if (DefaultEventMap.Succeeded())
+	{
+		EventMapOverride = DefaultEventMap.Object;
+	}
 }
 
 void AHapbeatShowcaseZ1BowlingActor::BeginPlay()
@@ -112,19 +125,34 @@ void AHapbeatShowcaseZ1BowlingActor::EndPlay(const EEndPlayReason::Type EndPlayR
 
 void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
 {
-	EventMap = NewObject<UHapbeatEventMap>(this);
-	EventMap->Entries.Reset(1);
+	EventMap = EventMapOverride != nullptr ? ToRawPtr(EventMapOverride) : BuildFallbackEventMap();
+	if (EventMap == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcaseZ1, Warning, TEXT("Z1: no EventMap available; pin hits will not fire."));
+		return;
+	}
+
+	// Look the id up by event name. The fallback map below authors the same
+	// category / name / mode, so both paths go through this one resolution step
+	// instead of duplicating the wiring.
+	PinHitEntryId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::Command, TEXT("showcase-kit"), TEXT("z1_pin_hit"));
+}
+
+UHapbeatEventMap* AHapbeatShowcaseZ1BowlingActor::BuildFallbackEventMap()
+{
+	UHapbeatEventMap* Fallback = NewObject<UHapbeatEventMap>(this);
+	Fallback->Entries.Reset(1);
 
 	// Intensity hardcoded from Content/HapbeatSamples/Showcase/Kit/showcase-kit/
 	// showcase-kit-manifest.json (schema 2.0.0) events["showcase-kit.z1_pin_hit"]
 	// .parameters.intensity, matching Samples~/Showcase/EventMaps/ShowcaseEventMap.md
 	// verbatim: Command mode, gain 1.00 x intensity 0.25 = effective 0.25 (before
 	// each pin's own VelocityScaled multiplier is folded in on top).
-	const FHapbeatEventEntry PinHitEntry = FHapbeatSampleLibrary::MakeEntry(
+	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::Command, TEXT("showcase-kit"), TEXT("z1_pin_hit"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, /*Clip=*/nullptr, TEXT("z1_pin_hit"));
-	EventMap->Entries.Add(PinHitEntry);
-	PinHitEntryId = PinHitEntry.Id;
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, /*Clip=*/nullptr, TEXT("z1_pin_hit")));
+	return Fallback;
 }
 
 void AHapbeatShowcaseZ1BowlingActor::SpawnPinRack()

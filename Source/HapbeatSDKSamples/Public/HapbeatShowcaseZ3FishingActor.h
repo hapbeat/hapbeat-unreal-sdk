@@ -162,8 +162,11 @@ private:
 	/** Spawn the shark as its own AStaticMeshActor (see class comment for why it must be a separate actor). */
 	void SpawnShark();
 
-	/** Build the transient 3-entry EventMap + load the 3 clips, then attach UHapbeatSequenceComponent + UHapbeatParameterBinding to the shark. */
+	/** Resolve the EventMap (asset or fallback), then attach UHapbeatSequenceComponent + UHapbeatParameterBinding to the shark. */
 	void BuildEventMapAndHaptics();
+
+	/** Build the transient EventMap used when no asset is assigned. */
+	UHapbeatEventMap* BuildFallbackEventMap();
 
 	/** EnableInput on the first PlayerController found (mirrors AHapbeatBasicExampleActor's pattern) and bind H. */
 	void BindInput();
@@ -224,8 +227,24 @@ private:
 
 	// ---- haptics data ----
 
+	/**
+	 * The EventMap this zone plays from. Defaults to the plugin's shipped
+	 * EM_Showcase asset (assigned in the constructor), so the gains / modes the
+	 * zone actually uses are visible and editable in the editor instead of being
+	 * buried in code -- that is how a real project works. Point it at your own
+	 * asset to re-author them; clear it and the zone builds an equivalent map in
+	 * code, so the sample still runs if the asset ever goes missing.
+	 *
+	 * Entries are resolved by event name, not by order (see BuildEventMapAndHaptics).
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	TObjectPtr<UHapbeatEventMap> EventMapOverride;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;
+
+	// Strong refs keeping the 3 StreamClip WAVs alive when the code-built
+	// fallback map is in use; left null when the EM_Showcase asset supplies them.
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> HookStartClip;

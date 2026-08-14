@@ -33,10 +33,14 @@ Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
 | `Z4 Stream Console` | ストリームのゲイン / パンを実行時操作 | `T` 開始 / `U` `J` 強弱 / `N` `M` 左右 |
 | `Z5 Charge Shot` | コードから直接 API を叩く例（溜め→発射） | `V` 長押し |
 
-Showcase のイベントは Command が中心のため、
-`Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Kit/showcase-kit/` の書き込みが必要です。
+5 ゾーンは共通の EventMap アセット
+`Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/EM_Showcase` を既定で参照します。
+強さ・送信先・ループは、コードを触らずここで調整できます
+（各アクターの **Event Map Override** を空にすると、コード生成の EventMap で動きます）。
 
----
+18 エントリのうち 14 は CLIP なので Kit 無しで鳴ります。ただし Z1 のピン衝突と
+Z2 の強打・施錠・解錠の 4 つは FIRE のため、
+`Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Kit/showcase-kit/` の書き込みが必要です。
 
 ---
 

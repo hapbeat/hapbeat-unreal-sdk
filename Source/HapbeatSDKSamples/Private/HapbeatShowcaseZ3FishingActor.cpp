@@ -20,6 +20,7 @@
 #include "InputCoreTypes.h" // EKeys::H
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ3, Log, All);
 
@@ -82,6 +83,18 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	RodTipMeshComp->SetRelativeScale3D(FVector(0.15f));
 	RodTipMeshComp->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 	RodTipMeshComp->SetMobility(EComponentMobility::Movable);
+
+	// Default to the Showcase Event Map that ships with the plugin, so this zone
+	// runs against the same authored asset a real project would edit -- gains and
+	// modes visible in the editor rather than buried in the code below. Still a
+	// UPROPERTY, so it can be pointed at a different map in the details panel;
+	// the code-built fallback only runs if this asset ever goes missing.
+	static ConstructorHelpers::FObjectFinder<UHapbeatEventMap> DefaultEventMap(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/EM_Showcase.EM_Showcase"));
+	if (DefaultEventMap.Succeeded())
+	{
+		EventMapOverride = DefaultEventMap.Object;
+	}
 }
 
 void AHapbeatShowcaseZ3FishingActor::BeginPlay()
@@ -193,35 +206,22 @@ void AHapbeatShowcaseZ3FishingActor::SpawnShark()
 
 void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 {
-	EventMap = NewObject<UHapbeatEventMap>(this);
+	EventMap = EventMapOverride != nullptr ? ToRawPtr(EventMapOverride) : BuildFallbackEventMap();
+	if (EventMap == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcaseZ3, Warning, TEXT("Z3 Fishing: no EventMap available; haptics not wired."));
+		return;
+	}
 
-	HookStartClip = FHapbeatSampleLibrary::LoadSampleClip(this,
-		TEXT("Showcase/Kit/showcase-kit/stream-clips/z3_hook_start.wav"));
-	HookLoopClip = FHapbeatSampleLibrary::LoadSampleClip(this,
-		TEXT("Showcase/Kit/showcase-kit/stream-clips/z3_hook_loop.wav"));
-	HookReleaseClip = FHapbeatSampleLibrary::LoadSampleClip(this,
-		TEXT("Showcase/Kit/showcase-kit/stream-clips/z3_hook_release.wav"));
-
-	// Gains + manifest intensities verbatim from ShowcaseEventMap.md / showcase-kit-manifest.json:
-	// all 3 are StreamClip mode, gain (authored) = 1.00; intensities 0.60 / 0.50 / 0.55 respectively.
-	// Z3_hook_loop is the only one with a Parameter Binding (VelocityMagnitude -> StreamGain,
-	// input 0..3 m/s, Linear, output 0..1.5) -- wired onto the shark below.
-	const FHapbeatEventEntry HookStartEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.60f, HookStartClip, TEXT("Z3_hook_start"));
-
-	const FHapbeatEventEntry HookLoopEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"),
-		/*Gain=*/1.0f, /*bLoop=*/true, /*CachedIntensity=*/0.50f, HookLoopClip, TEXT("Z3_hook_loop"));
-
-	const FHapbeatEventEntry HookReleaseEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.55f, HookReleaseClip, TEXT("Z3_hook_release"));
-
-	EventMap->Entries.Reset(3);
-	EventMap->Entries.Add(HookStartEntry);
-	EventMap->Entries.Add(HookLoopEntry);
-	EventMap->Entries.Add(HookReleaseEntry);
+	// Look the ids up by event name. The fallback map below authors the same
+	// categories / names / modes, so both paths go through this one resolution
+	// step instead of duplicating the wiring.
+	const FGuid HookStartId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"));
+	const FGuid HookLoopId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"));
+	const FGuid HookReleaseId = FHapbeatSampleLibrary::FindEntryId(
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"));
 
 	if (SharkActor == nullptr)
 	{
@@ -234,9 +234,9 @@ void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 	// owner's components).
 	HookSequenceComp = NewObject<UHapbeatSequenceComponent>(SharkActor, TEXT("Z3HookSequence"));
 	HookSequenceComp->EventMap = EventMap;
-	HookSequenceComp->EntryId = HookLoopEntry.Id;
-	HookSequenceComp->StartEntryId = HookStartEntry.Id;
-	HookSequenceComp->StopEntryId = HookReleaseEntry.Id;
+	HookSequenceComp->EntryId = HookLoopId;
+	HookSequenceComp->StartEntryId = HookStartId;
+	HookSequenceComp->StopEntryId = HookReleaseId;
 	HookSequenceComp->RegisterComponent();
 
 	// UE's world scale is 1 uu = 1 cm (Unity: 1 unit = 1 m) and GetPhysicsLinearVelocity() returns
@@ -258,6 +258,41 @@ void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 	// correctness requirement (GetPhysicsLinearVelocity() reflects the current physics
 	// state regardless of tick order; this just avoids a possible 1-frame-stale read).
 	HookVelocityBinding->AddTickPrerequisiteActor(this);
+}
+
+UHapbeatEventMap* AHapbeatShowcaseZ3FishingActor::BuildFallbackEventMap()
+{
+	UHapbeatEventMap* Fallback = NewObject<UHapbeatEventMap>(this);
+
+	HookStartClip = FHapbeatSampleLibrary::LoadSampleClip(this,
+		TEXT("Showcase/Kit/showcase-kit/stream-clips/z3_hook_start.wav"));
+	HookLoopClip = FHapbeatSampleLibrary::LoadSampleClip(this,
+		TEXT("Showcase/Kit/showcase-kit/stream-clips/z3_hook_loop.wav"));
+	HookReleaseClip = FHapbeatSampleLibrary::LoadSampleClip(this,
+		TEXT("Showcase/Kit/showcase-kit/stream-clips/z3_hook_release.wav"));
+
+	// Gains + manifest intensities verbatim from ShowcaseEventMap.md / showcase-kit-manifest.json:
+	// all 3 are StreamClip mode, gain (authored) = 1.00; intensities 0.60 / 0.50 / 0.55 respectively.
+	// Z3_hook_loop is the only one with a Parameter Binding (VelocityMagnitude -> StreamGain,
+	// input 0..3 m/s, Linear, output 0..1.5) -- wired onto the shark in
+	// BuildEventMapAndHaptics, which runs for the shipped asset too.
+	const FHapbeatEventEntry HookStartEntry = FHapbeatSampleLibrary::MakeEntry(
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"),
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.60f, HookStartClip, TEXT("Z3_hook_start"));
+
+	const FHapbeatEventEntry HookLoopEntry = FHapbeatSampleLibrary::MakeEntry(
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"),
+		/*Gain=*/1.0f, /*bLoop=*/true, /*CachedIntensity=*/0.50f, HookLoopClip, TEXT("Z3_hook_loop"));
+
+	const FHapbeatEventEntry HookReleaseEntry = FHapbeatSampleLibrary::MakeEntry(
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"),
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.55f, HookReleaseClip, TEXT("Z3_hook_release"));
+
+	Fallback->Entries.Reset(3);
+	Fallback->Entries.Add(HookStartEntry);
+	Fallback->Entries.Add(HookLoopEntry);
+	Fallback->Entries.Add(HookReleaseEntry);
+	return Fallback;
 }
 
 void AHapbeatShowcaseZ3FishingActor::BindInput()

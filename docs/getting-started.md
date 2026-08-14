@@ -329,19 +329,42 @@ Details パネル上部には専用の操作列も出ます:
 **Play Entry** に EventMap とエントリを渡すだけです。Command か Stream Clip か、
 どのクリップを使うか、ゲイン、送信先、ループは**すべてエントリ側の設定**が使われます。
 
+**エントリの指定には GUID を手入力しないでください。** `Entry Id` は安定 GUID で、
+**エントリ名から選べるのはトリガコンポーネントのプルダウンだけ**です（4-2）。
+Blueprint から鳴らす場合も、まずコンポーネントでエントリを選ぶのが正規の手順です。
+
 **Blueprint**:
 
-1. グラフを右クリック → `Hapbeat` で検索 → **Get Hapbeat Subsystem**
-2. そこから **Play Entry** を繋ぐ
-   - `Map`: §3 で作った EventMap
-   - `Entry Id`: 鳴らしたいエントリの `Id`（Event Map ウィンドウの Identity からコピー）
-3. 発火のきっかけ（`Event BeginPlay` やキー入力）を実行ピンに繋ぐ
+1. アクターに **Add Component → Hapbeat Trigger** を追加
+2. Details で `Event Map` を指定 → `Entry Id` を**プルダウンからエントリ名で選ぶ**
+3. グラフでそのコンポーネントを掴んで **Fire** を呼ぶ
+   （発火のきっかけは `Event BeginPlay` でもキー入力でもよい）
+
+`Play Entry` を直接呼びたい場合も、`Entry Id` ピンにはこのコンポーネントの
+`Entry Id`（Blueprint から読める）を繋ぎます。
 
 **C++**:
 
 ```cpp
 UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>();
 Hb->PlayEntry(EventMap, EntryId);
+```
+
+C++ ではイベント名から `Entry Id` を引けます（GUID は EventMap を作り直すと変わるため、
+名前で引くのが安全です）:
+
+```cpp
+FGuid FindEntryId(const UHapbeatEventMap* Map, EHapticMode Mode, const FString& EventId)
+{
+    for (const FHapbeatEventEntry& Entry : Map->Entries)
+    {
+        if (Entry.Mode == Mode && Entry.GetEventId() == EventId)
+        {
+            return Entry.Id;
+        }
+    }
+    return FGuid();
+}
 ```
 
 停止は **Stop Entry**（`StopEntry(EventMap, EntryId)`）です。

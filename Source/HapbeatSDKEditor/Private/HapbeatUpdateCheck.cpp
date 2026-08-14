@@ -2,6 +2,7 @@
 #include "HapbeatUpdateCheck.h"
 
 #include "HapbeatEditorTools.h"
+#include "SHapbeatEventMapWindow.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
@@ -10,6 +11,8 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/DateTime.h"
 #include "Misc/Paths.h"
+#include "Framework/Docking/TabManager.h"
+#include "Styling/AppStyle.h"
 #include "ToolMenus.h"
 
 #define LOCTEXT_NAMESPACE "HapbeatUpdateCheck"
@@ -191,6 +194,17 @@ void FHapbeatUpdateCheck::Register()
 
 	UToolMenu* ToolsMenu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Tools");
 	FToolMenuSection& Section = ToolsMenu->FindOrAddSection("Hapbeat", LOCTEXT("HapbeatSection", "Hapbeat"));
+
+	// First: it is the entry a user reaches for most, and grouping it here is
+	// what keeps the plugin from appearing in two separate menus.
+	Section.AddMenuEntry("HapbeatEventMapWindow",
+		LOCTEXT("OpenEventMap", "Hapbeat Event Map"),
+		LOCTEXT("OpenEventMapTooltip", "Open the Event Map editor: entry list on the left, the selected entry's settings on the right."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"),
+		FUIAction(FExecuteAction::CreateLambda([]
+		{
+			FGlobalTabmanager::Get()->TryInvokeTab(SHapbeatEventMapWindow::TabId);
+		})));
 
 	Section.AddMenuEntry("HapbeatCheckForUpdates",
 		LOCTEXT("CheckNow", "Check for SDK Updates"),

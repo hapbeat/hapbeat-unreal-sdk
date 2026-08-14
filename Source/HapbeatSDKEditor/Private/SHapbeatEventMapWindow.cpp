@@ -40,8 +40,6 @@
 #include "Widgets/Layout/SSplitter.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
-#include "WorkspaceMenuStructure.h"
-#include "WorkspaceMenuStructureModule.h"
 
 #define LOCTEXT_NAMESPACE "SHapbeatEventMapWindow"
 
@@ -112,7 +110,13 @@ void SHapbeatEventMapWindow::RegisterTabSpawner()
 		}))
 		.SetDisplayName(LOCTEXT("TabTitle", "Hapbeat Event Map"))
 		.SetTooltipText(LOCTEXT("TabTooltip", "Browse and edit the entries of a Hapbeat Event Map."))
-		.SetGroup(WorkspaceMenu::GetMenuStructure().GetToolsCategory())
+		// Deliberately NOT placed in the engine's Tools workspace category: that
+		// listed the window among the engine's own tools, several screens away
+		// from the plugin's other menu entries, so the SDK appeared in two
+		// unrelated places at once. It is registered explicitly in the Hapbeat
+		// section instead (FHapbeatUpdateCheck::Register), which keeps everything
+		// this plugin adds in one group.
+		.SetMenuType(ETabSpawnerMenuType::Hidden)
 		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"));
 }
 

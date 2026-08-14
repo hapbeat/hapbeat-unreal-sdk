@@ -163,6 +163,25 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 サブシステムは**起動時に自動接続**します（`Initialize()` の時点。レベルの `BeginPlay` より前）。
 そのため `Connect` を呼ばなくても、いきなり `Play` して構いません。
 
+### 先に EventMap を作る（実運用ではこれが前提）
+
+以下の例は説明のためにイベント ID を直接書いていますが、**実際の開発では
+EventMap アセットを作り、そこに登録したエントリを参照するのが標準**です。
+強さ・送信先・ループ・遅延をコードの外に出せるので、調整のたびに
+ビルドし直す必要がなくなります。
+
+**まだ EventMap を作っていない場合は、先に [§4](#4-eventmap-で鳴らす場所と強さを分ける)
+を済ませてから戻ってきてください。** §4 で作ったエントリには
+**安定した GUID（`Id`）** が振られており、以下ではそれを参照します。
+
+エントリの `Id` は、Event Map ウィンドウで対象のエントリを選び、
+**Identity セクションの `Id`** からコピーできます。
+
+> **一番手数が少ないのは [§5 のトリガコンポーネント](#5-トリガコンポーネントを使うコードなしで鳴らす)です。**
+> アクターにコンポーネントを足して EventMap とエントリを指定するだけで、
+> Blueprint も C++ も書かずに鳴らせます。以下は「自分のコードから任意の
+> タイミングで鳴らしたい」場合の説明です。
+
 ### Blueprint の場合（最短で試す）
 
 **レベルブループリント**を使うのが一番早く、アセットを一つも作らずに試せます。
@@ -186,6 +205,21 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 
 > Command モード（イベント ID を送る方式）なので、**Kit の書き込みが必要**です。
 > 書き込んでいない場合は、代わりに §2 の Space（StreamClip）で確認してください。
+
+#### EventMap のエントリを鳴らす（実運用の形）
+
+上の `Play` はイベント ID を直接書いているため、強さを変えるたびに
+グラフを直すことになります。EventMap のエントリを使うと、強さ・送信先・
+ループは**アセット側**で調整できます。
+
+1. アクターに **Hapbeat Trigger** コンポーネントを追加する
+   （詳細は [§5](#5-トリガコンポーネントを使うコードなしで鳴らす)）
+2. その `Event Map` に §4 で作ったアセットを指定し、`Entry Id` を選ぶ
+3. Blueprint からは、そのコンポーネントの **`Fire`** を呼ぶだけ
+   （`Play` にイベント ID を書く必要はありません）
+
+強さを変えたくなったら、Event Map ウィンドウで `Gain` を動かして
+**Test Play** で確認します。Blueprint も再ビルドも触りません。
 
 ### C++ の場合
 
@@ -338,6 +372,40 @@ Live Coding は実行中のプロセスに機械語パッチを当てる仕組�
   バージョン番号は `C:\Program Files\Microsoft Visual Studio\2022\<エディション>\VC\Tools\MSVC\`
   にあるフォルダ名から、`include\sanitizer\` を**持たない**方を選びます。
 
+#### EventMap のエントリを鳴らす（実運用の形）
+
+C++ でも、イベント ID を書くのではなく **Hapbeat Trigger コンポーネント**を
+持たせて `Fire()` を呼ぶのが標準です。強さや送信先はアセット側に残ります。
+
+```cpp
+#include "MyHapticActor.h"
+
+#include "HapbeatTriggerComponent.h"
+
+AMyHapticActor::AMyHapticActor()
+{
+    // Event Map と Entry Id は、配置したアクターの詳細パネルで指定する
+    Haptic = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("Haptic"));
+}
+
+void AMyHapticActor::BeginPlay()
+{
+    Super::BeginPlay();
+    Haptic->Fire();
+}
+```
+
+ヘッダには次を足します:
+
+```cpp
+UPROPERTY(VisibleAnywhere)
+TObjectPtr<class UHapbeatTriggerComponent> Haptic;
+```
+
+> `Entry Id` は詳細パネルで **EventMap のエントリ名から選べます**（GUID を
+> 手で貼る必要はありません）。EventMap を指定していないときだけ、生の
+> GUID 欄が出ます。
+
 主な API:
 
 ```cpp
@@ -385,13 +453,33 @@ SDK はこれを分離する仕組みを持っています。
 
 3. 作られたアセットに名前を付ける（例: `DA_HapbeatEventMap`）
 4. 開いて `Entries` に `+` で追加し、各エントリを設定
-   - `Mode`: `Command`（Kit 必要）か `StreamClip`（Kit 不要）
+   - `Mode`: `FIRE (Command)`（Kit 必要）か `CLIP (Stream Clip)`（Kit 不要）
    - `Category` / `Event Name`: 合わせて `<Category>.<EventName>` がイベント ID になる
    - `Gain`: `0`〜`2`
    - `Target`: 空 = 全デバイス
 5. 上部の **Refresh Intensities** を押す
    → Kit の `manifest.json` に書かれた `intensity` を各エントリに焼き込みます
 6. **Test Play** で、再生（PIE）せずにその場で鳴らして確認できます
+
+#### `Category` / `Event Name` は Kit の manifest と一致させる
+
+`Refresh Intensities` が `resolved 0 / unresolved N` になる場合、ほぼこれです。
+**イベント ID と Mode の両方が manifest と一致した時だけ**強さが焼き込まれます。
+
+同梱の `basic-exam-kit` なら、次の 2 通りが一致する組み合わせです:
+
+| Mode | Category | Event Name | manifest 上の位置 |
+|---|---|---|---|
+| `FIRE (Command)` | `basic-exam-kit` | `sine_200hz_1s` | `events` |
+| `CLIP (Stream Clip)` | `basic-exam-kit` | `sine_100hz_1s` | `stream_events` |
+
+- `Category` は **Kit 名**（manifest の `name`）
+- `Event Name` は **クリップのファイル名から拡張子を除いたもの**
+- **Mode が違うと一致しません。** manifest では FIRE 用が `events`、CLIP 用が
+  `stream_events` に分かれており、同じイベント ID でも別枠として扱われます
+
+一致しない場合は `intensity` が `-1`（未解決）のままになり、`Gain` がそのまま
+送られます。鳴らないわけではありませんが、Kit で意図した強さにはなりません。
 
 ### 専用ウィンドウで編集する（推奨）
 

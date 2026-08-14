@@ -24,7 +24,6 @@ public class HapbeatSDKEditor : ModuleRules
 			"InputCore",     // EKeys::* referenced by SComboBox/SListView templates instantiated in this module
 			"DesktopPlatform", // IDesktopPlatform::OpenFileDialog (UHapbeatClip WAV import)
 			"Projects",      // IPluginManager (bundled-sample WAV dialog default / plugin Content manifest scan)
-			"WorkspaceMenuStructure", // places the Event Map tab under Window > Tools
 			"ToolMenus",     // Tools menu entries (update check)
 			"HTTP",          // release-feed query (DEC-053 update notification)
 			"ContentBrowser",// selected-asset lookup for the Markdown export

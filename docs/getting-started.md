@@ -17,20 +17,9 @@ Hapbeat デバイスを Unreal Engine 5 から Wi-Fi 経由で鳴らすための
 | 必要なもの | 補足 |
 |---|---|
 | **Unreal Engine 5.3 以降** | 5.4 でビルド・動作確認済み |
-| **C++ が扱えるプロジェクト** | 下の「なぜ C++ プロジェクトが必要か」を参照 |
+| **C++ が扱えるプロジェクト** | 理由と手順は [UE プロジェクトのビルド](./unreal-build.md) |
 | **Hapbeat デバイス**（PC と同じ Wi-Fi / LAN） | ルーター経由でも、Hapbeat の SoftAP でも可 |
 | **[Hapbeat Studio](https://devtools.hapbeat.com)** | Wi-Fi 設定と Kit の書き込みに使用 |
-
-### なぜ C++ プロジェクトが必要か
-
-本 SDK は**ソース形式のプラグイン**（コンパイル済みバイナリを同梱していない）です。
-そのため Blueprint だけで作るプロジェクトでも、**一度だけ**ビルドが必要になります。
-
-Blueprint プロジェクトしか無い場合は、エディタで
-**Tools → New C++ Class → None → Create Class** を一度実行すれば C++ プロジェクトになります
-（以降の作業はすべて Blueprint だけで進められます）。
-
-> Visual Studio 2022（ワークロード「**C++ によるゲーム開発**」）が必要です。
 
 ### デバイス側の準備
 
@@ -246,8 +235,33 @@ Stop で止まります。
 > `Hapbeat Clip` アセットに PCM を保持しています。上のボタンは、その制約を
 > ユーザーの手作業にしないためのものです。
 
-> **`Hapbeat Clip`** アセット（§6 のストリーミング用）も、同じ
+> **`Hapbeat Clip`** アセット（ストリーミング用）も、同じ
 > **Hapbeat** カテゴリから同じ手順で作成できます。
+
+### クリップをストリーミングする（Kit 不要）
+
+`UHapbeatClip` は 16kHz / PCM16 の WAV をそのまま扱えるアセットです。
+再生中に**ゲインとパンをリアルタイムに変えられる**のが Command 再生との違いです。
+
+**クリップアセットの作り方**: Content Browser → 右クリック → **Miscellaneous → Data Asset**
+→ **Hapbeat Clip** で空のアセットを作り、開いて **[Import WAV...]** から `.wav` を読み込みます
+（PCM 16bit であること。Kit と同じ 16kHz を推奨）。
+`.wav` の通常インポート（`USoundWave`）とは別物なので、間違えないよう専用ボタンにしています。
+
+```cpp
+UHapbeatStreamPlayback* Playback =
+    Hb->StreamClip(MyClip, /*BaselineGain=*/1.0f, /*InitialGain=*/1.0f, TEXT(""), /*bLoop=*/true);
+
+// 毎フレーム変調する（例: 速度に応じて強くする）
+Playback->ApplyGainModulation(FMath::Clamp(Speed / 300.0f, 0.0f, 1.0f));
+Playback->SetPan(-1.0f);  // -1 = 左, +1 = 右
+
+Hb->StopStream();  // 停止
+```
+
+同時に流せるストリームは **1 本**です。新しく `StreamClip` を呼ぶと前のものは停止します。
+
+---
 
 ### GUI で編集できる項目
 
@@ -311,277 +325,36 @@ Details パネル上部には専用の操作列も出ます:
 
 ## 4. 自分のプロジェクトから鳴らす
 
-サブシステムは**起動時に自動接続**します（`Initialize()` の時点。レベルの `BeginPlay` より前）。
-そのため `Connect` を呼ばなくても、いきなり `Play` して構いません。
+前章で作ったエントリを発火させます。鳴らし方は 2 つで、**どちらも EventMap の
+エントリを参照します**。強さ・送信先・ループはアセット側に残るので、調整のたびに
+コードを触る必要はありません。
 
-前章で作った EventMap のエントリを、実際に発火させます。
+### 4-1. コードから鳴らす（Blueprint / C++）
 
-### 3 つの経路と使い分け
+**Play Entry** に EventMap とエントリを渡すだけです。Command か Stream Clip か、
+どのクリップを使うか、ゲイン、送信先、ループは**すべてエントリ側の設定**が使われます。
 
-| | 経路 | いつ使うか |
-|---|---|---|
-| **A** | **トリガコンポーネント（宣言のみ）** | **既定。** 発火条件が Blueprint / 詳細パネルの配線で完結する場合 |
-| **B** | **トリガコンポーネント + コードから `Fire()`** | 発火条件や強さをコードで計算する場合 |
-| **C** | `Play("<イベント ID>")` を直接呼ぶ | **特殊ケースのみ**（下記） |
+**Blueprint**:
 
-**A と B が既定で、どちらも EventMap のエントリを参照します。** 強さ・送信先・
-ループ・遅延はアセット側に残るので、調整のたびにコンパイルし直す必要が
-ありません。A と B は併用できます。
+1. グラフを右クリック → `Hapbeat` で検索 → **Get Hapbeat Subsystem**
+2. そこから **Play Entry** を繋ぐ
+   - `Map`: §3 で作った EventMap
+   - `Entry Id`: 鳴らしたいエントリの `Id`（Event Map ウィンドウの Identity からコピー）
+3. 発火のきっかけ（`Event BeginPlay` やキー入力）を実行ピンに繋ぐ
 
-**C は EventMap を経由しない**ため、一元管理の利点（詳細パネルでの値調整、
-Wiring 一覧、遅延補正）をすべて失います。**特別な理由が無い限り使わないでください。**
-妥当なのは、EventMap で扱える範囲を超える規模・動的性が必要なときだけです。
-たとえば「100 人ぶんの心拍をプレイヤー ID 付きで個別管理する」ようなケースでは、
-EventMap に静的に並べると数百エントリになり GUI で管理できず、かつ
-**イベント ID を実行時に組み立てる**（`Play(FString::Printf(TEXT("heartbeat.player_%d"), Id))`）
-必要が出てきます。この 2 つが揃ったときに限り C が有効です。
-
-### A / B: トリガコンポーネント経由（既定）
-
-アクターに **Hapbeat Trigger** コンポーネントを足し、`Event Map` と `Entry Id`
-を指定します。`Entry Id` は**エントリ名から選べます**（GUID を手で貼る必要は
-ありません）。詳細は [§5](#5-トリガコンポーネントを使うコードなしで鳴らす)。
-
-- **A（宣言のみ）** — Blueprint でそのコンポーネントの **`Fire`** を呼ぶ配線をする。
-  コードは書きません
-- **B（コードから）** — C++ / Blueprint から `Fire()` を呼ぶ。強さを動かしたい場合は
-  `SetGainMultiplier()` を併用する
-
-強さを変えたくなったら、Event Map ウィンドウで `Gain` を動かして **Test Play**
-で確認します。Blueprint も再ビルドも触りません。
-
-C++ でコンポーネントを持たせる場合の最小形:
+**C++**:
 
 ```cpp
-#include "MyHapticActor.h"
-
-#include "HapbeatTriggerComponent.h"
-
-AMyHapticActor::AMyHapticActor()
-{
-    // Event Map と Entry Id は、配置したアクターの詳細パネルで指定する
-    Haptic = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("Haptic"));
-}
-
-void AMyHapticActor::BeginPlay()
-{
-    Super::BeginPlay();
-    Haptic->Fire();
-}
+UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>();
+Hb->PlayEntry(EventMap, EntryId);
 ```
 
-ヘッダには次を足します:
+停止は **Stop Entry**（`StopEntry(EventMap, EntryId)`）です。
 
-```cpp
-UPROPERTY(VisibleAnywhere)
-TObjectPtr<class UHapbeatTriggerComponent> Haptic;
-```
+> 第 3 引数の `Gain Multiplier` で、**その呼び出しだけ**強さを変えられます
+>（エントリの設定は変わりません）。
 
-C++ プロジェクトの準備（`Build.cs` の編集など）がまだなら、次の
-「C++ の場合」の 1〜2 を先に済ませてください。
-
----
-
-### C: イベント ID を直接送る（特殊ケース）
-
-> **通常はここを使いません。** 上の A / B を使ってください。
-> 以下は、仕組みの確認と、イベント ID を実行時に組み立てる必要がある場合の説明です。
-
-#### Blueprint の場合
-
-**レベルブループリント**を使うのが一番早く、アセットを一つも作らずに試せます。
-
-1. §2 で作った **Basic** レベルを開いた状態で、ツールバーの
-   **ブループリント → レベルブループリントを開く**
-2. グラフの空白を右クリック → 検索欄に `Hapbeat` と入力 →
-   **Get Hapbeat Subsystem** を追加
-   （サブシステムは UE が自動でノード化するので、この 1 個で取得できます）
-3. そのノードの青いピンから線を引き、`Play` を検索して **Play** を追加
-   - `Event Id`: `basic-exam-kit.sine_200hz_1s`（`<kit名>.<ファイル名>`）
-   - `Gain`: `0.5` など
-   - `Target`: 空のまま（全デバイス宛て）
-4. **発火のきっかけ**を繋ぐ。どちらかで確認できます:
-   - **確実な方法**: 右クリック → `Event BeginPlay` を追加 →
-     `Delay`（Duration `2.0`）→ `Play` の順に白い実行ピンを繋ぐ
-     → **Play を押して 2 秒後に自動で振動**します
-   - **キーで試す**: 右クリック → `Keyboard Events` → `G` などを追加し、
-     その `Pressed` から `Play` に繋ぐ
-5. **コンパイル**（ブループリントエディタ左上）→ レベルに戻って **▶ Play**
-
-> Command モード（イベント ID を送る方式）なので、**Kit の書き込みが必要**です。
-> 書き込んでいない場合は、代わりに §2 の Space（StreamClip）で確認してください。
-
-#### C++ の場合
-
-1. エディタで **ツール → 新規 C++ クラス → Actor** を選び、名前を付けて作成
-   （例: `MyHapticActor`）
-2. **自分のプロジェクトの `*.Build.cs`** を開き、`PublicDependencyModuleNames` に
-   `"HapbeatSDK"` を足す
-
-   **`Build.cs` は Unreal エディタでは開けません。** ディスク上のテキストファイル
-   （C# のビルド設定）なので、エディタの外で編集します。
-
-   場所（`<>` は自分のプロジェクト名に読み替え）:
-
-   ```
-   <プロジェクトフォルダ>\Source\<プロジェクト名>\<プロジェクト名>.Build.cs
-   ```
-
-   開き方は 3 通り、どれでも構いません:
-
-   | 方法 | 手順 |
-   |---|---|
-   | **エディタから** | **ツール → Visual Studio を開く**（`Open Visual Studio`）→ VS の Solution Explorer で `Games → <プロジェクト名> → Source` を展開 |
-   | **VS から直接** | `.sln` を開き、同じく Solution Explorer から辿る |
-   | **エクスプローラから** | 上のパスのファイルを右クリック → メモ帳や VS Code で開く（ただのテキストです） |
-
-   編集後の中身（既存の行に `"HapbeatSDK"` を足すだけ）:
-
-   ```csharp
-   PublicDependencyModuleNames.AddRange(new string[] {
-       "Core", "CoreUObject", "Engine", "InputCore", "HapbeatSDK" });
-   ```
-
-3. 作った Actor に下のコードを書く
-4. **エディタを閉じてリビルド**（`Build.cs` を変えたので Live Coding では反映されません）
-5. エディタを開き直し、作った Actor をレベルに置いて **▶ Play**
-
-
-```cpp
-// UE が生成した「自分のヘッダ」を必ず 1 行目に置く。
-// この 2 本はその「後ろ」に足すこと（下の注意を参照）
-#include "MyHapticActor.h"
-
-#include "HapbeatSubsystem.h"
-#include "Engine/GameInstance.h"
-
-void AMyHapticActor::BeginPlay()
-{
-    Super::BeginPlay();
-
-    if (UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>())
-    {
-        Hb->Play(TEXT("basic-exam-kit.sine_200hz_1s"), 0.5f);
-    }
-}
-```
-
-> **include を足す位置に注意。** UE は `.cpp` が**自分のヘッダを最初に
-> include している**ことを要求します。エディタが生成した `.cpp` の先頭には
-> すでに `#include "MyHapticActor.h"` が入っているので、**その下に**
-> `HapbeatSubsystem.h` などを足してください。上に貼ると
-> `Expected MyHapticActor.h to be first header included.` でビルドが止まります。
-
-ヘッダ側はこうなります:
-
-```cpp
-#pragma once
-
-#include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
-#include "MyHapticActor.generated.h"
-
-UCLASS()
-class あなたのプロジェクト名_API AMyHapticActor : public AActor
-{
-    GENERATED_BODY()
-
-protected:
-    virtual void BeginPlay() override;
-};
-```
-
-> `あなたのプロジェクト名_API` は、UE が生成したクラスに元から入っている
-> マクロ（例: プロジェクト名が `MyGame` なら `MYGAME_API`）をそのまま使ってください。
-
-##### C++ を編集したあと、どこまでエディタを開いたままにできるか
-
-**▶ Play（PIE）はコンパイルしません。** `.cpp` を保存しただけでは何も変わらず、
-必ずどこかでコンパイルを挟む必要があります。方法は 2 つあり、
-**変更の種類によってどちらを使えるかが決まります**。
-
-| 変更した内容 | 反映方法 |
-|---|---|
-| 既存の関数の**中身**だけを書き換えた | **Live Coding**。エディタを開いたまま反映されます（次項） |
-| `.h` / `.cpp` を**新規追加**した（新しいクラスを作った） | エディタを閉じてビルド |
-| `*.Build.cs` を変更した | エディタを閉じてビルド |
-| `UPROPERTY` / `UFUNCTION` / `UCLASS` / `USTRUCT` を追加・変更した | エディタを閉じてビルド |
-| メンバ変数の追加など、**クラスのレイアウトが変わる**変更をした | エディタを閉じてビルド |
-
-Live Coding は実行中のプロセスに機械語パッチを当てる仕組みなので、
-**既存関数の差し替えはできても、リフレクション情報やクラスの形が変わる変更は扱えません**。
-上の手順 1〜2 は「新規クラス作成」と「`Build.cs` 変更」の両方に当たるため、
-**初回は必ずエディタを閉じてビルド**が必要です。そのあと `BeginPlay()` の中身を
-調整していく段階からは、下の方法でエディタ上からコンパイルできます。
-
-###### エディタ上でコンパイルする（Unity の `Ctrl` + `R` に相当）
-
-3 通りあり、**どれも同じ Live Coding のコンパイルを呼びます**。好きなものを使ってください。
-
-| 方法 | 場所・キー |
-|---|---|
-| **Compile ボタン** | エディタ**下部のステータスバー**にあるコンパイルアイコン。隣のコンボボタンから Live Coding の設定も開けます |
-| **キーボード** | `Ctrl` + `Alt` + `Shift` + `P`（コマンド名は `Recompile Game Code`。**編集 → エディタの環境設定 → キーボードショートカット** で変更できます） |
-| **Live Coding のホットキー** | `Ctrl` + `Alt` + `F11`。エディタではなく Live Coding コンソール側が持つグローバルホットキーで、コンソールの設定（`compile_shortcut`）で変更できます |
-
-コンパイル結果は画面右下に通知として出ます。失敗した場合は通知から
-出力ログを開いてエラーを確認してください。
-
-> Live Coding が使えるかは **編集 → エディタの環境設定 → Live Coding** で確認できます。
-> 無効な場合は、常にエディタを閉じてビルドしてください。
-
-> **ビルド時に `Unable to build while Live Coding is active` と出たら**、
-> エディタがまだ起動しています。完全に終了してからビルドし直してください。
-
-##### ビルドでつまずいたときのメモ
-
-- **Visual Studio では「Build」を使い、「Rebuild」は使わない。**
-  Rebuild は中間生成物を捨てて共有 PCH から作り直すため、時間がかかるうえに
-  下のツールチェーン起因の失敗を踏みやすくなります。増分 Build で十分です。
-- **VS の「エラー一覧」ウィンドウはあてになりません。** IntelliSense の解析エラー
-  （`識別子 "FTextureBuildSettings" が定義されていません`、根拠のない `override`
-  エラーなど）が混ざります。実際に何が失敗したかは「出力」ウィンドウか、
-  `%LOCALAPPDATA%\UnrealBuildTool\Log.txt` で確認してください。
-- **`ConcurrentLinearAllocator.h` で `__has_feature` が未定義、というエラーが出たら**、
-  それは Hapbeat SDK ではなく MSVC ツールチェーンの問題です。UE 5.4 はこの箇所を
-  `<sanitizer/asan_interface.h>` の有無で切り替えますが、このヘッダを同梱する
-  MSVC と同梱しない MSVC があり、Visual Studio に複数バージョンが入っていると
-  組み合わせによって Clang 専用の分岐に落ちます（UE は `/we4668` で
-  これをエラーに昇格させます）。プロジェクト直下の `BuildConfiguration.xml` で
-  使うツールセットを固定すると再発しません:
-
-  ```xml
-  <?xml version="1.0" encoding="utf-8" ?>
-  <Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
-    <WindowsPlatform>
-      <CompilerVersion>14.44.35207</CompilerVersion>
-    </WindowsPlatform>
-  </Configuration>
-  ```
-
-  バージョン番号は `C:\Program Files\Microsoft Visual Studio\2022\<エディション>\VC\Tools\MSVC\`
-  にあるフォルダ名から、`include\sanitizer\` を**持たない**方を選びます。
-
-主な API:
-
-```cpp
-void Play(const FString& EventId, float Gain = 1.0f, const FString& Target = TEXT(""));
-void Stop(const FString& EventId, const FString& Target = TEXT(""));
-void StopAll(const FString& Target = TEXT(""));
-void Ping();
-
-int32 GetAliveDeviceCount() const;   // 応答のあるデバイス数
-bool  IsAlive() const;               // 1 台以上応答しているか
-bool  IsConnected() const;           // ソケットが開いているか（≠ デバイスの有無）
-```
-
-> `IsConnected()` は「ソケットが開いているか」であり、**デバイスの有無ではありません**。
-> UDP はコネクションレスのため、デバイスの電源が入っていなくても `true` になります。
-> 実際に届いているかは `IsAlive()` / `GetAliveDeviceCount()` で判断してください。
-
----
-
-## 5. トリガコンポーネントを使う（コードなしで鳴らす）
+### 4-2. トリガコンポーネントを使う（同じエントリを繰り返し鳴らす場合）
 
 アクターに **Add Component** から追加できます。いずれも EventMap とエントリを指定して使います。
 
@@ -596,71 +369,13 @@ bool  IsConnected() const;           // ソケットが開いているか（≠ 
 
 ---
 
-## 6. クリップをストリーミングする（Kit 不要）
-
-`UHapbeatClip` は 16kHz / PCM16 の WAV をそのまま扱えるアセットです。
-再生中に**ゲインとパンをリアルタイムに変えられる**のが Command 再生との違いです。
-
-**クリップアセットの作り方**: Content Browser → 右クリック → **Miscellaneous → Data Asset**
-→ **Hapbeat Clip** で空のアセットを作り、開いて **[Import WAV...]** から `.wav` を読み込みます
-（PCM 16bit であること。Kit と同じ 16kHz を推奨）。
-`.wav` の通常インポート（`USoundWave`）とは別物なので、間違えないよう専用ボタンにしています。
-
-```cpp
-UHapbeatStreamPlayback* Playback =
-    Hb->StreamClip(MyClip, /*BaselineGain=*/1.0f, /*InitialGain=*/1.0f, TEXT(""), /*bLoop=*/true);
-
-// 毎フレーム変調する（例: 速度に応じて強くする）
-Playback->ApplyGainModulation(FMath::Clamp(Speed / 300.0f, 0.0f, 1.0f));
-Playback->SetPan(-1.0f);  // -1 = 左, +1 = 右
-
-Hb->StopStream();  // 停止
-```
-
-同時に流せるストリームは **1 本**です。新しく `StreamClip` を呼ぶと前のものは停止します。
-
----
-
-## 7. 応用
-
-### 複数の HMD に 1 台ずつ Hapbeat を割り当てる
-
-同一ビルドを複数台に配って、**端末ごとに別の Hapbeat へ送る**ための機能です。
-EventMap やトリガを一切書き換えずに、**すべての送信先を実行時に上書き**します。
-
-```cpp
-Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
-```
-
-- `-1` = その軸は上書きしない
-- `bPersist = true` で端末に保存され、次回起動時に自動で復元されます
-- App Name に `<p>` / `<g>` を含めておくと、デバイスの OLED に実際の番号が表示されます
-  （例: `Booth <p>` → `Booth 1`）
-
-### 送信先を絞る（Target）
-
-`Target` は `player_1/pos_chest` のようなパス文字列です。空文字なら全デバイスに送ります。
-`*` はワイルドカードとして使えます（例: `*/pos_neck` = 全プレイヤーの首）。
-
-### Showcase サンプル
-
-主要な実装手法をゾーン別に確認できます。BasicExample と同様、アクターをレベルに置いて再生します。
-
-| アクター | 内容 | キー |
-|---|---|---|
-| `Z1 Bowling` | 衝突トリガ（速度連動）。**スクリプト無しで鳴る例** | `B` 発射 |
-| `Z2 Door` | 状態遷移に合わせた発火 | `F` 開閉 / `G` 強打 / `L` 施錠 |
-| `Z3 Fishing` | 掴む→保持→離す + 速度でゲイン変調 | `H` |
-| `Z4 Stream Console` | ストリームのゲイン / パンを実行時操作 | `T` 開始 / `U` `J` 強弱 / `N` `M` 左右 |
-| `Z5 Charge Shot` | コードから直接 API を叩く例（溜め→発射） | `V` 長押し |
-
-Showcase のイベントは Command が中心のため、
-`Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Kit/showcase-kit/` の書き込みが必要です。
-
----
+4-1 との違いは、**呼ぶたびに指定するか、アクターに持たせておくか**だけです。
+同じエントリを何度も鳴らすなら 4-2 のほうが短く済み、クールダウンや
+ライブ変調も付いてきます。併用できます。
 
 ## 次に読むもの
 
-- [README](../README.md) — 機能一覧と API の入口
-- [AGENTS.md](../AGENTS.md) — AI コーディングエージェント向けの自己完結リファレンス
-- [公式ドキュメントポータル](https://devtools.hapbeat.com/) — 他 SDK と共通の概念解説
+- [応用](./advanced.md) — 複数 HMD への割り当て、送信先の絞り込み、Showcase
+  サンプル、イベント ID を直接送る特殊ケース
+- [UE プロジェクトのビルド](./unreal-build.md) — C++ プロジェクト化、`Build.cs`、
+  Live Coding の効く範囲、ビルドが通らないときの対処

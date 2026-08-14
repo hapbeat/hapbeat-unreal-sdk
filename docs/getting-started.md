@@ -7,7 +7,8 @@ Hapbeat デバイスを Unreal Engine 5 から Wi-Fi 経由で鳴らすための
 
 1. プラグインをプロジェクトに入れてビルドする
 2. 付属サンプルで疎通確認する（**ここまでで「動く」ことが確認できます**）
-3. 自分のプロジェクトから鳴らす
+3. EventMap に触覚イベントを定義する
+4. 自分のプロジェクトから鳴らす
 
 ---
 
@@ -154,33 +155,176 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 > そのため **Kit の `manifest.json` を編集しても、このサンプルの強さは変わりません**
 > （intensity の `0.5` はコードに直接書かれています）。
 > 実際の開発では次章の **EventMap アセット**を作り、GUI で編集するのが標準の流れです。
-> このサンプル自体を GUI 編集に切り替えることもできます（§4 の最後を参照）。
+> このサンプル自体を GUI 編集に切り替えることもできます（§3 の最後を参照）。
 
 ---
 
-## 3. 自分のプロジェクトから鳴らす
+## 3. EventMap で「鳴らす場所」と「強さ」を分ける
+
+`Play("...", 0.8f)` を直接書くと、**強さの調整のたびにコードを直す**ことになります。
+SDK はこれを分離する仕組みを持っています。
+
+- **鳴らす場所（起点）** — トリガコンポーネント、または `Play()` の呼び出し
+- **鳴らし方（調整）** — **EventMap** アセットのエントリ（イベント ID・ゲイン・対象デバイス・ループ）
+
+両者は**イベント ID ではなく安定した GUID** で結ばれるため、エントリを並べ替えても壊れません。
+
+### 作り方
+
+1. **コンテンツブラウザで `コンテンツ`（Content）フォルダを開く**
+
+   > **`C++ クラス`（C++ Classes）フォルダでは作れません。** ここは C++ の
+   > クラス階層を見るための表示専用フォルダで、右クリックしても
+   > `Fab` と `新規 C++ クラス` しか出てきません。左のツリーで
+   > プロジェクトの `コンテンツ` を選んでから進めてください。
+
+2. **右側のアセット一覧の、何もないところで右クリック** →
+   **Hapbeat → Hapbeat Event Map**
+
+   > 左のフォルダツリー上で右クリックすると、フォルダ操作のメニュー
+   >（新規フォルダ・名前変更など）が出ます。**右側の広い領域**で
+   > 右クリックしてください。上部の **+ 追加** ボタンからでも同じです。
+
+3. 作られたアセットに名前を付ける（例: `DA_HapbeatEventMap`）
+4. 開いて `Entries` に `+` で追加し、各エントリを設定
+   - `Mode`: `FIRE (Command)`（Kit 必要）か `CLIP (Stream Clip)`（Kit 不要）
+   - `Category` / `Event Name`: 合わせて `<Category>.<EventName>` がイベント ID になる
+   - `Gain`: `0`〜`2`
+   - `Target`: 空 = 全デバイス
+5. 上部の **Refresh Intensities** を押す
+   → Kit の `manifest.json` に書かれた `intensity` を各エントリに焼き込みます
+6. **Test Play** で、再生（PIE）せずにその場で鳴らして確認できます
+
+#### `Category` / `Event Name` は Kit の manifest と一致させる
+
+`Refresh Intensities` が `resolved 0 / unresolved N` になる場合、ほぼこれです。
+**イベント ID と Mode の両方が manifest と一致した時だけ**強さが焼き込まれます。
+
+同梱の `basic-exam-kit` なら、次の 2 通りが一致する組み合わせです:
+
+| Mode | Category | Event Name | manifest 上の位置 |
+|---|---|---|---|
+| `FIRE (Command)` | `basic-exam-kit` | `sine_200hz_1s` | `events` |
+| `CLIP (Stream Clip)` | `basic-exam-kit` | `sine_100hz_1s` | `stream_events` |
+
+- `Category` は **Kit 名**（manifest の `name`）
+- `Event Name` は **クリップのファイル名から拡張子を除いたもの**
+- **Mode が違うと一致しません。** manifest では FIRE 用が `events`、CLIP 用が
+  `stream_events` に分かれており、同じイベント ID でも別枠として扱われます
+
+一致しない場合は `intensity` が `-1`（未解決）のままになり、`Gain` がそのまま
+送られます。鳴らないわけではありませんが、Kit で意図した強さにはなりません。
+
+### 専用ウィンドウで編集する（推奨）
+
+エントリが増えると Details パネルは縦一列で見通しが悪くなります。
+**Tools メニュー → Hapbeat Event Map** に専用エディタがあります
+（アセットをダブルクリックして開く Details パネルとは別のウィンドウです）。
+
+- **左**: エントリ一覧（表示名・イベント ID・モード）
+- **右**: 選択したエントリだけを、**Identity / Event / Playback / Targeting /
+  Notes / Test** のセクションに分けて表示
+
+上部の **Event Map** 欄でアセットを切り替えられるので、ウィンドウはドッキング
+したまま複数の EventMap を行き来できます。Targeting は `Player` / `Position` /
+`Group` に分解して編集でき、結果の `Target` 文字列もその場で確認・直接編集
+できます。Details パネル側の編集も従来どおり使えます。
+
+**Test セクションの Test Play は Command / StreamClip の両方に対応**しています。
+StreamClip のエントリでは再生（PIE）に入らずにその場でストリーミングし、
+Stop で止まります。
+
+### StreamClip に音源を割り当てる
+
+`Mode` を **CLIP (Stream Clip)** にすると **Stream Clip** 欄が出ます。
+右の **Import WAV...** を押して 16-bit PCM の `.wav` を選べば、
+**Hapbeat Clip アセットが EventMap の隣に自動生成されて割り当てられます**
+（既にアセットがあるならピッカーから選んでも構いません）。
+
+> **なぜ `.wav` や Sound Wave を直接参照しないのか。**
+> パッケージ後の `USoundWave` はプラットフォーム圧縮された音声しか持たず、
+> このプロトコルが送る生 PCM を安定して取り出せません（エディタでは動いて
+> パッケージ版で無音になる類の壊れ方をします）。そのため SDK 側の
+> `Hapbeat Clip` アセットに PCM を保持しています。上のボタンは、その制約を
+> ユーザーの手作業にしないためのものです。
+
+> **`Hapbeat Clip`** アセット（§6 のストリーミング用）も、同じ
+> **Hapbeat** カテゴリから同じ手順で作成できます。
+
+### GUI で編集できる項目
+
+エントリを開くと、以下がすべて Details パネル上で編集できます（各項目にツールチップ付き）:
+
+| 項目 | 内容 |
+|---|---|
+| `Mode` | `Command` / `StreamClip`（プルダウン） |
+| `Display Name` | 一覧やトリガのプルダウンに出る表示名 |
+| `Category` / `Event Name` | 合わせて `<Category>.<EventName>` がイベント ID |
+| **`Gain`** | **0.0〜2.0** |
+| **`Target`** | **`player_1` / `*/pos_neck` など。空 = 全デバイス** |
+| `Loop` | ループ再生（StreamClip 用） |
+| `Delay Offset Seconds` | このイベントだけ発火を前後させる（±0.2 秒） |
+| `Notes` | 制作メモ（送信されません） |
+| `Stream Clip` | StreamClip モードで流す `UHapbeatClip` |
+
+Details パネル上部には専用の操作列も出ます:
+
+- **[Refresh Intensities]** — Kit の manifest を走査して intensity を全エントリに反映
+- **エントリ選択 + [Test Play] / [Stop] / [Stop All] / [Ping]** — **PIE に入らずその場で試せます**
+
+配列の追加・削除・並べ替え・複製、複数選択しての一括編集は UE 標準の機能がそのまま使えます。
+
+> **なぜ専用ウィンドウではなく Details パネルなのか**
+> Unity SDK は専用のエディタウィンドウを持っていますが、UE ではこれらの操作を
+> Details パネルが標準で提供するため、あえて独自ウィンドウを作っていません。
+> 学習することが少なく、UE の他のアセットと同じ操作感で扱えます。
+
+> 実際にデバイスへ送られるゲインは
+> **`Gain` × `Kit の intensity` × トリガ側の倍率** です。
+> Studio で作り込んだ強さ（intensity）を土台に、UE 側で微調整する設計になっています。
+
+### BasicExample を GUI 編集に切り替える（任意）
+
+疎通確認に使ったサンプルを、そのまま GUI 編集の練習台にできます。
+
+1. **先に触覚クリップのアセットを作る**（StreamClip エントリで使います）
+   - Content Browser → 右クリック → **Miscellaneous → Data Asset** → **Hapbeat Clip**
+   - 開いて **[Import WAV...]** を押し、
+     `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Kit/basic-exam-kit/stream-clips/sine_100hz_1s.wav`
+     を選ぶ（`16000 Hz, 1 ch, 1.00 s` と表示されれば成功。保存を忘れずに）
+2. EventMap アセットを作り、エントリを **3 つ**追加する
+   （順番が固定です: `[0]` Space、`[1]` R、`[2]` F）
+3. 値はコード側と同じにすると挙動が揃います（`Stream Clip` には 1. で作ったアセットを指定）:
+
+   | # | Mode | Category | Event Name | Gain | Loop | Stream Clip |
+   |---|---|---|---|---|---|---|
+   | 0 | StreamClip | `basic-exam-kit` | `sine_100hz_1s` | `1.0` | off | `sine_100hz_1s` |
+   | 1 | StreamClip | `basic-exam-kit` | `sine_100hz_1s_loop` | `1.0` | **on** | `sine_100hz_1s` |
+   | 2 | Command | `basic-exam-kit` | `sine_200hz_1s` | `1.0` | off | — |
+
+4. **Refresh Intensities** を押す（各エントリの intensity が `0.5` になります）
+5. レベルに置いた **Hapbeat Basic Example Actor** を選択し、Details の
+   **Event Map Override** に作った EventMap アセットを指定する
+
+以降このサンプルはアセット側の値で鳴るので、**Gain や Target を変えて即座に体感差を確認**できます。
+未指定（空）のままなら従来どおりコード生成で動きます。
+
+---
+
+## 4. 自分のプロジェクトから鳴らす
 
 サブシステムは**起動時に自動接続**します（`Initialize()` の時点。レベルの `BeginPlay` より前）。
 そのため `Connect` を呼ばなくても、いきなり `Play` して構いません。
 
-### 先に EventMap を作る（実運用ではこれが前提）
-
-以下の例は説明のためにイベント ID を直接書いていますが、**実際の開発では
-EventMap アセットを作り、そこに登録したエントリを参照するのが標準**です。
-強さ・送信先・ループ・遅延をコードの外に出せるので、調整のたびに
-ビルドし直す必要がなくなります。
-
-**まだ EventMap を作っていない場合は、先に [§4](#4-eventmap-で鳴らす場所と強さを分ける)
-を済ませてから戻ってきてください。** §4 で作ったエントリには
-**安定した GUID（`Id`）** が振られており、以下ではそれを参照します。
-
-エントリの `Id` は、Event Map ウィンドウで対象のエントリを選び、
-**Identity セクションの `Id`** からコピーできます。
+前章で作った EventMap のエントリを、実際に発火させます。
 
 > **一番手数が少ないのは [§5 のトリガコンポーネント](#5-トリガコンポーネントを使うコードなしで鳴らす)です。**
 > アクターにコンポーネントを足して EventMap とエントリを指定するだけで、
-> Blueprint も C++ も書かずに鳴らせます。以下は「自分のコードから任意の
+> Blueprint も C++ も書かずに鳴らせます。この章は「自分のコードから任意の
 > タイミングで鳴らしたい」場合の説明です。
+>
+> 以下の最初の例は仕組みを示すためにイベント ID を直接書いていますが、
+> **実運用では EventMap のエントリを参照します**（各項の「実運用の形」を参照）。
 
 ### Blueprint の場合（最短で試す）
 
@@ -214,7 +358,7 @@ EventMap アセットを作り、そこに登録したエントリを参照す�
 
 1. アクターに **Hapbeat Trigger** コンポーネントを追加する
    （詳細は [§5](#5-トリガコンポーネントを使うコードなしで鳴らす)）
-2. その `Event Map` に §4 で作ったアセットを指定し、`Entry Id` を選ぶ
+2. その `Event Map` に §3 で作ったアセットを指定し、`Entry Id` を選ぶ
 3. Blueprint からは、そのコンポーネントの **`Fire`** を呼ぶだけ
    （`Play` にイベント ID を書く必要はありません）
 
@@ -422,158 +566,6 @@ bool  IsConnected() const;           // ソケットが開いているか（≠ 
 > `IsConnected()` は「ソケットが開いているか」であり、**デバイスの有無ではありません**。
 > UDP はコネクションレスのため、デバイスの電源が入っていなくても `true` になります。
 > 実際に届いているかは `IsAlive()` / `GetAliveDeviceCount()` で判断してください。
-
----
-
-## 4. EventMap で「鳴らす場所」と「強さ」を分ける
-
-`Play("...", 0.8f)` を直接書くと、**強さの調整のたびにコードを直す**ことになります。
-SDK はこれを分離する仕組みを持っています。
-
-- **鳴らす場所（起点）** — トリガコンポーネント、または `Play()` の呼び出し
-- **鳴らし方（調整）** — **EventMap** アセットのエントリ（イベント ID・ゲイン・対象デバイス・ループ）
-
-両者は**イベント ID ではなく安定した GUID** で結ばれるため、エントリを並べ替えても壊れません。
-
-### 作り方
-
-1. **コンテンツブラウザで `コンテンツ`（Content）フォルダを開く**
-
-   > **`C++ クラス`（C++ Classes）フォルダでは作れません。** ここは C++ の
-   > クラス階層を見るための表示専用フォルダで、右クリックしても
-   > `Fab` と `新規 C++ クラス` しか出てきません。左のツリーで
-   > プロジェクトの `コンテンツ` を選んでから進めてください。
-
-2. **右側のアセット一覧の、何もないところで右クリック** →
-   **Hapbeat → Hapbeat Event Map**
-
-   > 左のフォルダツリー上で右クリックすると、フォルダ操作のメニュー
-   >（新規フォルダ・名前変更など）が出ます。**右側の広い領域**で
-   > 右クリックしてください。上部の **+ 追加** ボタンからでも同じです。
-
-3. 作られたアセットに名前を付ける（例: `DA_HapbeatEventMap`）
-4. 開いて `Entries` に `+` で追加し、各エントリを設定
-   - `Mode`: `FIRE (Command)`（Kit 必要）か `CLIP (Stream Clip)`（Kit 不要）
-   - `Category` / `Event Name`: 合わせて `<Category>.<EventName>` がイベント ID になる
-   - `Gain`: `0`〜`2`
-   - `Target`: 空 = 全デバイス
-5. 上部の **Refresh Intensities** を押す
-   → Kit の `manifest.json` に書かれた `intensity` を各エントリに焼き込みます
-6. **Test Play** で、再生（PIE）せずにその場で鳴らして確認できます
-
-#### `Category` / `Event Name` は Kit の manifest と一致させる
-
-`Refresh Intensities` が `resolved 0 / unresolved N` になる場合、ほぼこれです。
-**イベント ID と Mode の両方が manifest と一致した時だけ**強さが焼き込まれます。
-
-同梱の `basic-exam-kit` なら、次の 2 通りが一致する組み合わせです:
-
-| Mode | Category | Event Name | manifest 上の位置 |
-|---|---|---|---|
-| `FIRE (Command)` | `basic-exam-kit` | `sine_200hz_1s` | `events` |
-| `CLIP (Stream Clip)` | `basic-exam-kit` | `sine_100hz_1s` | `stream_events` |
-
-- `Category` は **Kit 名**（manifest の `name`）
-- `Event Name` は **クリップのファイル名から拡張子を除いたもの**
-- **Mode が違うと一致しません。** manifest では FIRE 用が `events`、CLIP 用が
-  `stream_events` に分かれており、同じイベント ID でも別枠として扱われます
-
-一致しない場合は `intensity` が `-1`（未解決）のままになり、`Gain` がそのまま
-送られます。鳴らないわけではありませんが、Kit で意図した強さにはなりません。
-
-### 専用ウィンドウで編集する（推奨）
-
-エントリが増えると Details パネルは縦一列で見通しが悪くなります。
-**Tools メニュー → Hapbeat Event Map** に専用エディタがあります
-（アセットをダブルクリックして開く Details パネルとは別のウィンドウです）。
-
-- **左**: エントリ一覧（表示名・イベント ID・モード）
-- **右**: 選択したエントリだけを、**Identity / Event / Playback / Targeting /
-  Notes / Test** のセクションに分けて表示
-
-上部の **Event Map** 欄でアセットを切り替えられるので、ウィンドウはドッキング
-したまま複数の EventMap を行き来できます。Targeting は `Player` / `Position` /
-`Group` に分解して編集でき、結果の `Target` 文字列もその場で確認・直接編集
-できます。Details パネル側の編集も従来どおり使えます。
-
-**Test セクションの Test Play は Command / StreamClip の両方に対応**しています。
-StreamClip のエントリでは再生（PIE）に入らずにその場でストリーミングし、
-Stop で止まります。
-
-### StreamClip に音源を割り当てる
-
-`Mode` を **CLIP (Stream Clip)** にすると **Stream Clip** 欄が出ます。
-右の **Import WAV...** を押して 16-bit PCM の `.wav` を選べば、
-**Hapbeat Clip アセットが EventMap の隣に自動生成されて割り当てられます**
-（既にアセットがあるならピッカーから選んでも構いません）。
-
-> **なぜ `.wav` や Sound Wave を直接参照しないのか。**
-> パッケージ後の `USoundWave` はプラットフォーム圧縮された音声しか持たず、
-> このプロトコルが送る生 PCM を安定して取り出せません（エディタでは動いて
-> パッケージ版で無音になる類の壊れ方をします）。そのため SDK 側の
-> `Hapbeat Clip` アセットに PCM を保持しています。上のボタンは、その制約を
-> ユーザーの手作業にしないためのものです。
-
-> **`Hapbeat Clip`** アセット（§6 のストリーミング用）も、同じ
-> **Hapbeat** カテゴリから同じ手順で作成できます。
-
-### GUI で編集できる項目
-
-エントリを開くと、以下がすべて Details パネル上で編集できます（各項目にツールチップ付き）:
-
-| 項目 | 内容 |
-|---|---|
-| `Mode` | `Command` / `StreamClip`（プルダウン） |
-| `Display Name` | 一覧やトリガのプルダウンに出る表示名 |
-| `Category` / `Event Name` | 合わせて `<Category>.<EventName>` がイベント ID |
-| **`Gain`** | **0.0〜2.0** |
-| **`Target`** | **`player_1` / `*/pos_neck` など。空 = 全デバイス** |
-| `Loop` | ループ再生（StreamClip 用） |
-| `Delay Offset Seconds` | このイベントだけ発火を前後させる（±0.2 秒） |
-| `Notes` | 制作メモ（送信されません） |
-| `Stream Clip` | StreamClip モードで流す `UHapbeatClip` |
-
-Details パネル上部には専用の操作列も出ます:
-
-- **[Refresh Intensities]** — Kit の manifest を走査して intensity を全エントリに反映
-- **エントリ選択 + [Test Play] / [Stop] / [Stop All] / [Ping]** — **PIE に入らずその場で試せます**
-
-配列の追加・削除・並べ替え・複製、複数選択しての一括編集は UE 標準の機能がそのまま使えます。
-
-> **なぜ専用ウィンドウではなく Details パネルなのか**
-> Unity SDK は専用のエディタウィンドウを持っていますが、UE ではこれらの操作を
-> Details パネルが標準で提供するため、あえて独自ウィンドウを作っていません。
-> 学習することが少なく、UE の他のアセットと同じ操作感で扱えます。
-
-> 実際にデバイスへ送られるゲインは
-> **`Gain` × `Kit の intensity` × トリガ側の倍率** です。
-> Studio で作り込んだ強さ（intensity）を土台に、UE 側で微調整する設計になっています。
-
-### BasicExample を GUI 編集に切り替える（任意）
-
-疎通確認に使ったサンプルを、そのまま GUI 編集の練習台にできます。
-
-1. **先に触覚クリップのアセットを作る**（StreamClip エントリで使います）
-   - Content Browser → 右クリック → **Miscellaneous → Data Asset** → **Hapbeat Clip**
-   - 開いて **[Import WAV...]** を押し、
-     `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Kit/basic-exam-kit/stream-clips/sine_100hz_1s.wav`
-     を選ぶ（`16000 Hz, 1 ch, 1.00 s` と表示されれば成功。保存を忘れずに）
-2. EventMap アセットを作り、エントリを **3 つ**追加する
-   （順番が固定です: `[0]` Space、`[1]` R、`[2]` F）
-3. 値はコード側と同じにすると挙動が揃います（`Stream Clip` には 1. で作ったアセットを指定）:
-
-   | # | Mode | Category | Event Name | Gain | Loop | Stream Clip |
-   |---|---|---|---|---|---|---|
-   | 0 | StreamClip | `basic-exam-kit` | `sine_100hz_1s` | `1.0` | off | `sine_100hz_1s` |
-   | 1 | StreamClip | `basic-exam-kit` | `sine_100hz_1s_loop` | `1.0` | **on** | `sine_100hz_1s` |
-   | 2 | Command | `basic-exam-kit` | `sine_200hz_1s` | `1.0` | off | — |
-
-4. **Refresh Intensities** を押す（各エントリの intensity が `0.5` になります）
-5. レベルに置いた **Hapbeat Basic Example Actor** を選択し、Details の
-   **Event Map Override** に作った EventMap アセットを指定する
-
-以降このサンプルはアセット側の値で鳴るので、**Gain や Target を変えて即座に体感差を確認**できます。
-未指定（空）のままなら従来どおりコード生成で動きます。
 
 ---
 

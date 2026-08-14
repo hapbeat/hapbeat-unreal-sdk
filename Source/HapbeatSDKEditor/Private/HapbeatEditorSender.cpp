@@ -9,6 +9,7 @@
 #include "Common/UdpSocketBuilder.h"
 #include "HAL/RunnableThread.h"
 #include "Interfaces/IPv4/IPv4Address.h"
+#include "Misc/ScopeLock.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
 
@@ -19,6 +20,7 @@ TSharedPtr<FInternetAddr> FHapbeatEditorSender::BroadcastAddr;
 TMap<FString, double> FHapbeatEditorSender::DevicePongTimes;
 TArray<FHapbeatBroadcastRoute> FHapbeatEditorSender::BroadcastRoutes;
 uint16 FHapbeatEditorSender::Seq = 0;
+FCriticalSection FHapbeatEditorSender::SeqLock;
 TSharedPtr<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> FHapbeatEditorSender::StreamMirror;
 FHapbeatStreamRunnable* FHapbeatEditorSender::StreamRunnable = nullptr;
 FRunnableThread* FHapbeatEditorSender::StreamThread = nullptr;
@@ -228,7 +230,12 @@ void FHapbeatEditorSender::SendRouted(const TArray<uint8>& Packet)
 
 uint16 FHapbeatEditorSender::NextSeq()
 {
-	// Wraps at 0xFFFF; matches UHapbeatSubsystem::NextSeq() exactly.
+	// Locked because the counter is now shared: the game thread takes numbers for
+	// PLAY / STOP / PING, and the stream worker takes them for every STREAM_DATA
+	// chunk. Unlocked, the two could hand out the same value, and a device that
+	// de-duplicates on (source endpoint, seq) would then drop a real packet.
+	// Same reasoning, and the same fix, as UHapbeatSubsystem::NextSeq.
+	FScopeLock Lock(&SeqLock);
 	Seq = static_cast<uint16>((Seq + 1) & 0xFFFF);
 	return Seq;
 }

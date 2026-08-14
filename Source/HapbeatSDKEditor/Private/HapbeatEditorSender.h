@@ -150,4 +150,6 @@ private:
 	static FSocket* Socket;
 	static TSharedPtr<FInternetAddr> BroadcastAddr;
 	static uint16 Seq;
+	/** Guards Seq: the game thread and the stream worker both draw from it. */
+	static FCriticalSection SeqLock;
 };

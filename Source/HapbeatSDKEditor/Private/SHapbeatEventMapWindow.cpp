@@ -19,6 +19,7 @@
 #include "IAssetTools.h"
 #include "IDesktopPlatform.h"
 #include "Interfaces/IPluginManager.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
@@ -42,6 +43,14 @@
 #include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "SHapbeatEventMapWindow"
+
+namespace HapbeatEventMapWindow
+{
+	// GEditorPerProjectIni, so the remembered map is per project rather than a
+	// single global that two projects would fight over.
+	static const TCHAR* ConfigSection = TEXT("Hapbeat.EventMapWindow");
+	static const TCHAR* LastEventMapKey = TEXT("LastEventMap");
+}
 
 const FName SHapbeatEventMapWindow::TabId(TEXT("HapbeatEventMap"));
 TWeakPtr<SHapbeatEventMapWindow> SHapbeatEventMapWindow::LastCreated;
@@ -146,6 +155,14 @@ void SHapbeatEventMapWindow::SetEventMap(UHapbeatEventMap* Map)
 	WiringHits.Reset();
 	WiringScannedFor.Invalidate();
 	RefreshEntryList();
+
+	// Remembered per project (not per user machine's global editor state) so a
+	// second project keeps its own last map. Written here rather than at the
+	// picker so every path that changes the map -- picker, double-click on the
+	// asset, OpenForAsset -- persists identically.
+	GConfig->SetString(HapbeatEventMapWindow::ConfigSection, HapbeatEventMapWindow::LastEventMapKey,
+		Map != nullptr ? *Map->GetPathName() : TEXT(""), GEditorPerProjectIni);
+	GConfig->Flush(false, GEditorPerProjectIni);
 }
 
 // ---------------------------------------------------------------------------
@@ -277,6 +294,25 @@ void SHapbeatEventMapWindow::Construct(const FArguments& InArgs)
 	];
 
 	RefreshEntryList();
+
+	// Reopen on whatever map was last edited. Coming up with an empty picker
+	// meant hunting the asset down in the Content Browser every session --
+	// exactly the navigation this window exists to remove. Restoring after
+	// ChildSlot is built because SetEventMap refreshes the entry list, which
+	// needs the widgets to exist. OpenForAsset still wins: it calls
+	// SetEventMap after the tab (and therefore this restore) has run.
+	FString LastEventMapPath;
+	if (GConfig->GetString(HapbeatEventMapWindow::ConfigSection,
+			HapbeatEventMapWindow::LastEventMapKey, LastEventMapPath, GEditorPerProjectIni)
+		&& !LastEventMapPath.IsEmpty())
+	{
+		// The asset may have been renamed or deleted since; a failed load just
+		// leaves the picker empty, which is the old behaviour.
+		if (UHapbeatEventMap* Restored = Cast<UHapbeatEventMap>(FSoftObjectPath(LastEventMapPath).TryLoad()))
+		{
+			SetEventMap(Restored);
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -371,10 +407,10 @@ FString SHapbeatEventMapWindow::GetEventMapPath() const
 
 void SHapbeatEventMapWindow::OnEventMapChanged(const FAssetData& AssetData)
 {
-	WeakEventMap = Cast<UHapbeatEventMap>(AssetData.GetAsset());
-	SelectedEntryId.Reset();
-	RefreshSummary = FText::GetEmpty();
-	RefreshEntryList();
+	// Funnel through SetEventMap rather than repeating the resets: this path
+	// used to forget WiringHits / WiringScannedFor, so switching maps in the
+	// picker left the previous map's "used by" scan on screen.
+	SetEventMap(Cast<UHapbeatEventMap>(AssetData.GetAsset()));
 }
 
 FReply SHapbeatEventMapWindow::OnRefreshIntensitiesClicked()

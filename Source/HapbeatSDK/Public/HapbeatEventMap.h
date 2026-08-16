@@ -36,6 +36,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
 	bool FindById(FGuid Id, FHapbeatEventEntry& OutEntry) const;
 
+	/**
+	 * Look up an entry by its computed event id ("<category>.<name>", see
+	 * FHapbeatEventEntry::GetEventId). This is the only way to name an entry
+	 * from a Blueprint graph or from code without hard-coding a GUID, so a call
+	 * site can pick an event without an authored asset reference per event.
+	 *
+	 * Event ids are deliberately NOT unique: the same device-side event is often
+	 * authored twice with different tuning (one-shot vs looping, different gain
+	 * or target). Consequently this returns the FIRST entry whose event id
+	 * matches (case-sensitive) and logs a warning listing how many matched and
+	 * which one was used, so an ambiguous lookup is visible rather than silently
+	 * arbitrary. When exactly one entry must be addressed, reference it by Id
+	 * (FindById / UHapbeatSubsystem::PlayEntry) instead.
+	 *
+	 * Returns true and fills OutEntry when found; returns false (OutEntry left
+	 * default) and warns when no entry carries that event id.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	bool FindByEventId(const FString& EventId, FHapbeatEventEntry& OutEntry) const;
+
 #if WITH_EDITOR
 	// Assign a fresh GUID to any entry whose Id is still invalid (covers add /
 	// duplicate / paste in the Details panel). Both overrides funnel through

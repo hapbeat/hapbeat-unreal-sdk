@@ -110,6 +110,34 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void StopEntry(UHapbeatEventMap* Map, FGuid EntryId);
 
+	/**
+	 * Play an Event Map entry named by its event id ("<category>.<name>") --
+	 * PlayEntry without a GUID, so a Blueprint graph can choose the event
+	 * itself instead of needing one pre-configured UHapbeatTriggerComponent per
+	 * event.
+	 *
+	 * Resolves the entry through UHapbeatEventMap::FindByEventId and then
+	 * delegates to PlayEntry, so everything authored on the entry (Command vs
+	 * Stream Clip, clip, gain x manifest intensity, target, loop) applies
+	 * exactly as it does there. This is what separates it from Play(EventId),
+	 * which puts the raw id on the wire and applies none of that.
+	 *
+	 * Event ids are not unique within a map (the same event is often authored
+	 * twice, e.g. one-shot and looping). The first match wins and a warning is
+	 * logged when several match -- when a call site must hit exactly one entry,
+	 * use PlayEntry with the entry's Id.
+	 *
+	 * @param GainMultiplier Scales the entry's authored gain for this call only.
+	 * @return The stream handle for a Stream Clip entry; null for Command, for a
+	 *         null Map, or when no entry carries that event id.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (AdvancedDisplay = "2"))
+	UHapbeatStreamPlayback* PlayEvent(UHapbeatEventMap* Map, const FString& EventId, float GainMultiplier = 1.0f);
+
+	/** Stop an entry started by PlayEvent. Same event-id resolution (and same first-match rule) as PlayEvent, then StopEntry. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	void StopEvent(UHapbeatEventMap* Map, const FString& EventId);
+
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void Ping();
 

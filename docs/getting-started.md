@@ -320,30 +320,60 @@ Details パネル上部には専用の操作列も出ます:
 
 ## 4. 自分のプロジェクトから鳴らす
 
-前章で作ったエントリを発火させます。鳴らし方は 2 つで、**どちらも EventMap の
-エントリを参照します**。強さ・送信先・ループはアセット側に残るので、調整のたびに
-コードを触る必要はありません。
+エントリを発火させます。強さ・送信先・ループはアセット側に残るので、調整のたびに
+コードを触る必要はありません。Command か Stream Clip か、どのクリップを使うかも
+**すべてエントリ側の設定**が使われます。
 
-### 4-1. コードから鳴らす（Blueprint / C++）
+**エントリの指定に GUID を手入力する場面はありません。** `Entry Id` は安定 GUID ですが、
+**トリガコンポーネントの Details ではエントリ名のプルダウンになります**。
+Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネントでエントリを選びます。
 
-**Play Entry** に EventMap とエントリを渡すだけです。Command か Stream Clip か、
-どのクリップを使うか、ゲイン、送信先、ループは**すべてエントリ側の設定**が使われます。
+### 4-1. Blueprint: キーを押したら鳴らす
 
-**エントリの指定には GUID を手入力しないでください。** `Entry Id` は安定 GUID で、
-**エントリ名から選べるのはトリガコンポーネントのプルダウンだけ**です（4-2）。
-Blueprint から鳴らす場合も、まずコンポーネントでエントリを選ぶのが正規の手順です。
+§2 の疎通確認（`reachable: 1`）が通っている状態から始めます。
+ここでは**同梱の `EM_BasicExample` の 1 番目のエントリを G キーで鳴らす**ところまでを通します。
 
-**Blueprint**:
+1. **Blueprint を作る**
+   コンテンツブラウザの `コンテンツ` フォルダで右クリック →
+   **ブループリント クラス** → **Actor** を選び、`BP_HapbeatKeyTest` と名付ける
 
-1. アクターに **Add Component → Hapbeat Trigger** を追加
-2. Details で `Event Map` を指定 → `Entry Id` を**プルダウンからエントリ名で選ぶ**
-3. グラフでそのコンポーネントを掴んで **Fire** を呼ぶ
-   （発火のきっかけは `Event BeginPlay` でもキー入力でもよい）
+2. **開いて、コンポーネントを追加する**
+   左上の **+ 追加** → `Hapbeat Trigger` を検索して追加
 
-`Play Entry` を直接呼びたい場合も、`Entry Id` ピンにはこのコンポーネントの
-`Entry Id`（Blueprint から読める）を繋ぎます。
+3. **鳴らすエントリを指定する**
+   コンポーネント一覧で `Hapbeat Trigger` を選び、Details で:
+   - `Event Map` → **`EM_BasicExample`**
+     （プラグイン同梱。候補に出ない場合はコンテンツブラウザ右上の
+     **設定 → Show Plugin Content** が off です）
+   - `Entry Id` → プルダウンから **`demo_stream_sine_100hz`**
+     （CLIP モードなので、**デバイスへの Kit 書き込みは不要**）
 
-**C++**:
+4. **キー入力を受け取れるようにする**
+   コンポーネント一覧の一番上（`BP_HapbeatKeyTest (self)`）を選び、
+   Details → **Input** → **Auto Receive Input** を **Player 0** にする
+
+   > **ここを飛ばすとキーを押しても何も起きません。** アクターは既定で入力を
+   > 受け取らないので、この 1 項目が実質の「入力を有効化」スイッチです。
+
+5. **グラフを繋ぐ**（Event Graph）
+   - 何も無いところで右クリック → `G` で検索 → **キーボードイベント > G** を配置
+   - コンポーネント一覧から `Hapbeat Trigger` をグラフにドラッグ&ドロップ
+   - 置かれたノードの青いピンからドラッグ → **Fire** を選ぶ
+   - **G の `Pressed`** 実行ピンを `Fire` の実行ピンへ接続
+
+6. **コンパイル** → 保存 → `BP_HapbeatKeyTest` をレベルにドラッグ&ドロップ
+
+7. ▶ Play して **G** を押す → 100Hz が 1 回鳴る
+
+鳴ったら、`EM_BasicExample` を開いて `demo_stream_sine_100hz` の **`Gain`** を
+`0.3` に変え、もう一度 G を押してください。**BP を触らずに強さが変わります** —
+これが §3 で分けた「鳴らす場所」と「鳴らし方」です。
+
+> 連打で詰まるようなら、`Hapbeat Trigger` の **`Cooldown`** に `0.2` 等を入れます。
+> `Play Entry` を直接呼びたい場合は、`Entry Id` ピンにこのコンポーネントの
+> `Entry Id`（Blueprint から読めます）を繋ぎます。
+
+### 4-2. C++ から鳴らす
 
 ```cpp
 UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>();
@@ -372,9 +402,10 @@ FGuid FindEntryId(const UHapbeatEventMap* Map, EHapticMode Mode, const FString& 
 > 第 3 引数の `Gain Multiplier` で、**その呼び出しだけ**強さを変えられます
 >（エントリの設定は変わりません）。
 
-### 4-2. トリガコンポーネントを使う（同じエントリを繰り返し鳴らす場合）
+### 4-3. コンポーネントの種類
 
-アクターに **Add Component** から追加できます。いずれも EventMap とエントリを指定して使います。
+4-1 で使った `Hapbeat Trigger` は 4 種類のうちの 1 つです。いずれも
+**+ 追加** から足し、`Event Map` と `Entry Id` を指定して使います。
 
 | コンポーネント | 用途 |
 |---|---|
@@ -383,13 +414,9 @@ FGuid FindEntryId(const UHapbeatEventMap* Map, EHapticMode Mode, const FString& 
 | **Hapbeat Sequence** | 掴む→保持→離す の 3 段階（開始 1 発 → ループ → 終了 1 発） |
 | **Hapbeat Parameter Binding** | 再生中のストリームのゲイン / パンを実行時に変化させる |
 
-`Entry Id` はプルダウンから**エントリ名で選べます**（EventMap を指定すると一覧が出ます）。
-
----
-
-4-1 との違いは、**呼ぶたびに指定するか、アクターに持たせておくか**だけです。
-同じエントリを何度も鳴らすなら 4-2 のほうが短く済み、クールダウンや
-ライブ変調も付いてきます。併用できます。
+`Collision Trigger` と `Sequence` は**自分で `Fire` を呼ぶ必要がありません**
+（衝突や掴む→離すの検出をコンポーネント側が持っています）。
+Showcase の Z1（衝突）と Z3（掴む→離す）がその実例です。
 
 ## 次に読むもの
 

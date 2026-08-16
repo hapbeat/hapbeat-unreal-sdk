@@ -5,6 +5,7 @@
 #include "Containers/Ticker.h"
 #include "Common/UdpSocketReceiver.h"         // FUdpSocketReceiver + FArrayReaderPtr typedef
 #include "HAL/CriticalSection.h"              // FCriticalSection (SeqLock — shared with the stream thread)
+#include "HapbeatEventRef.h"                  // FHapbeatEventRef (USTRUCT parameter — needs the full type for UHT)
 #include "HapbeatNetInterfaces.h"             // FHapbeatBroadcastRoute (held by value in a TArray below)
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
 #include "Subsystems/GameInstanceSubsystem.h"
@@ -137,6 +138,28 @@ public:
 	/** Stop an entry started by PlayEvent. Same event-id resolution (and same first-match rule) as PlayEvent, then StopEntry. */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void StopEvent(UHapbeatEventMap* Map, const FString& EventId);
+
+	/**
+	 * Play the entry a FHapbeatEventRef points at -- the way to fire an
+	 * authored haptic from a Blueprint GRAPH, where the entry is chosen from a
+	 * by-name dropdown on the pin itself.
+	 *
+	 * Resolves the reference and delegates to PlayEntry, so everything authored
+	 * on the entry (Command vs Stream Clip, clip, gain x manifest intensity,
+	 * target, loop) applies exactly as it does there. Unlike PlayEvent, the
+	 * reference is a GUID, so it can never resolve to the wrong one of two
+	 * entries that share an event id.
+	 *
+	 * @param GainMultiplier Scales the entry's authored gain for this call only.
+	 * @return The stream handle for a Stream Clip entry; null for Command, or
+	 *         when the reference does not resolve.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (AdvancedDisplay = "1", DisplayName = "Play Hapbeat Event"))
+	UHapbeatStreamPlayback* PlayEventRef(const FHapbeatEventRef& Event, float GainMultiplier = 1.0f);
+
+	/** Stop an entry started by PlayEventRef: STOP for Command, ends the stream for Stream Clip. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop Hapbeat Event"))
+	void StopEventRef(const FHapbeatEventRef& Event);
 
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void Ping();

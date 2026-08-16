@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatTriggerComponentCustomization.h"
 
+#include "HapbeatEntryPicker.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatSequenceComponent.h"
 #include "HapbeatTriggerComponent.h"
@@ -10,7 +11,6 @@
 #include "DetailWidgetRow.h"
 #include "IPropertyUtilities.h" // complete type for RequestForceRefresh (do not rely on unity-build include order)
 #include "PropertyHandle.h"
-#include "ScopedTransaction.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -111,14 +111,7 @@ void FHapbeatTriggerComponentCustomization::BuildEntryPicker(IDetailLayoutBuilde
 	State->GuidHandle = GuidHandle;
 	State->EventMapHandle = EventMapHandle;
 	State->WeakMap = Map;
-	State->Options.Add(MakeShared<FGuid>()); // index 0 = "(none)"
-	for (const FHapbeatEventEntry& Entry : Map->Entries)
-	{
-		if (Entry.Id.IsValid())
-		{
-			State->Options.Add(MakeShared<FGuid>(Entry.Id));
-		}
-	}
+	HapbeatEditor::BuildEntryOptions(Map, State->Options);
 	Pickers.Add(PropertyName, State);
 
 	// Replace the default row with our picker.
@@ -162,85 +155,14 @@ UHapbeatEventMap* FHapbeatTriggerComponentCustomization::ResolveEventMap(const T
 	return Cast<UHapbeatEventMap>(Value);
 }
 
-bool FHapbeatTriggerComponentCustomization::ReadGuid(const TSharedPtr<IPropertyHandle>& Handle, FGuid& OutGuid)
-{
-	if (!Handle.IsValid())
-	{
-		return false;
-	}
-	TArray<void*> RawData;
-	Handle->AccessRawData(RawData);
-	if (RawData.Num() != 1 || RawData[0] == nullptr)
-	{
-		return false;
-	}
-	OutGuid = *static_cast<FGuid*>(RawData[0]);
-	return true;
-}
-
-void FHapbeatTriggerComponentCustomization::WriteGuid(const TSharedPtr<IPropertyHandle>& Handle, const FGuid& NewGuid)
-{
-	if (!Handle.IsValid())
-	{
-		return;
-	}
-	// Per-component (A/B/C/D uint32) write via the 4 child handles -- the same
-	// mechanism the engine's own FGuid struct customization uses
-	// (Editor/DetailCustomizations/Private/GuidStructCustomization.cpp,
-	// WriteGuidToProperty): FGuid has no direct IPropertyHandle::SetValue
-	// overload, but its 4 int32 fields (A, B, C, D; see
-	// CoreUObject/Public/UObject/NoExportTypes.h) are reflected as ordinary
-	// child properties, indices 0..3 in that order.
-	FScopedTransaction Transaction(LOCTEXT("SetEntryId", "Set Hapbeat Entry Id"));
-	for (int32 ChildIndex = 0; ChildIndex < 4; ++ChildIndex)
-	{
-		TSharedPtr<IPropertyHandle> ChildHandle = Handle->GetChildHandle(ChildIndex);
-		if (!ChildHandle.IsValid())
-		{
-			continue;
-		}
-		// First 3 components are flagged interactive + non-transactable so only
-		// one combined undo transaction (the FScopedTransaction above) is
-		// created for the whole 4-component write, and PostEditChange doesn't
-		// reinstance anything until the final component lands.
-		const EPropertyValueSetFlags::Type Flags = (ChildIndex != 3)
-			? (EPropertyValueSetFlags::InteractiveChange | EPropertyValueSetFlags::NotTransactable)
-			: EPropertyValueSetFlags::NotTransactable;
-		ChildHandle->SetValue(static_cast<int32>(NewGuid[ChildIndex]), Flags);
-	}
-}
-
-FText FHapbeatTriggerComponentCustomization::DescribeEntryById(const FGuid& Id, UHapbeatEventMap* Map)
-{
-	if (!Id.IsValid())
-	{
-		return LOCTEXT("NoneEntry", "(none)");
-	}
-	FHapbeatEventEntry Entry;
-	if (Map != nullptr && Map->FindById(Id, Entry))
-	{
-		if (!Entry.DisplayName.IsEmpty())
-		{
-			return FText::FromString(Entry.DisplayName);
-		}
-		const FString EventId = Entry.GetEventId();
-		if (!EventId.IsEmpty())
-		{
-			return FText::FromString(EventId);
-		}
-		return FText::Format(LOCTEXT("EntryShortGuid", "(unnamed {0})"), FText::FromString(Id.ToString().Left(8)));
-	}
-	return FText::Format(LOCTEXT("StaleEntry", "(stale: {0})"), FText::FromString(Id.ToString().Left(8)));
-}
-
 TSharedRef<SWidget> FHapbeatTriggerComponentCustomization::OnGenerateOptionWidget(TSharedPtr<FGuid> InId, TWeakPtr<FEntryPickerState> WeakState) const
 {
-	FText Label = LOCTEXT("NoneEntry", "(none)");
+	FText Label = HapbeatEditor::DescribeEntryById(FGuid(), nullptr); // "(none)"
 	if (InId.IsValid() && InId->IsValid())
 	{
 		if (TSharedPtr<FEntryPickerState> State = WeakState.Pin())
 		{
-			Label = DescribeEntryById(*InId, State->WeakMap.Get());
+			Label = HapbeatEditor::DescribeEntryById(*InId, State->WeakMap.Get());
 		}
 	}
 	return SNew(STextBlock)
@@ -256,7 +178,7 @@ void FHapbeatTriggerComponentCustomization::OnOptionSelected(TSharedPtr<FGuid> N
 		return;
 	}
 	const FGuid NewGuid = NewSelection.IsValid() ? *NewSelection : FGuid();
-	WriteGuid(State->GuidHandle, NewGuid);
+	HapbeatEditor::WriteGuidToHandle(State->GuidHandle, NewGuid);
 }
 
 FText FHapbeatTriggerComponentCustomization::GetSelectedLabel(TWeakPtr<FEntryPickerState> WeakState) const
@@ -268,11 +190,11 @@ FText FHapbeatTriggerComponentCustomization::GetSelectedLabel(TWeakPtr<FEntryPic
 	}
 
 	FGuid CurrentId;
-	if (!ReadGuid(State->GuidHandle, CurrentId))
+	if (!HapbeatEditor::ReadGuidFromHandle(State->GuidHandle, CurrentId))
 	{
 		return LOCTEXT("MultipleValues", "Multiple Values");
 	}
-	return DescribeEntryById(CurrentId, State->WeakMap.Get());
+	return HapbeatEditor::DescribeEntryById(CurrentId, State->WeakMap.Get());
 }
 
 #undef LOCTEXT_NAMESPACE

@@ -75,9 +75,9 @@ private:
 	void HandleEventMapChanged();
 
 	static UHapbeatEventMap* ResolveEventMap(const TSharedPtr<IPropertyHandle>& EventMapHandle);
-	static bool ReadGuid(const TSharedPtr<IPropertyHandle>& Handle, FGuid& OutGuid);
-	static void WriteGuid(const TSharedPtr<IPropertyHandle>& Handle, const FGuid& NewGuid);
-	static FText DescribeEntryById(const FGuid& Id, UHapbeatEventMap* Map);
+	// Option list, entry label and the FGuid handle read/write live in
+	// HapbeatEntryPicker.h -- the FHapbeatEventRef graph pin and its Details row
+	// present the same dropdown and must label entries identically.
 
 	TSharedRef<SWidget> OnGenerateOptionWidget(TSharedPtr<FGuid> InId, TWeakPtr<FEntryPickerState> WeakState) const;
 	void OnOptionSelected(TSharedPtr<FGuid> NewSelection, ESelectInfo::Type SelectInfo, TWeakPtr<FEntryPickerState> WeakState);

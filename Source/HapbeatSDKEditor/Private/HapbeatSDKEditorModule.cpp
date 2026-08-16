@@ -7,6 +7,9 @@
 #include "HapbeatEventMap.h"
 #include "HapbeatClipCustomization.h"
 #include "HapbeatEventMapCustomization.h"
+#include "HapbeatEventRef.h"
+#include "HapbeatEventRefCustomization.h"
+#include "HapbeatEventRefPinFactory.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatTriggerComponentCustomization.h"
 #include "HapbeatUpdateCheck.h"
@@ -15,6 +18,7 @@
 #include "AssetToolsModule.h"
 #include "Editor.h"
 #include "IAssetTools.h"
+#include "EdGraphUtilities.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 #include "ToolMenus.h"
@@ -53,7 +57,18 @@ void FHapbeatSDKEditorModule::StartupModule()
 	PropertyModule.RegisterCustomClassLayout(UHapbeatTriggerComponent::StaticClass()->GetFName(),
 		FOnGetDetailCustomizationInstance::CreateStatic(&FHapbeatTriggerComponentCustomization::MakeInstance));
 
+	// Details-panel rows for FHapbeatEventRef, matching the graph pin below so
+	// the struct is edited the same way wherever it is exposed.
+	PropertyModule.RegisterCustomPropertyTypeLayout(FHapbeatEventRef::StaticStruct()->GetFName(),
+		FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FHapbeatEventRefCustomization::MakeInstance));
+
 	PropertyModule.NotifyCustomizationModuleChanged();
+
+	// Blueprint graph pins of type FHapbeatEventRef get the by-name entry
+	// picker instead of the default struct pin. The factory instance is kept in
+	// a member because unregistering requires the SAME shared pointer.
+	EventRefPinFactory = MakeShared<FHapbeatEventRefPinFactory>();
+	FEdGraphUtilities::RegisterVisualPinFactory(EventRefPinFactory);
 
 	// Window > Tools > Hapbeat Event Map. A nomad tab (rather than an asset
 	// editor) so the window can stay docked while the user switches between
@@ -82,6 +97,12 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 	SHapbeatEventMapWindow::UnregisterTabSpawner();
 	FHapbeatUpdateCheck::Unregister();
 
+	if (EventRefPinFactory.IsValid())
+	{
+		FEdGraphUtilities::UnregisterVisualPinFactory(EventRefPinFactory);
+		EventRefPinFactory.Reset();
+	}
+
 	FHapbeatEditorSender::Shutdown();
 
 	// PropertyEditor may already be unloaded during engine shutdown teardown.
@@ -91,6 +112,7 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 		PropertyModule.UnregisterCustomClassLayout(UHapbeatClip::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(UHapbeatEventMap::StaticClass()->GetFName());
 		PropertyModule.UnregisterCustomClassLayout(UHapbeatTriggerComponent::StaticClass()->GetFName());
+		PropertyModule.UnregisterCustomPropertyTypeLayout(FHapbeatEventRef::StaticStruct()->GetFName());
 		PropertyModule.NotifyCustomizationModuleChanged();
 	}
 }

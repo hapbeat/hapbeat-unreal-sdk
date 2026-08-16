@@ -592,9 +592,28 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
 | **Hapbeat Sequence** | 掴む→保持→離す の 3 段階（開始 1 発 → ループ → 終了 1 発） |
 | **Hapbeat Parameter Binding** | 再生中のストリームのゲイン / パンを実行時に変化させる |
 
-`Collision Trigger` と `Sequence` は**自分で `Fire` を呼ぶ必要がありません**
-（衝突や掴む→離すの検出をコンポーネント側が持っています）。
-Showcase の Z1（衝突）と Z3（掴む→離す）がその実例です。
+`Collision Trigger` と `Sequence` は**自分で `Fire` を呼びません**。
+発火のきっかけ（衝突、掴む→離す）をコンポーネント自身が検出します。
+
+#### Hapbeat Collision Trigger
+
+グラフ配線は不要で、**当たった瞬間にコンポーネントが自分で鳴らします**。
+
+1. **コライダーを持つアクターに付ける**
+   ルートが Primitive ならそれ、無ければ最初に見つかった Primitive に自動で紐付きます
+2. `Trigger Event` を選ぶ
+   - **`Hit`** — ブロッキング衝突。コライダーの
+     **「Simulation Generates Hit Events」を on** にしてください。
+     off だと**何も起きません**（Output Log に警告が出ます）
+   - **`Begin Overlap`** — 重なり開始。**「Generate Overlap Events」が on** であること
+3. （任意）`Tag Filter` — 指定タグを持つアクターに当たった時だけ鳴らす
+4. （任意）`Gain Mode` を **`Velocity Scaled`** にすると**衝突速度で強さが変わります**
+   - `Velocity Threshold` 未満の衝突は無視
+   - `Max Velocity` で 1.0 に正規化（`Velocity Curve` を入れればカーブで整形）
+
+**動く実例は Showcase の Z1 Bowling** です（ピン 1 本ごとに衝突トリガを持ち、
+ボールの当たり方で強さが変わります）。`Sequence` の実例は Z3 Fishing です。
+配置して試す手順は[応用](./advanced.md#showcase-サンプル)にあります。
 
 ## 次に読むもの
 

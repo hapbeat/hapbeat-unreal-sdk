@@ -7,14 +7,15 @@
 #include "HapbeatEventMap.generated.h"
 
 /**
- * Central registry of haptic events for a project, edited entirely in the
- * native Details panel (no custom editor window — Unreal's array UI gives
- * add / remove / reorder / duplicate / multi-edit for free).
+ * Central registry of haptic events for a project. Editable in the native
+ * Details panel (Unreal's array UI gives add / remove / reorder / duplicate /
+ * multi-edit for free) or in the dedicated window under Tools > Hapbeat Event
+ * Map, which adds a list/detail split, target decomposition and Test Play.
  *
  * Triggers reference entries by stable GUID (FHapbeatEventEntry::Id) via
  * FindById, so reordering / inserting / duplicating entries cannot silently
  * break existing trigger wiring. Create via the Content Browser
- * (Miscellaneous > Data Asset > Hapbeat Event Map).
+ * (right-click > Hapbeat > Hapbeat Event Map).
  *
  * UE counterpart of Hapbeat.HapbeatEventMap (Unity SDK).
  */

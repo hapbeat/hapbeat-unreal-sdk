@@ -431,32 +431,140 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
 
 ### 4-2. C++ から鳴らす
 
-```cpp
-UHapbeatSubsystem* Hb = GetGameInstance()->GetSubsystem<UHapbeatSubsystem>();
-Hb->PlayEntry(EventMap, EntryId);
-```
+4-1 と同じこと（`EM_BasicExample` のエントリをキーで鳴らす）を C++ で書きます。
+違いはコンポーネントを介さず **`PlayEntry` を直接呼ぶ**ことです。
+キーは 4-1 の BP と重ならないよう **H** にします。
 
-C++ ではイベント名から `Entry Id` を引けます（GUID は EventMap を作り直すと変わるため、
-名前で引くのが安全です）:
+> **先に 1 回だけ必要な準備があります。**
+> [UE プロジェクトのビルド](./unreal-build.md) の「C++ コードを書く準備」を
+> 済ませてください。要点は 2 つです:
+> - Blueprint のみのプロジェクトなら、**C++ プロジェクトに変換**が必要
+> - `Source/<プロジェクト名>/<プロジェクト名>.Build.cs` の
+>   `PublicDependencyModuleNames` に **`"HapbeatSDK"` を追加**（これが無いと
+>   `HapbeatSubsystem.h` が見つからずビルドが止まります）
 
-```cpp
-FGuid FindEntryId(const UHapbeatEventMap* Map, EHapticMode Mode, const FString& EventId)
-{
-    for (const FHapbeatEventEntry& Entry : Map->Entries)
-    {
-        if (Entry.Mode == Mode && Entry.GetEventId() == EventId)
-        {
-            return Entry.Id;
-        }
-    }
-    return FGuid();
-}
-```
+1. **C++ クラスを作る**
+   **ツール → 新規 C++ クラス → Actor** を選び、名前を `HapbeatCppTest` にして作成。
+   エディタがコンパイルして開き直します
 
-停止は **Stop Entry**（`StopEntry(EventMap, EntryId)`）です。
+2. **ヘッダを書く**（`HapbeatCppTest.h` を丸ごと次で置き換える）
 
-> 第 3 引数の `Gain Multiplier` で、**その呼び出しだけ**強さを変えられます
+   ```cpp
+   #pragma once
+
+   #include "CoreMinimal.h"
+   #include "GameFramework/Actor.h"
+   #include "HapbeatCppTest.generated.h"
+
+   class UHapbeatEventMap;
+
+   UCLASS()
+   class あなたのプロジェクト名_API AHapbeatCppTest : public AActor
+   {
+       GENERATED_BODY()
+
+   public:
+       /** 詳細パネルで EM_BasicExample を指定する。 */
+       UPROPERTY(EditAnywhere, Category = "Hapbeat")
+       TObjectPtr<UHapbeatEventMap> EventMap;
+
+       /** 鳴らすイベント ID（<Kit 名>.<クリップ名>）。 */
+       UPROPERTY(EditAnywhere, Category = "Hapbeat")
+       FString EventId = TEXT("basic-exam-kit.sine_100hz_1s");
+
+   protected:
+       virtual void BeginPlay() override;
+
+   private:
+       void HandleKey();
+   };
+   ```
+
+   > `あなたのプロジェクト名_API` は、生成されたヘッダに元から入っているマクロを
+   > そのまま使ってください（例: プロジェクトが `MyGame` なら `MYGAME_API`）。
+
+3. **cpp を書く**（`HapbeatCppTest.cpp` を丸ごと次で置き換える）
+
+   ```cpp
+   #include "HapbeatCppTest.h"   // 自分のヘッダを必ず最初に置く
+
+   #include "HapbeatEventMap.h"
+   #include "HapbeatSubsystem.h"
+   #include "Components/InputComponent.h"
+   #include "Engine/GameInstance.h"
+   #include "Engine/World.h"
+   #include "GameFramework/PlayerController.h"
+   #include "InputCoreTypes.h"   // EKeys::H
+
+   void AHapbeatCppTest::BeginPlay()
+   {
+       Super::BeginPlay();
+
+       APlayerController* PC =
+           GetWorld() != nullptr ? GetWorld()->GetFirstPlayerController() : nullptr;
+       if (PC == nullptr)
+       {
+           return;
+       }
+
+       // Blueprint の Auto Receive Input = Player 0 に相当する。
+       // これが無いとキーを押しても呼ばれない。
+       EnableInput(PC);
+       if (InputComponent != nullptr)
+       {
+           InputComponent->BindKey(EKeys::H, IE_Pressed, this, &AHapbeatCppTest::HandleKey);
+       }
+   }
+
+   void AHapbeatCppTest::HandleKey()
+   {
+       if (EventMap == nullptr)
+       {
+           return;
+       }
+
+       UGameInstance* GameInstance = GetGameInstance();
+       UHapbeatSubsystem* Hb =
+           GameInstance != nullptr ? GameInstance->GetSubsystem<UHapbeatSubsystem>() : nullptr;
+       if (Hb == nullptr)
+       {
+           return;
+       }
+
+       // GUID は EventMap を作り直すと振り直されるので、イベント名から引く。
+       for (const FHapbeatEventEntry& Entry : EventMap->Entries)
+       {
+           if (Entry.GetEventId() == EventId)
+           {
+               Hb->PlayEntry(EventMap, Entry.Id);
+               return;
+           }
+       }
+   }
+   ```
+
+   > **include の順番に注意。** UE は `.cpp` が自分のヘッダを最初に include して
+   > いることを要求します。上に他のものを足すと
+   > `Expected HapbeatCppTest.h to be first header included.` で止まります。
+
+4. **ビルドする**
+   `Build.cs` を変更した直後は **Live Coding では反映されません**。
+   エディタを閉じてリビルドし、開き直してください
+
+5. **レベルに配置して EventMap を指定する**
+   `HapbeatCppTest` をレベルにドラッグ&ドロップし、詳細パネルで
+   `Event Map` → **`EM_BasicExample`**（`Event Id` は既定値のままで構いません）
+
+6. ▶ Play して **H** を押す → 100Hz が 1 回鳴る
+
+停止は `StopEntry(EventMap, EntryId)` です。
+
+> `PlayEntry` の第 3 引数 `GainMultiplier` で、**その呼び出しだけ**強さを変えられます
 >（エントリの設定は変わりません）。
+>
+> **`Play(TEXT("kit.clip"), Gain)` という直接送信の API もありますが、通常は使いません。**
+> EventMap を経由しないため、ゲイン・送信先・ループをコード側に書くことになり、
+> §3 で分けた「鳴らす場所」と「鳴らし方」が再び混ざります。
 
 ### 4-3. コンポーネントの種類
 

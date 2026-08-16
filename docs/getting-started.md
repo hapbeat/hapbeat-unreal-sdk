@@ -456,6 +456,8 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
    #include "GameFramework/Actor.h"
    #include "HapbeatCppTest.generated.h"
 
+   // Forward declaration. Without this line TObjectPtr<UHapbeatEventMap> below
+   // fails to compile (C2065: undeclared identifier).
    class UHapbeatEventMap;
 
    UCLASS()
@@ -464,11 +466,11 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
        GENERATED_BODY()
 
    public:
-       /** 詳細パネルで EM_BasicExample を指定する。 */
+       /** Assign EM_BasicExample in the Details panel. */
        UPROPERTY(EditAnywhere, Category = "Hapbeat")
        TObjectPtr<UHapbeatEventMap> EventMap;
 
-       /** 鳴らすイベント ID（<Kit 名>.<クリップ名>）。 */
+       /** Event id to fire: <kit name>.<clip name>. */
        UPROPERTY(EditAnywhere, Category = "Hapbeat")
        FString EventId = TEXT("basic-exam-kit.sine_100hz_1s");
 
@@ -480,13 +482,18 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
    };
    ```
 
+   > **`class UHapbeatEventMap;` の行を落とさないでください。**
+   > これが無いと `error C2065: 'UHapbeatEventMap': 定義されていない識別子です`
+   > を先頭に十数行のエラーが出ます（`TObjectPtr<...>` が壊れ、`.cpp` 側の
+   > `EventMap` を触る行まで芋づる式に落ちるため、原因が分かりにくくなります）。
+
    > `あなたのプロジェクト名_API` は、生成されたヘッダに元から入っているマクロを
    > そのまま使ってください（例: プロジェクトが `MyGame` なら `MYGAME_API`）。
 
 3. **cpp を書く**（`HapbeatCppTest.cpp` を丸ごと次で置き換える）
 
    ```cpp
-   #include "HapbeatCppTest.h"   // 自分のヘッダを必ず最初に置く
+   #include "HapbeatCppTest.h"   // own header must be included first
 
    #include "HapbeatEventMap.h"
    #include "HapbeatSubsystem.h"
@@ -507,8 +514,8 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
            return;
        }
 
-       // Blueprint の Auto Receive Input = Player 0 に相当する。
-       // これが無いとキーを押しても呼ばれない。
+       // Equivalent of Blueprint's Auto Receive Input = Player 0.
+       // Without it the key binding below is never reached.
        EnableInput(PC);
        if (InputComponent != nullptr)
        {
@@ -531,7 +538,8 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
            return;
        }
 
-       // GUID は EventMap を作り直すと振り直されるので、イベント名から引く。
+       // Entry GUIDs are re-minted whenever the EventMap asset is regenerated,
+       // so resolve by event id instead of hardcoding one.
        for (const FHapbeatEventEntry& Entry : EventMap->Entries)
        {
            if (Entry.GetEventId() == EventId)
@@ -546,6 +554,12 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
    > **include の順番に注意。** UE は `.cpp` が自分のヘッダを最初に include して
    > いることを要求します。上に他のものを足すと
    > `Expected HapbeatCppTest.h to be first header included.` で止まります。
+
+   > **コード中のコメントを英語にしてあるのは意図的です。**
+   > 日本語のコメントを書く場合は、ファイルを **UTF-8（BOM 付き）** で保存して
+   > ください。日本語版 Windows では BOM 無しのファイルが Shift-JIS と誤認され、
+   > コメントが文字化けします。さらに一部の文字は 2 バイト目が `\`（0x5C）で、
+   > 行末に来ると**次の行がコメントに飲み込まれて**原因不明のエラーになります。
 
 4. **ビルドする**
    `Build.cs` を変更した直後は **Live Coding では反映されません**。

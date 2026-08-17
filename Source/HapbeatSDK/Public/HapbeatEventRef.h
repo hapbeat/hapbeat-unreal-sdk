@@ -14,16 +14,18 @@ class UHapbeatEventMap;
  * A pick-one reference to a single Event Map entry: which map, and which entry
  * inside it.
  *
- * This exists so a Blueprint GRAPH can name an authored haptic event. The two
- * pre-existing ways both fall short there:
+ * This exists so a Blueprint GRAPH can name an authored haptic event, which is
+ * what makes UHapbeatSubsystem::PlayEventRef ("Play Hapbeat Event") usable as
+ * THE Blueprint entry point. Neither of the two obvious alternatives works at a
+ * call site:
  *
  *  - PlayEntry(Map, FGuid) is exact, but a GUID cannot be typed into a graph
  *    pin by hand, so the entry could only be chosen on a component's Details
- *    panel -- never at the call site.
- *  - PlayEvent(Map, "<category>.<name>") can be typed, but event ids are
- *    deliberately NOT unique within a map (the same device-side event is often
- *    authored twice with different tuning), so the first match wins and the
- *    call site cannot express WHICH one it meant.
+ *    panel -- never at the call site. (It remains the C++ entry point.)
+ *  - Naming the entry by its event id ("<category>.<name>") can be typed, but
+ *    event ids are deliberately NOT unique within a map (the same device-side
+ *    event is often authored twice with different tuning), so the first match
+ *    would win and the call site could not express WHICH one it meant.
  *
  * Holding the entry's GUID keeps the reference exact and stable: renaming an
  * entry, retuning it, or reordering the map's array cannot silently repoint it

@@ -321,39 +321,6 @@ void UHapbeatSubsystem::StopEntry(UHapbeatEventMap* Map, FGuid EntryId)
 	Stop(Entry.GetEventId(), Entry.Target);
 }
 
-UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEvent(UHapbeatEventMap* Map, const FString& EventId, float GainMultiplier)
-{
-	FHapbeatEventEntry Entry;
-	if (Map == nullptr)
-	{
-		UE_LOG(LogHapbeat, Warning, TEXT("PlayEvent: no Event Map given for event id '%s'."), *EventId);
-		return nullptr;
-	}
-	if (!Map->FindByEventId(EventId, Entry))
-	{
-		// FindByEventId already logged which map was searched.
-		return nullptr;
-	}
-	// Delegate rather than re-implement: PlayEntry owns the whole Command /
-	// Stream Clip decision, so the two entry points cannot drift apart.
-	return PlayEntry(Map, Entry.Id, GainMultiplier);
-}
-
-void UHapbeatSubsystem::StopEvent(UHapbeatEventMap* Map, const FString& EventId)
-{
-	FHapbeatEventEntry Entry;
-	if (Map == nullptr)
-	{
-		UE_LOG(LogHapbeat, Warning, TEXT("StopEvent: no Event Map given for event id '%s'."), *EventId);
-		return;
-	}
-	if (!Map->FindByEventId(EventId, Entry))
-	{
-		return;
-	}
-	StopEntry(Map, Entry.Id);
-}
-
 namespace
 {
 	/**

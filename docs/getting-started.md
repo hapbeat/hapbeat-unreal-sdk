@@ -151,7 +151,7 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 `Play("...", 0.8f)` を直接書くと、**強さの調整のたびにコードを直す**ことになります。
 SDK はこれを分離する仕組みを持っています。
 
-- **鳴らす場所（起点）** — トリガコンポーネント、または `Play()` の呼び出し
+- **鳴らす場所（起点）** — `Play Hapbeat Event` の呼び出し（Blueprint ノード / C++）
 - **鳴らし方（調整）** — **EventMap** アセットのエントリ（イベント ID・ゲイン・対象デバイス・ループ）
 
 両者は**イベント ID ではなく安定した GUID** で結ばれるため、エントリを並べ替えても壊れません。
@@ -324,9 +324,12 @@ Details パネル上部には専用の操作列も出ます:
 コードを触る必要はありません。Command か Stream Clip か、どのクリップを使うかも
 **すべてエントリ側の設定**が使われます。
 
-**エントリの指定に GUID を手入力する場面はありません。** `Entry Id` は安定 GUID ですが、
-**トリガコンポーネントの Details ではエントリ名のプルダウンになります**。
-Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネントでエントリを選びます。
+**再生の経路は 1 本です。** どのエントリを鳴らすかは `Play Hapbeat Event`
+（＝エントリへの参照を渡す）で指定し、Blueprint はノード、C++ は `PlayEventRef` を
+呼びます。衝突や掴む→離すを扱うパターン部品（4-3）も、内部でこの同じ経路を通ります。
+
+**エントリの指定に GUID を手入力する場面はありません。** 保存されるのは安定 GUID ですが、
+Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプルダウン**として編集します。
 
 ### 4-1. Blueprint: キーを押したら鳴らす
 
@@ -351,53 +354,49 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
    押すまで、次の手順で使う **コンポーネント** パネルも **イベントグラフ** タブも
    表示されません（この画面にあるのは「クラスのデフォルト」だけです）。
 
-3. **コンポーネントを追加する**
-   開いた画面の**左上にある「コンポーネント」パネル**の **[＋追加]** ボタンを押し、
-   `Hapbeat Trigger` を検索して選ぶ
-
-   > 見当たらない場合、パネルが閉じている可能性があります。
-   > メニューの **ウィンドウ → コンポーネント** で開き直せます。
-
-4. **鳴らすエントリを指定する**
-   **左の「コンポーネント」パネル**で `Hapbeat Trigger` を選び、詳細パネルで:
-   - `Event Map` → **`EM_BasicExample`**
-     （プラグイン同梱。候補に出ない場合はコンテンツブラウザ右上の
-     **設定 → Show Plugin Content** が off です）
-   - `Entry Id` → プルダウンから **`demo_stream_sine_100hz`**
-     （CLIP モードなので、**デバイスへの Kit 書き込みは不要**）
-
-   > **必ず左のパネルで選んでください。** コンポーネントを追加すると UE は
-   > 「コンポーネントの雛形」と「同名の変数」の 2 つを作ります。手順 6 で
-   > グラフに置くノードは**後者（変数）への参照**なので、そのノードを選ぶと
-   > 詳細パネルには `変数名` / `変数の型` / `デフォルト値` が出て、
-   > `Event Map` も `Entry Id` も**出てきません**（別のものを見ています）。
-   >
-   > 詳細パネルの先頭が `変数名` なら変数、`Hapbeat` カテゴリなら
-   > コンポーネント、と見分けられます。設定を持つのは後者だけです。
-
-5. **キー入力を受け取れるようにする**
-   コンポーネント一覧の一番上（`BP_HapbeatKeyTest (self)`）を選び、
+3. **キー入力を受け取れるようにする**
+   **左上の「コンポーネント」パネル**の一番上（`BP_HapbeatKeyTest (self)`）を選び、
    Details → **Input** → **Auto Receive Input** を **Player 0** にする
 
    > **ここを飛ばすとキーを押しても何も起きません。** アクターは既定で入力を
    > 受け取らないので、この 1 項目が実質の「入力を有効化」スイッチです。
 
-6. **グラフを繋ぐ**（**イベントグラフ** タブ）
-   - 何も無いところで右クリック → 出たメニューのツリーを
-     **インプット → キーボード イベント → G** と辿って配置する
-     （英語版は `Input → Keyboard Events → G`）
+   > 「コンポーネント」パネルが見当たらない場合は閉じています。
+   > メニューの **ウィンドウ → コンポーネント** で開き直せます。
 
-     > **検索欄に `G` と打っても見つかりません。** ノード名は `G` の 1 文字なので、
-     > `G` を含む無関係なノードが大量に並びます。絞るなら **`キーボード`**
-     >（英語版は `Keyboard`）と入力してから一覧の `G` を探してください。
+4. **キー入力のノードを置く**（**イベントグラフ** タブ）
+   何も無いところで右クリック → 出たメニューのツリーを
+   **インプット → キーボード イベント → G** と辿って配置する
+   （英語版は `Input → Keyboard Events → G`）
 
-   - 左の「コンポーネント」パネルから `Hapbeat Trigger` をグラフにドラッグ&ドロップ
-   - 置かれたノードの青いピンからドラッグ → **Fire** を選ぶ
-   - **G の `Pressed`** 実行ピンを `Fire` の実行ピンへ接続
+   > **検索欄に `G` と打っても見つかりません。** ノード名は `G` の 1 文字なので、
+   > `G` を含む無関係なノードが大量に並びます。絞るなら **`キーボード`**
+   >（英語版は `Keyboard`）と入力してから一覧の `G` を探してください。
 
-7. **[コンパイル]** を押し、保存する
+5. **`Get Hapbeat Subsystem` を置く**
+   グラフで右クリック → 検索欄に **`Hapbeat Subsystem`** と入力 → 出てきた
+   **Get Hapbeat Subsystem** を配置
 
-8. **レベルに配置する**
+   > **いきなり `Play Hapbeat Event` で検索しても出ません。**
+   > サブシステムの関数は、**対象（Target）が決まっていない状態では候補に出ない**
+   > ためです。先にこの取得ノードを置いてください。
+
+6. **`Play Hapbeat Event` を繋ぎ、鳴らすエントリを選ぶ**
+   `Get Hapbeat Subsystem` の**出力ピンからドラッグ**して離し、検索欄に
+   **`Play Hapbeat Event`** と入力して選ぶ。
+   ノードの `Event` ピンに 2 つの入力が出ます:
+   - **左**: EventMap のアセットピッカー → **`EM_BasicExample`**
+     （プラグイン同梱。候補に出ない場合はコンテンツブラウザ右上の
+     **設定 → Show Plugin Content** が off です）
+   - **右**: そのマップのエントリが並ぶ**ドロップダウン** →
+     **`demo_stream_sine_100hz`**
+     （CLIP モードなので、**デバイスへの Kit 書き込みは不要**）
+
+7. **G の `Pressed`** 実行ピンを `Play Hapbeat Event` の実行ピンへ接続する
+
+8. **[コンパイル]** を押し、保存する
+
+9. **レベルに配置する**
    コンテンツブラウザの `BP_HapbeatKeyTest` を、**ビューポート（3D 画面）へ
    ドラッグ&ドロップ**する。置く位置はどこでも構いません
 
@@ -408,7 +407,7 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
    > **アウトライナー**（画面右上のリスト）に `BP_HapbeatKeyTest` が
    > 増えていれば配置できています。
 
-9. ▶ Play して **G** を押す → 100Hz が 1 回鳴る
+10. ▶ Play して **G** を押す → 100Hz が 1 回鳴る
 
 鳴ったら、**PIE を動かしたまま** `EM_BasicExample` を開いて
 `demo_stream_sine_100hz` の **`Gain`** を `0.3` に変え、ゲーム画面に戻って
@@ -422,40 +421,8 @@ Blueprint / C++ のどちらから鳴らす場合も、まずコンポーネン�
 > **`Esc` は PIE の停止**なので、これで抜けると再生からやり直しになります。
 > プレイヤーから離れて見回したい場合は `F8`（エジェクト）です。
 >
-> 変更は**次に発火した時点で反映されます**。トリガは発火のたびに EventMap を
+> 変更は**次に発火した時点で反映されます**。発火のたびに EventMap を
 > 引き直すので、PIE を再起動する必要はありません。
-
-> 連打で詰まるようなら、`Hapbeat Trigger` の **`Cooldown`** に `0.2` 等を入れます。
-> `Play Entry` を直接呼びたい場合は、`Entry Id` ピンにこのコンポーネントの
-> `Entry Id`（Blueprint から読めます）を繋ぎます。
-
-### 4-2. Blueprint: グラフから直接鳴らす
-
-4-1 のトリガコンポーネントは「1 コンポーネント = 1 エントリ」なので、
-**別のイベントを鳴らすたびにコンポーネントが増えます**。また、何を参照しているかが
-Details パネルにしか出ないため、グラフを見ても分かりません。
-
-**`Play Hapbeat Event` ノード**はエントリの参照をピン上に持つので、
-1 ノードで任意のエントリを指せて、グラフを見れば何を鳴らすか分かります。
-
-1. **`Get Hapbeat Subsystem` を置く**
-   グラフで右クリック → 検索欄に **`Hapbeat Subsystem`** と入力 → 出てきた
-   **Get Hapbeat Subsystem** を配置
-
-   > **いきなり `Play Hapbeat Event` で検索しても出ません。**
-   > サブシステムの関数は、**対象（Target）が決まっていない状態では候補に出ない**
-   > ためです。先にこの取得ノードを置いてください。
-
-2. **`Play Hapbeat Event` を繋ぐ**
-   `Get Hapbeat Subsystem` の**出力ピンからドラッグ**して離し、検索欄に
-   **`Play Hapbeat Event`** と入力して選ぶ
-
-3. **鳴らすエントリを選ぶ**（ここが本題）
-   ノードの `Event` ピンに 2 つの入力が出ます:
-   - **左**: EventMap のアセットピッカー → `EM_BasicExample`
-   - **右**: そのマップのエントリが並ぶ**ドロップダウン** → `demo_stream_sine_100hz`
-
-4. 実行ピンを繋ぐ（4-1 と同じく **キーボード イベント G** など）
 
 停止は **`Stop Hapbeat Event`** に同じ `Event` を渡します。
 
@@ -466,17 +433,14 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
 > 同じエントリを何度も使うなら、`Event` ピンを右クリック → **変数に昇格** すれば、
 > 以降は変数の get を繋ぐだけになります（変数の Details にも同じ 2 段が出ます）。
 
-**4-1 とどちらを使うか**
+> 連打で詰まるようなら、クールダウンを持つパターン部品（[4-3](#4-3-パターン部品)）を
+> 使うか、Blueprint 側で発火間隔を制御してください。
 
-| | 向いている場面 |
-|---|---|
-| **`Play Hapbeat Event` ノード**（4-2） | 任意のイベントをその場で鳴らす。グラフ上で何を鳴らすか見せたい |
-| **トリガコンポーネント**（4-1） | クールダウン、速度連動（`FireScaled`）、掴む→離すの 3 段など、**発火の作法ごと**持たせたい。衝突や XR の検出を自前で書きたくない |
-
-### 4-3. C++ から鳴らす
+### 4-2. C++ から鳴らす
 
 4-1 と同じこと（`EM_BasicExample` のエントリをキーで鳴らす）を C++ で書きます。
-違いはコンポーネントを介さず **`PlayEntry` を直接呼ぶ**ことです。
+違いは Blueprint ノードの代わりに **`PlayEventRef` を呼ぶ**ことだけで、
+**どのエントリを鳴らすかは 4-1 と同じく詳細パネルのプルダウンで選びます**。
 キーは 4-1 の BP と重ならないよう **H** にします。
 
 > **先に 1 回だけ必要な準備があります。**
@@ -498,11 +462,8 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
 
    #include "CoreMinimal.h"
    #include "GameFramework/Actor.h"
+   #include "HapbeatEventRef.h"   // FHapbeatEventRef is held by value: needs the full type
    #include "HapbeatCppTest.generated.h"
-
-   // Forward declaration. Without this line TObjectPtr<UHapbeatEventMap> below
-   // fails to compile (C2065: undeclared identifier).
-   class UHapbeatEventMap;
 
    UCLASS()
    class あなたのプロジェクト名_API AHapbeatCppTest : public AActor
@@ -510,13 +471,9 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
        GENERATED_BODY()
 
    public:
-       /** Assign EM_BasicExample in the Details panel. */
+       /** Pick EM_BasicExample and the entry in the Details panel. */
        UPROPERTY(EditAnywhere, Category = "Hapbeat")
-       TObjectPtr<UHapbeatEventMap> EventMap;
-
-       /** Event id to fire: <kit name>.<clip name>. */
-       UPROPERTY(EditAnywhere, Category = "Hapbeat")
-       FString EventId = TEXT("basic-exam-kit.sine_100hz_1s");
+       FHapbeatEventRef Event;
 
    protected:
        virtual void BeginPlay() override;
@@ -526,10 +483,12 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
    };
    ```
 
-   > **`class UHapbeatEventMap;` の行を落とさないでください。**
-   > これが無いと `error C2065: 'UHapbeatEventMap': 定義されていない識別子です`
-   > を先頭に十数行のエラーが出ます（`TObjectPtr<...>` が壊れ、`.cpp` 側の
-   > `EventMap` を触る行まで芋づる式に落ちるため、原因が分かりにくくなります）。
+   > **`#include "HapbeatEventRef.h"` は `.generated.h` より前に置いてください。**
+   > `FHapbeatEventRef` は構造体を**値で**持つため、前方宣言では足りず実体が要ります。
+   > include が無い / 順番が後ろだと、`FHapbeatEventRef` が未定義というエラーを
+   > 先頭に十数行のエラーが出ます（`.cpp` 側の `Event` を触る行まで芋づる式に
+   > 落ちるため、原因が分かりにくくなります）。
+   > `.generated.h` は**常に最後**の include です。
 
    > `あなたのプロジェクト名_API` は、生成されたヘッダに元から入っているマクロを
    > そのまま使ってください（例: プロジェクトが `MyGame` なら `MYGAME_API`）。
@@ -539,7 +498,6 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
    ```cpp
    #include "HapbeatCppTest.h"   // own header must be included first
 
-   #include "HapbeatEventMap.h"
    #include "HapbeatSubsystem.h"
    #include "Components/InputComponent.h"
    #include "Engine/GameInstance.h"
@@ -569,11 +527,6 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
 
    void AHapbeatCppTest::HandleKey()
    {
-       if (EventMap == nullptr)
-       {
-           return;
-       }
-
        UGameInstance* GameInstance = GetGameInstance();
        UHapbeatSubsystem* Hb =
            GameInstance != nullptr ? GameInstance->GetSubsystem<UHapbeatSubsystem>() : nullptr;
@@ -582,18 +535,16 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
            return;
        }
 
-       // Entry GUIDs are re-minted whenever the EventMap asset is regenerated,
-       // so resolve by event id instead of hardcoding one.
-       for (const FHapbeatEventEntry& Entry : EventMap->Entries)
-       {
-           if (Entry.GetEventId() == EventId)
-           {
-               Hb->PlayEntry(EventMap, Entry.Id);
-               return;
-           }
-       }
+       // Everything else (Command vs Stream Clip, clip, gain, target, loop)
+       // comes from the entry the Details panel points at.
+       Hb->PlayEventRef(Event);
    }
    ```
+
+   > **エントリの選択はエディタ（詳細パネル）側の仕事**なので、コードには
+   > `PlayEventRef` の 1 行しか出てきません。EventMap 未設定・エントリ未選択の
+   > ときは `PlayEventRef` が Output Log に警告を出すので、呼び出し側での
+   > null チェックは省いています。
 
    > **include の順番に注意。** UE は `.cpp` が自分のヘッダを最初に include して
    > いることを要求します。上に他のものを足すと
@@ -609,35 +560,43 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
    `Build.cs` を変更した直後は **Live Coding では反映されません**。
    エディタを閉じてリビルドし、開き直してください
 
-5. **レベルに配置して EventMap を指定する**
-   `HapbeatCppTest` をレベルにドラッグ&ドロップし、詳細パネルで
-   `Event Map` → **`EM_BasicExample`**（`Event Id` は既定値のままで構いません）
+5. **レベルに配置して鳴らすエントリを指定する**
+   `HapbeatCppTest` をレベルにドラッグ&ドロップし、詳細パネルの `Event` に
+   4-1 と同じ 2 段が出るので、**`EM_BasicExample`** →
+   **`demo_stream_sine_100hz`** を選ぶ
 
 6. ▶ Play して **H** を押す → 100Hz が 1 回鳴る
 
-停止は `StopEntry(EventMap, EntryId)` です。
+停止は `Hb->StopEventRef(Event)` です。
 
-> `PlayEntry` の第 3 引数 `GainMultiplier` で、**その呼び出しだけ**強さを変えられます
+> `PlayEventRef` の第 2 引数 `GainMultiplier` で、**その呼び出しだけ**強さを変えられます
 >（エントリの設定は変わりません）。
 >
 > **`Play(TEXT("kit.clip"), Gain)` という直接送信の API もありますが、通常は使いません。**
 > EventMap を経由しないため、ゲイン・送信先・ループをコード側に書くことになり、
 > §3 で分けた「鳴らす場所」と「鳴らし方」が再び混ざります。
 
-### 4-4. コンポーネントの種類
+### 4-3. パターン部品
 
-4-1 で使った `Hapbeat Trigger` は 4 種類のうちの 1 つです。いずれも
-**+ 追加** から足し、`Event Map` と `Entry Id` を指定して使います。
+よくある発火パターンを 1 コンポーネントに畳んだ**任意の**部品です。内部では
+4-1 と同じ再生経路を呼ぶので、**必須ではありません** — UE 標準のイベント
+（`OnComponentHit` など）に `Play Hapbeat Event` を繋いでも同じことはできます。
+検出やタイミング制御を自前で書きたくないときに使ってください。
+
+いずれもアクターの **+ 追加** から足し、`Event Map` と `Entry Id` を指定します。
 
 | コンポーネント | 用途 |
 |---|---|
-| **Hapbeat Trigger** | 基本形。Blueprint から `Fire()` / `Stop()` を呼ぶ |
 | **Hapbeat Collision Trigger** | 物理の衝突・重なりで自動発火。**衝突速度に応じて強さを変えられる** |
 | **Hapbeat Sequence** | 掴む→保持→離す の 3 段階（開始 1 発 → ループ → 終了 1 発） |
 | **Hapbeat Parameter Binding** | 再生中のストリームのゲイン / パンを実行時に変化させる |
 
 `Collision Trigger` と `Sequence` は**自分で `Fire` を呼びません**。
 発火のきっかけ（衝突、掴む→離す）をコンポーネント自身が検出します。
+
+> 基底クラスの `Hapbeat Trigger` 自体は C++ 側に残っていますが、
+> **+ 追加 の候補には出しません**。素の発火はグラフの
+> `Play Hapbeat Event` が担当するためです。
 
 #### Hapbeat Collision Trigger
 
@@ -654,6 +613,17 @@ Details パネルにしか出ないため、グラフを見ても分かりませ
 4. （任意）`Gain Mode` を **`Velocity Scaled`** にすると**衝突速度で強さが変わります**
    - `Velocity Threshold` 未満の衝突は無視
    - `Max Velocity` で 1.0 に正規化（`Velocity Curve` を入れればカーブで整形）
+
+#### Hapbeat Sequence
+
+`Fire()` を掴む操作に、`Stop()` を離す操作に繋ぐと、
+**開始 1 発（`Start Entry Id`）→ ループ（`Entry Id`）→ 終了 1 発（`Stop Entry Id`）**
+の 3 段階を 1 コンポーネントで扱えます。
+
+終了 1 発は、ループを止めてから **`Stop Shot Delay`**（既定 `0.05` 秒）だけ遅れて
+発火します。ループの停止でデバイス側のリングバッファがフラッシュされるため、
+その直後に次の再生を始めると終了音が食われて途切れます。既定値はこれを避けるための
+ごく短い間隔です（`0` にすると即座に発火します）。
 
 **動く実例は Showcase の Z1 Bowling** です（ピン 1 本ごとに衝突トリガを持ち、
 ボールの当たり方で強さが変わります）。`Sequence` の実例は Z3 Fishing です。

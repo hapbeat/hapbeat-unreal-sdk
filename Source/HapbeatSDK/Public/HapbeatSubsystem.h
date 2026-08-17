@@ -33,8 +33,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FHapbeatOnPong, const FString&, En
  * C++ and Blueprint. Sends Layer 1 commands over Wi-Fi UDP broadcast and
  * receives PONG / ERROR replies on the same bound socket.
  *
- * Blueprint:  Get Hapbeat Subsystem -> Connect -> Play (event id, gain).
- * C++:        GetGameInstance()->GetSubsystem<UHapbeatSubsystem>()->Play(...);
+ * Blueprint:  Get Hapbeat Subsystem -> Play Hapbeat Event (PlayEventRef).
+ * C++:        GetGameInstance()->GetSubsystem<UHapbeatSubsystem>()->PlayEventRef(...);
+ * Play(event id, gain) stays available for the rare call site that deliberately
+ * bypasses the Event Map.
  *
  * The fire side stays orthogonal to event tuning (default gains live in the kit
  * on the device / a future EventMap asset), matching the Hapbeat Unity SDK.
@@ -86,8 +88,13 @@ public:
 	void StopAll(const FString& Target = TEXT(""));
 
 	/**
-	 * Play an entry of an Event Map -- the native way to fire authored haptics
-	 * from Blueprint or C++.
+	 * Play an entry of an Event Map -- the C++ entry point of the single
+	 * playback path. Blueprint does not see this: a graph picks the entry on a
+	 * FHapbeatEventRef pin and calls PlayEventRef ("Play Hapbeat Event"), which
+	 * resolves the reference and lands here. Everything else that fires an
+	 * authored haptic (the trigger components, the AnimNotify, the editor's
+	 * Test Play) funnels through here too, so there is exactly one place where
+	 * Command vs Stream Clip is decided.
 	 *
 	 * Everything the entry defines (Command vs Stream Clip, the clip, gain,
 	 * target, loop) comes from the asset, so the caller only says WHICH entry
@@ -104,51 +111,22 @@ public:
 	 * @return The stream handle for a Stream Clip entry (for live gain / pan
 	 *         modulation, or to stop just this playback); null for Command.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (AdvancedDisplay = "2"))
 	UHapbeatStreamPlayback* PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier = 1.0f);
 
-	/** Stop an entry started by PlayEntry: STOP for Command, ends the stream for Stream Clip. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	/** Stop an entry started by PlayEntry: STOP for Command, ends the stream for Stream Clip. C++ only, like PlayEntry. */
 	void StopEntry(UHapbeatEventMap* Map, FGuid EntryId);
-
-	/**
-	 * Play an Event Map entry named by its event id ("<category>.<name>") --
-	 * PlayEntry without a GUID, so a Blueprint graph can choose the event
-	 * itself instead of needing one pre-configured UHapbeatTriggerComponent per
-	 * event.
-	 *
-	 * Resolves the entry through UHapbeatEventMap::FindByEventId and then
-	 * delegates to PlayEntry, so everything authored on the entry (Command vs
-	 * Stream Clip, clip, gain x manifest intensity, target, loop) applies
-	 * exactly as it does there. This is what separates it from Play(EventId),
-	 * which puts the raw id on the wire and applies none of that.
-	 *
-	 * Event ids are not unique within a map (the same event is often authored
-	 * twice, e.g. one-shot and looping). The first match wins and a warning is
-	 * logged when several match -- when a call site must hit exactly one entry,
-	 * use PlayEntry with the entry's Id.
-	 *
-	 * @param GainMultiplier Scales the entry's authored gain for this call only.
-	 * @return The stream handle for a Stream Clip entry; null for Command, for a
-	 *         null Map, or when no entry carries that event id.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (AdvancedDisplay = "2"))
-	UHapbeatStreamPlayback* PlayEvent(UHapbeatEventMap* Map, const FString& EventId, float GainMultiplier = 1.0f);
-
-	/** Stop an entry started by PlayEvent. Same event-id resolution (and same first-match rule) as PlayEvent, then StopEntry. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
-	void StopEvent(UHapbeatEventMap* Map, const FString& EventId);
 
 	/**
 	 * Play the entry a FHapbeatEventRef points at -- the way to fire an
 	 * authored haptic from a Blueprint GRAPH, where the entry is chosen from a
-	 * by-name dropdown on the pin itself.
+	 * by-name dropdown on the pin itself. This is the Blueprint-facing entry
+	 * point of the playback path.
 	 *
 	 * Resolves the reference and delegates to PlayEntry, so everything authored
 	 * on the entry (Command vs Stream Clip, clip, gain x manifest intensity,
-	 * target, loop) applies exactly as it does there. Unlike PlayEvent, the
-	 * reference is a GUID, so it can never resolve to the wrong one of two
-	 * entries that share an event id.
+	 * target, loop) applies exactly as it does there. The reference stores the
+	 * entry's GUID, so it can never resolve to the wrong one of two entries that
+	 * share an event id.
 	 *
 	 * @param GainMultiplier Scales the entry's authored gain for this call only.
 	 * @return The stream handle for a Stream Clip entry; null for Command, or

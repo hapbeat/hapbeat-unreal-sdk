@@ -36,8 +36,16 @@ class UCurveFloat;
  *
  * Latency compensation (Unity's hapticDelaySeconds / DelayOffsetSeconds deferral)
  * is DROPPED for v1 — every fire goes out immediately. Revisit in L2.
+ *
+ * NOT spawnable from Add Component on purpose (no BlueprintSpawnableComponent):
+ * firing an entry from a graph is the "Play Hapbeat Event" node's job, and a
+ * bare trigger component adds nothing over it except an extra place to look for
+ * the entry reference. This class stays as the C++ base for the collision /
+ * sequence components (which DO carry their own detection logic, and their own
+ * BlueprintSpawnableComponent tag — UCLASS meta is not inherited) and for
+ * components created from C++.
  */
-UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent))
+UCLASS(ClassGroup = (Hapbeat))
 class HAPBEATSDK_API UHapbeatTriggerComponent : public UActorComponent
 {
 	GENERATED_BODY()

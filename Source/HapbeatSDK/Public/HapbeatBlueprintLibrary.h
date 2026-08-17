@@ -48,13 +48,17 @@ public:
 	 * @param Map            The Event Map asset holding the entry.
 	 * @param Entry          Which entry inside Map (picked by name in the editor).
 	 * @param GainMultiplier Scales the entry's authored gain for this call only.
+	 *                       Kept OFF AdvancedDisplay on purpose: it is the one pin
+	 *                       a call site routinely varies (per-object strength), so
+	 *                       it stays visible on the node rather than sitting behind
+	 *                       the collapsed arrow.
 	 * @return The stream handle for a Stream Clip entry (for live gain / pan
 	 *         modulation, or to stop just this playback); null for Command, and
 	 *         null when the arguments do not resolve to an entry.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Play Hapbeat Event",
-			AdvancedDisplay = "3", Keywords = "haptic play event hapbeat"))
+			Keywords = "haptic play event hapbeat"))
 	static UHapbeatStreamPlayback* PlayHapbeatEvent(const UObject* WorldContextObject,
 		UHapbeatEventMap* Map, FHapbeatEntryRef Entry, float GainMultiplier = 1.0f);
 

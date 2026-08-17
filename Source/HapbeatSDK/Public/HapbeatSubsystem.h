@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
 #include "Common/UdpSocketReceiver.h"         // FUdpSocketReceiver + FArrayReaderPtr typedef
+#include "Engine/TimerHandle.h"               // FTimerHandle (held by the pending-send record below)
 #include "HAL/CriticalSection.h"              // FCriticalSection (SeqLock — shared with the stream thread)
 #include "HapbeatNetInterfaces.h"             // FHapbeatBroadcastRoute (held by value in a TArray below)
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
@@ -17,6 +18,56 @@ class FRunnableThread;
 class UHapbeatClip;
 class UHapbeatEventMap;
 class UHapbeatStreamPlayback;
+struct FHapbeatEventEntry;
+
+/** What a deferred (haptic-delay) send does once its timer fires. See FHapbeatPendingSend. */
+enum class EHapbeatPendingKind : uint8
+{
+	/** Command entry: Play(EventId, Gain, Target). */
+	PlayCommand,
+	/** Command entry: Stop(EventId, Target). */
+	StopCommand,
+	/** Stream Clip entry: start the session on the handle already handed to the caller. */
+	StartStream,
+	/** Stream Clip entry: StopStream() (the whole session — v1 streams one at a time). */
+	StopStream,
+};
+
+/**
+ * One send held back by the haptic delay (UHapbeatConfig::HapticDelaySeconds +
+ * FHapbeatEventEntry::DelayOffsetSeconds). Created by PlayEntry / StopEntry and
+ * consumed by UHapbeatSubsystem::FirePendingSend.
+ *
+ * A USTRUCT purely so the Clip / Playback pointers are GC-visible: a Stream Clip
+ * entry hands its handle back to the caller IMMEDIATELY (the PlayEntry return
+ * contract cannot wait out the delay), so both that handle and the clip it will
+ * stream must stay alive across the delay even though nothing else references
+ * them yet.
+ */
+USTRUCT()
+struct HAPBEATSDK_API FHapbeatPendingSend
+{
+	GENERATED_BODY()
+
+	/** The clip to stream (StartStream only). Rooted here for the length of the delay. */
+	UPROPERTY()
+	TObjectPtr<UHapbeatClip> Clip = nullptr;
+
+	/** The handle already returned to the caller (StartStream only). Rooted here until the session starts. */
+	UPROPERTY()
+	TObjectPtr<UHapbeatStreamPlayback> Playback = nullptr;
+
+	EHapbeatPendingKind Kind = EHapbeatPendingKind::PlayCommand;
+
+	/** Command payload. Target stays UNRESOLVED here: the address override is applied at fire time (Play/Stop), matching Unity. */
+	FString EventId;
+	FString Target;
+	float Gain = 1.0f;
+	bool bLoop = false;
+
+	/** The timer this record is waiting on, so Deinitialize can cancel it. */
+	FTimerHandle Handle;
+};
 
 /** Raised on the game thread when the device set goes 0 -> positive (liveness, not socket-open). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FHapbeatOnConnected);
@@ -87,13 +138,17 @@ public:
 	void StopAll(const FString& Target = TEXT(""));
 
 	/**
-	 * Play an entry of an Event Map -- the single playback path. Blueprint does
-	 * not see this directly: a graph calls "Play Hapbeat Event"
+	 * Play an entry of an Event Map. Blueprint does not see this directly: a
+	 * graph calls "Play Hapbeat Event"
 	 * (UHapbeatBlueprintLibrary::PlayHapbeatEvent), which validates its Map /
-	 * Entry pins and lands here. Everything else that fires an authored haptic
-	 * (the trigger components, the AnimNotify, the editor's Test Play) funnels
-	 * through here too, so there is exactly one place where Command vs Stream
-	 * Clip is decided.
+	 * Entry pins and lands here; the AnimNotify lands here too.
+	 *
+	 * NOT the only place Command vs Stream Clip is decided, despite what this
+	 * comment used to claim: UHapbeatTriggerComponent::DispatchEntry makes the
+	 * same decision itself (it composes per-component multipliers and pre-seeds
+	 * bindings around it), and the editor's Test Play has its own sender
+	 * (FHapbeatEditorSender). Anything added here — the haptic delay below, for
+	 * one — therefore does NOT automatically apply to the trigger components.
 	 *
 	 * Everything the entry defines (Command vs Stream Clip, the clip, gain,
 	 * target, loop) comes from the asset, so the caller only says WHICH entry
@@ -106,13 +161,25 @@ public:
 	 * use the component when an actor fires the same entry repeatedly, and this
 	 * when the call site is one-off.
 	 *
+	 * Haptic delay: the send is held back by max(0, UHapbeatConfig::
+	 * HapticDelaySeconds + entry DelayOffsetSeconds) so the haptic lands with a
+	 * slow audio path (Bluetooth headphones) instead of ahead of it. A Stream
+	 * Clip entry still returns its handle IMMEDIATELY — only the session start is
+	 * deferred (see ComputeEffectiveDelaySeconds / FirePendingSend). At the
+	 * default 0 s nothing is scheduled and this behaves exactly as before.
+	 *
 	 * @param GainMultiplier Scales the entry's authored gain for this call only.
 	 * @return The stream handle for a Stream Clip entry (for live gain / pan
 	 *         modulation, or to stop just this playback); null for Command.
 	 */
 	UHapbeatStreamPlayback* PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier = 1.0f);
 
-	/** Stop an entry started by PlayEntry: STOP for Command, ends the stream for Stream Clip. */
+	/**
+	 * Stop an entry started by PlayEntry: STOP for Command, ends the stream for
+	 * Stream Clip. Deferred by the SAME haptic delay as PlayEntry, so the
+	 * perceived Play->Stop interval is the one the caller asked for (parity with
+	 * Unity HapbeatTriggerBase.StopHaptic).
+	 */
 	void StopEntry(UHapbeatEventMap* Map, FGuid EntryId);
 
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
@@ -256,6 +323,52 @@ public:
 
 private:
 	void SendPacket(const TArray<uint8>& Packet);
+
+	// ---- Haptic delay (PlayEntry / StopEntry only) ----
+
+	/**
+	 * Effective deferral for this entry: max(0, global HapticDelaySeconds +
+	 * entry DelayOffsetSeconds). Port of Unity
+	 * HapbeatTriggerBase.ComputeEffectiveDelaySeconds — a negative per-entry
+	 * offset pulls the haptic earlier but can never go below "now".
+	 *
+	 * The wait itself is a GameInstance timer, so it runs on WORLD time: time
+	 * dilation stretches it and a paused game holds it. Unity waits in unscaled
+	 * real time (WaitForSecondsRealtime) instead. At the sub-100 ms values this
+	 * setting is for, the difference only shows in slow-motion / paused play.
+	 *
+	 * The global value is read LIVE from GetDefault<UHapbeatConfig>() rather than
+	 * seeded into a member in Initialize() like Port / PingInterval: Unity reads
+	 * it live too, so editing the delay in Project Settings retunes the feel
+	 * without restarting PIE. Already-pending sends are NOT re-timed by such an
+	 * edit — Unity's flush machinery for that (HapbeatManager.OnHapticDelayChanged
+	 * / FlushPendingDelayCoroutines) is deliberately not ported for v1; the next
+	 * fire picks the new value up.
+	 */
+	float ComputeEffectiveDelaySeconds(const FHapbeatEventEntry& Entry) const;
+
+	/**
+	 * Register Pending on the GameInstance timer manager and keep it (with its
+	 * timer handle) in PendingSends until it fires or is cancelled. Returns false
+	 * if no timer manager was available, in which case nothing was scheduled.
+	 */
+	bool SchedulePendingSend(FHapbeatPendingSend&& Pending, float DelaySeconds);
+
+	/** Timer callback: pull the record out of PendingSends and perform the send it was holding. */
+	void FirePendingSend(uint32 PendingId);
+
+	/** Clear every outstanding delay timer (teardown). Nothing pending is flushed early — a haptic nobody is around to feel is just noise on the wire. */
+	void CancelPendingSends();
+
+	/**
+	 * Everything StreamClip does once the handle exists: replace any running
+	 * session, ensure the socket, resolve the target, snapshot the unicast
+	 * destinations and spin up the stream thread. Split out of StreamClip so the
+	 * delayed path can create the handle NOW and start the session LATER on the
+	 * very same handle. Returns false if the session could not be started
+	 * (ActivePlayback is left cleared in that case).
+	 */
+	bool StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPlayback* Playback, const FString& Target, bool bLoop);
 
 	/**
 	 * Send a STREAM_* packet on the GAME THREAD: unicast to each device
@@ -440,6 +553,20 @@ private:
 	int32 PrevAliveCount = -1;
 	/** Set once Deinitialize starts so SendPacket cannot lazily re-open the socket during teardown. */
 	bool bShuttingDown = false;
+
+	// --- haptic delay: sends waiting on a timer (see SchedulePendingSend) ---
+
+	/**
+	 * Outstanding deferred sends, keyed by an id that only ever grows. A map
+	 * (rather than an array) so a record can be removed by the very callback it
+	 * fires — fired and cancelled entries both leave, nothing accumulates over a
+	 * session. Empty whenever the delay is 0, which is the default.
+	 */
+	UPROPERTY()
+	TMap<uint32, FHapbeatPendingSend> PendingSends;
+
+	/** Source of the PendingSends keys. Never reused, so a stale timer callback cannot hit a newer record. */
+	uint32 NextPendingSendId = 0;
 
 	// --- global address override (see SetAddressOverride / ResolveTarget) ---
 

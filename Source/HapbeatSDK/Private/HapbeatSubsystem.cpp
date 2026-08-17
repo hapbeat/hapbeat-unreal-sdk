@@ -13,6 +13,8 @@
 #include "Async/Async.h"
 #include "Common/UdpSocketBuilder.h"
 #include "Common/UdpSocketReceiver.h"
+#include "Engine/GameInstance.h"  // GetGameInstance()->GetTimerManager() — the haptic-delay timers
+#include "TimerManager.h"
 #include "HAL/RunnableThread.h"   // FRunnableThread::Create/Kill for the dedicated stream thread
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Misc/App.h"
@@ -114,6 +116,12 @@ void UHapbeatSubsystem::Deinitialize()
 {
 	// Block any late SendPacket from lazily re-opening the socket during teardown.
 	bShuttingDown = true;
+
+	// Drop anything the haptic delay was still holding. The GameInstance timer
+	// manager dies with the game instance anyway (PIE stop), but clearing here
+	// covers the subsystem being torn down first, and releases the clip /
+	// playback objects those records were keeping alive.
+	CancelPendingSends();
 
 	// End any active stream FIRST, while the socket is still open: this sends
 	// STREAM_END to the device and removes the streaming ticker. Doing it before
@@ -281,6 +289,12 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 	// never reads the manifest itself.
 	const float Gain = Entry.GetEffectiveGain() * GainMultiplier;
 
+	// Audio-latency compensation. Validation stays here, at call time; only the
+	// send itself moves. Zero (the default) takes the untouched synchronous path
+	// below — no timer, no allocation, no behaviour change.
+	const float Delay = ComputeEffectiveDelaySeconds(Entry);
+	const bool bDeferred = Delay > KINDA_SMALL_NUMBER;
+
 	if (Entry.Mode == EHapticMode::StreamClip)
 	{
 		UHapbeatClip* Clip = Entry.StreamClip.LoadSynchronous();
@@ -290,7 +304,32 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 				TEXT("PlayEntry: entry '%s' is Stream Clip mode but has no clip assigned."), *Entry.GetEventId());
 			return nullptr;
 		}
-		return StreamClip(Clip, Gain, 1.0f, Entry.Target, Entry.bLoop);
+		if (!bDeferred)
+		{
+			return StreamClip(Clip, Gain, 1.0f, Entry.Target, Entry.bLoop);
+		}
+
+		// Deferred stream: the handle must exist NOW (the caller wires bindings /
+		// keeps it to Stop()), so create it here and start the session when the
+		// timer fires. Replacing the currently-running session is deliberately
+		// part of that later step: killing it at call time would cut the previous
+		// haptic short by exactly the delay.
+		UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(this);
+		Playback->Init(Gain, 1.0f);
+
+		FHapbeatPendingSend Pending;
+		Pending.Kind = EHapbeatPendingKind::StartStream;
+		Pending.Clip = Clip;
+		Pending.Playback = Playback;
+		Pending.Target = Entry.Target;
+		Pending.bLoop = Entry.bLoop;
+		if (!SchedulePendingSend(MoveTemp(Pending), Delay))
+		{
+			// Could not schedule — fall back to firing now rather than handing
+			// back a handle whose stream would never start.
+			return StreamClip(Clip, Gain, 1.0f, Entry.Target, Entry.bLoop);
+		}
+		return Playback;
 	}
 
 	const FString EventId = Entry.GetEventId();
@@ -298,6 +337,20 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 	{
 		UE_LOG(LogHapbeat, Warning, TEXT("PlayEntry: Command entry has an empty event id (set Event Name)."));
 		return nullptr;
+	}
+
+	if (bDeferred)
+	{
+		FHapbeatPendingSend Pending;
+		Pending.Kind = EHapbeatPendingKind::PlayCommand;
+		Pending.EventId = EventId;
+		Pending.Gain = Gain;
+		Pending.Target = Entry.Target;
+		if (SchedulePendingSend(MoveTemp(Pending), Delay))
+		{
+			return nullptr;
+		}
+		// Scheduling failed; fall through and send immediately.
 	}
 	Play(EventId, Gain, Entry.Target);
 	return nullptr;
@@ -311,14 +364,145 @@ void UHapbeatSubsystem::StopEntry(UHapbeatEventMap* Map, FGuid EntryId)
 		return;
 	}
 
+	// Stop is delayed by the SAME amount as Play so the interval between them
+	// survives the compensation (Unity HapbeatTriggerBase.StopHaptic). A Stop
+	// issued while its own Play is still pending therefore still lands after it.
+	const float Delay = ComputeEffectiveDelaySeconds(Entry);
+	const bool bDeferred = Delay > KINDA_SMALL_NUMBER;
+
 	if (Entry.Mode == EHapticMode::StreamClip)
 	{
 		// One stream session at a time, so there is nothing finer to stop here.
 		// Hold the handle PlayEntry returned to stop just that playback instead.
+		if (bDeferred)
+		{
+			FHapbeatPendingSend Pending;
+			Pending.Kind = EHapbeatPendingKind::StopStream;
+			if (SchedulePendingSend(MoveTemp(Pending), Delay))
+			{
+				return;
+			}
+		}
 		StopStream();
 		return;
 	}
+
+	if (bDeferred)
+	{
+		FHapbeatPendingSend Pending;
+		Pending.Kind = EHapbeatPendingKind::StopCommand;
+		Pending.EventId = Entry.GetEventId();
+		Pending.Target = Entry.Target;
+		if (SchedulePendingSend(MoveTemp(Pending), Delay))
+		{
+			return;
+		}
+	}
 	Stop(Entry.GetEventId(), Entry.Target);
+}
+
+float UHapbeatSubsystem::ComputeEffectiveDelaySeconds(const FHapbeatEventEntry& Entry) const
+{
+	const UHapbeatConfig* Cfg = GetDefault<UHapbeatConfig>();
+	const float Global = Cfg != nullptr ? Cfg->HapticDelaySeconds : 0.0f;
+	// Clamped at 0: a negative per-entry offset can pull the haptic back towards
+	// "now", never before it (Unity ComputeEffectiveDelaySeconds).
+	return FMath::Max(0.0f, Global + Entry.DelayOffsetSeconds);
+}
+
+bool UHapbeatSubsystem::SchedulePendingSend(FHapbeatPendingSend&& Pending, float DelaySeconds)
+{
+	UGameInstance* GameInstance = GetGameInstance();
+	if (GameInstance == nullptr || bShuttingDown)
+	{
+		return false;
+	}
+
+	const uint32 PendingId = ++NextPendingSendId;
+	FHapbeatPendingSend& Record = PendingSends.Add(PendingId, MoveTemp(Pending));
+
+	// CreateUObject (not a raw lambda) so the timer is weak-bound to this
+	// subsystem: a callback that outlives it simply never runs.
+	GameInstance->GetTimerManager().SetTimer(
+		Record.Handle,
+		FTimerDelegate::CreateUObject(this, &UHapbeatSubsystem::FirePendingSend, PendingId),
+		DelaySeconds,
+		/*InbLoop=*/false);
+	return true;
+}
+
+void UHapbeatSubsystem::FirePendingSend(uint32 PendingId)
+{
+	// Remove first: the record is done either way, and Play/StopStream below must
+	// not see a half-live entry if they ever re-enter this map.
+	FHapbeatPendingSend Pending;
+	if (!PendingSends.RemoveAndCopyValue(PendingId, Pending))
+	{
+		return; // already cancelled
+	}
+	if (bShuttingDown)
+	{
+		return;
+	}
+
+	switch (Pending.Kind)
+	{
+	case EHapbeatPendingKind::PlayCommand:
+		Play(Pending.EventId, Pending.Gain, Pending.Target);
+		break;
+
+	case EHapbeatPendingKind::StopCommand:
+		Stop(Pending.EventId, Pending.Target);
+		break;
+
+	case EHapbeatPendingKind::StopStream:
+		StopStream();
+		break;
+
+	case EHapbeatPendingKind::StartStream:
+	{
+		UHapbeatStreamPlayback* Playback = Pending.Playback;
+		if (Playback == nullptr || Playback->IsStopped())
+		{
+			// The caller stopped the handle during the delay window — honour that
+			// instead of starting a stream nobody asked for any more.
+			break;
+		}
+		if (Pending.Clip == nullptr)
+		{
+			UE_LOG(LogHapbeat, Warning, TEXT("Delayed stream: the clip went away before the delay elapsed; nothing streamed."));
+			Playback->Stop();
+			break;
+		}
+		// Gain / Pan written on the handle during the delay are already in its
+		// atomic mirror, which is what the stream thread reads — the session
+		// starts at the modulated value, not at the initial one.
+		if (!StartStreamSession(Pending.Clip, Playback, Pending.Target, Pending.bLoop))
+		{
+			// Mark the handle dead so a caller polling IsActive() isn't told a
+			// stream is running when none is.
+			Playback->Stop();
+		}
+		break;
+	}
+	}
+}
+
+void UHapbeatSubsystem::CancelPendingSends()
+{
+	if (PendingSends.Num() == 0)
+	{
+		return;
+	}
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		FTimerManager& TimerManager = GameInstance->GetTimerManager();
+		for (TPair<uint32, FHapbeatPendingSend>& Pair : PendingSends)
+		{
+			TimerManager.ClearTimer(Pair.Value.Handle);
+		}
+	}
+	PendingSends.Empty();
 }
 
 void UHapbeatSubsystem::Ping()
@@ -352,6 +536,25 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 		return nullptr;
 	}
 
+	// GC-rooted via ActivePlayback for the stream's lifetime (the caller may not
+	// retain it). Created before the session so the delayed path in
+	// FirePendingSend can reuse StartStreamSession with a handle that already
+	// exists — this public entry point is otherwise unchanged.
+	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(this);
+	Playback->Init(BaselineGain, InitialGain);
+
+	return StartStreamSession(Clip, Playback, Target, bLoop) ? Playback : nullptr;
+}
+
+bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPlayback* Playback,
+	const FString& Target, bool bLoop)
+{
+	if (Clip == nullptr || Clip->Pcm16.Num() == 0 || Playback == nullptr)
+	{
+		UE_LOG(LogHapbeat, Warning, TEXT("StartStreamSession: clip is null or has no PCM data; ignoring."));
+		return false;
+	}
+
 	// Single active session, REPLACE semantics: end any current stream first
 	// (joins the old thread before starting a new one).
 	if (StreamRunnable != nullptr)
@@ -368,19 +571,18 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 	{
 		if (bShuttingDown)
 		{
-			return nullptr;
+			return false;
 		}
 		Connect(Port, AppName);
 		if (Socket == nullptr)
 		{
 			UE_LOG(LogHapbeat, Warning, TEXT("StreamClip: no socket available; ignoring."));
-			return nullptr;
+			return false;
 		}
 	}
 
-	// GC-rooted via the UPROPERTY for the stream's lifetime (the caller may not retain it).
-	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(this);
-	Playback->Init(BaselineGain, InitialGain);
+	// The UPROPERTY keeps the handle rooted for the stream's lifetime (the caller
+	// may not retain it).
 	ActivePlayback = Playback;
 
 	// Resolve the global address override (if any) BEFORE the streamer captures
@@ -436,7 +638,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 		delete StreamRunnable;
 		StreamRunnable = nullptr;
 		ActivePlayback = nullptr;
-		return nullptr;
+		return false;
 	}
 
 	// Watchdog: poll for the thread finishing on its own (natural EOF on a
@@ -447,11 +649,11 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 			FTickerDelegate::CreateUObject(this, &UHapbeatSubsystem::TickStream), 0.0f);
 	}
 
-	UE_LOG(LogHapbeat, Log, TEXT("Stream begin: %dHz %dch, baseline=%.3f initial=%.3f, target=%s, loop=%d"),
-		Clip->SampleRate, Clip->NumChannels, BaselineGain, InitialGain,
+	UE_LOG(LogHapbeat, Log, TEXT("Stream begin: %dHz %dch, baseline=%.3f gain=%.3f, target=%s, loop=%d"),
+		Clip->SampleRate, Clip->NumChannels, Playback->BaselineGain, Playback->GetGain(),
 		Target.IsEmpty() ? TEXT("broadcast") : *Target, bLoop ? 1 : 0);
 
-	return ActivePlayback;
+	return true;
 }
 
 bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)

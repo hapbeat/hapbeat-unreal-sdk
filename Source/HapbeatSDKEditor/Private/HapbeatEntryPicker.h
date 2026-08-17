@@ -11,8 +11,8 @@ class UHapbeatEventMap;
  *
  * Three places in this module now present the same dropdown -- the trigger
  * component's Details panel (FHapbeatTriggerComponentCustomization), the
- * FHapbeatEventRef graph pin (SHapbeatEventRefGraphPin) and the same struct's
- * Details row (FHapbeatEventRefCustomization). They differ only in how they
+ * FHapbeatEntryRef graph pin (SHapbeatEntryRefGraphPin) and the same struct's
+ * Details row (FHapbeatEntryRefCustomization). They differ only in how they
  * reach the value; the option list and, above all, the LABEL rule must stay
  * identical, or the same entry would read differently depending on where the
  * author is looking at it. So both live here once.

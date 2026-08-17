@@ -19,7 +19,7 @@ public class HapbeatSDKEditor : ModuleRules
 			"AssetTools",    // IAssetTools::RegisterAdvancedAssetCategory (Content Browser "Hapbeat" category)
 			"AssetDefinition", // UAssetDefinition (asset display name / color for the two authored assets)
 			"PropertyEditor",// IDetailCustomization, FPropertyEditorModule
-			"GraphEditor",   // SGraphPin (the FHapbeatEventRef by-name entry pin)
+			"GraphEditor",   // SGraphPin (the FHapbeatEntryRef by-name entry pin)
 			"BlueprintGraph",// UEdGraphSchema_K2::PC_Struct (pin-type match in the pin factory)
 			"Slate",         // SButton / SComboBox / SHorizontalBox
 			"SlateCore",     // STextBlock, FAppStyle (Runtime/SlateCore)

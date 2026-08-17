@@ -321,62 +321,6 @@ void UHapbeatSubsystem::StopEntry(UHapbeatEventMap* Map, FGuid EntryId)
 	Stop(Entry.GetEventId(), Entry.Target);
 }
 
-namespace
-{
-	/**
-	 * Resolve the map half of a FHapbeatEventRef, logging what is missing.
-	 * Shared by PlayEventRef / StopEventRef so both report the same two failure
-	 * modes: no map picked at all, and a map picked but no entry chosen inside
-	 * it (which is what an author sees when they drop the node and never touch
-	 * the dropdown). A map that fails to LOAD is reported distinctly, since
-	 * that means the asset was deleted rather than never assigned.
-	 */
-	UHapbeatEventMap* ResolveEventRef(const FHapbeatEventRef& Event, const TCHAR* Caller)
-	{
-		if (Event.EventMap.IsNull())
-		{
-			UE_LOG(LogHapbeat, Warning, TEXT("%s: no Event Map set on the event reference."), Caller);
-			return nullptr;
-		}
-		UHapbeatEventMap* Map = Event.EventMap.LoadSynchronous();
-		if (Map == nullptr)
-		{
-			UE_LOG(LogHapbeat, Warning, TEXT("%s: Event Map '%s' could not be loaded (asset deleted or renamed?)."),
-				Caller, *Event.EventMap.ToString());
-			return nullptr;
-		}
-		if (!Event.EntryId.IsValid())
-		{
-			UE_LOG(LogHapbeat, Warning, TEXT("%s: no entry chosen on the event reference for '%s'."),
-				Caller, *Map->GetName());
-			return nullptr;
-		}
-		return Map;
-	}
-}
-
-UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEventRef(const FHapbeatEventRef& Event, float GainMultiplier)
-{
-	UHapbeatEventMap* Map = ResolveEventRef(Event, TEXT("PlayEventRef"));
-	if (Map == nullptr)
-	{
-		return nullptr;
-	}
-	// Delegate rather than re-implement: PlayEntry owns the whole Command /
-	// Stream Clip decision, so the entry points cannot drift apart.
-	return PlayEntry(Map, Event.EntryId, GainMultiplier);
-}
-
-void UHapbeatSubsystem::StopEventRef(const FHapbeatEventRef& Event)
-{
-	UHapbeatEventMap* Map = ResolveEventRef(Event, TEXT("StopEventRef"));
-	if (Map == nullptr)
-	{
-		return;
-	}
-	StopEntry(Map, Event.EntryId);
-}
-
 void UHapbeatSubsystem::Ping()
 {
 	const uint16 PingSeq = NextSeq();

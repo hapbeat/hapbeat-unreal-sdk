@@ -76,7 +76,7 @@ private:
 
 	static UHapbeatEventMap* ResolveEventMap(const TSharedPtr<IPropertyHandle>& EventMapHandle);
 	// Option list, entry label and the FGuid handle read/write live in
-	// HapbeatEntryPicker.h -- the FHapbeatEventRef graph pin and its Details row
+	// HapbeatEntryPicker.h -- the FHapbeatEntryRef graph pin and its Details row
 	// present the same dropdown and must label entries identically.
 
 	TSharedRef<SWidget> OnGenerateOptionWidget(TSharedPtr<FGuid> InId, TWeakPtr<FEntryPickerState> WeakState) const;

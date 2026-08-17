@@ -5,7 +5,6 @@
 #include "Containers/Ticker.h"
 #include "Common/UdpSocketReceiver.h"         // FUdpSocketReceiver + FArrayReaderPtr typedef
 #include "HAL/CriticalSection.h"              // FCriticalSection (SeqLock — shared with the stream thread)
-#include "HapbeatEventRef.h"                  // FHapbeatEventRef (USTRUCT parameter — needs the full type for UHT)
 #include "HapbeatNetInterfaces.h"             // FHapbeatBroadcastRoute (held by value in a TArray below)
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
 #include "Subsystems/GameInstanceSubsystem.h"
@@ -33,10 +32,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FHapbeatOnPong, const FString&, En
  * C++ and Blueprint. Sends Layer 1 commands over Wi-Fi UDP broadcast and
  * receives PONG / ERROR replies on the same bound socket.
  *
- * Blueprint:  Get Hapbeat Subsystem -> Play Hapbeat Event (PlayEventRef).
- * C++:        GetGameInstance()->GetSubsystem<UHapbeatSubsystem>()->PlayEventRef(...);
- * Play(event id, gain) stays available for the rare call site that deliberately
- * bypasses the Event Map.
+ * Firing an authored haptic goes through the "Play Hapbeat Event" node
+ * (UHapbeatBlueprintLibrary), which lands on PlayEntry below; C++ may call
+ * either. Play(event id, gain) stays available for the rare call site that
+ * deliberately bypasses the Event Map.
  *
  * The fire side stays orthogonal to event tuning (default gains live in the kit
  * on the device / a future EventMap asset), matching the Hapbeat Unity SDK.
@@ -88,13 +87,13 @@ public:
 	void StopAll(const FString& Target = TEXT(""));
 
 	/**
-	 * Play an entry of an Event Map -- the C++ entry point of the single
-	 * playback path. Blueprint does not see this: a graph picks the entry on a
-	 * FHapbeatEventRef pin and calls PlayEventRef ("Play Hapbeat Event"), which
-	 * resolves the reference and lands here. Everything else that fires an
-	 * authored haptic (the trigger components, the AnimNotify, the editor's
-	 * Test Play) funnels through here too, so there is exactly one place where
-	 * Command vs Stream Clip is decided.
+	 * Play an entry of an Event Map -- the single playback path. Blueprint does
+	 * not see this directly: a graph calls "Play Hapbeat Event"
+	 * (UHapbeatBlueprintLibrary::PlayHapbeatEvent), which validates its Map /
+	 * Entry pins and lands here. Everything else that fires an authored haptic
+	 * (the trigger components, the AnimNotify, the editor's Test Play) funnels
+	 * through here too, so there is exactly one place where Command vs Stream
+	 * Clip is decided.
 	 *
 	 * Everything the entry defines (Command vs Stream Clip, the clip, gain,
 	 * target, loop) comes from the asset, so the caller only says WHICH entry
@@ -113,31 +112,8 @@ public:
 	 */
 	UHapbeatStreamPlayback* PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier = 1.0f);
 
-	/** Stop an entry started by PlayEntry: STOP for Command, ends the stream for Stream Clip. C++ only, like PlayEntry. */
+	/** Stop an entry started by PlayEntry: STOP for Command, ends the stream for Stream Clip. */
 	void StopEntry(UHapbeatEventMap* Map, FGuid EntryId);
-
-	/**
-	 * Play the entry a FHapbeatEventRef points at -- the way to fire an
-	 * authored haptic from a Blueprint GRAPH, where the entry is chosen from a
-	 * by-name dropdown on the pin itself. This is the Blueprint-facing entry
-	 * point of the playback path.
-	 *
-	 * Resolves the reference and delegates to PlayEntry, so everything authored
-	 * on the entry (Command vs Stream Clip, clip, gain x manifest intensity,
-	 * target, loop) applies exactly as it does there. The reference stores the
-	 * entry's GUID, so it can never resolve to the wrong one of two entries that
-	 * share an event id.
-	 *
-	 * @param GainMultiplier Scales the entry's authored gain for this call only.
-	 * @return The stream handle for a Stream Clip entry; null for Command, or
-	 *         when the reference does not resolve.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (AdvancedDisplay = "1", DisplayName = "Play Hapbeat Event"))
-	UHapbeatStreamPlayback* PlayEventRef(const FHapbeatEventRef& Event, float GainMultiplier = 1.0f);
-
-	/** Stop an entry started by PlayEventRef: STOP for Command, ends the stream for Stream Clip. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop Hapbeat Event"))
-	void StopEventRef(const FHapbeatEventRef& Event);
 
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void Ping();

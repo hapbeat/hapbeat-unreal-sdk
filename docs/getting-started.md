@@ -325,8 +325,9 @@ Details パネル上部には専用の操作列も出ます:
 **すべてエントリ側の設定**が使われます。
 
 **再生の経路は 1 本です。** どのエントリを鳴らすかは `Play Hapbeat Event`
-（＝エントリへの参照を渡す）で指定し、Blueprint はノード、C++ は `PlayEventRef` を
-呼びます。衝突や掴む→離すを扱うパターン部品（4-3）も、内部でこの同じ経路を通ります。
+（EventMap と、その中のエントリの 2 つを渡す）で指定します。Blueprint は同名のノード、
+C++ は `UHapbeatBlueprintLibrary::PlayHapbeatEvent` を呼び、どちらも内部の
+`PlayEntry` に合流します。衝突や掴む→離すを扱うパターン部品（4-3）も同じ経路です。
 
 **エントリの指定に GUID を手入力する場面はありません。** 保存されるのは安定 GUID ですが、
 Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプルダウン**として編集します。
@@ -373,22 +374,16 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
    > `G` を含む無関係なノードが大量に並びます。絞るなら **`キーボード`**
    >（英語版は `Keyboard`）と入力してから一覧の `G` を探してください。
 
-5. **`Get Hapbeat Subsystem` を置く**
-   グラフで右クリック → 検索欄に **`Hapbeat Subsystem`** と入力 → 出てきた
-   **Get Hapbeat Subsystem** を配置
+5. **`Play Hapbeat Event` を置く**
+   グラフの何も無いところで右クリック → 検索欄に **`Play Hapbeat Event`** と
+   入力して配置する（**状況に合わせた表示のまま**で見つかります）
 
-   > **いきなり `Play Hapbeat Event` で検索しても出ません。**
-   > サブシステムの関数は、**対象（Target）が決まっていない状態では候補に出ない**
-   > ためです。先にこの取得ノードを置いてください。
-
-6. **`Play Hapbeat Event` を繋ぎ、鳴らすエントリを選ぶ**
-   `Get Hapbeat Subsystem` の**出力ピンからドラッグ**して離し、検索欄に
-   **`Play Hapbeat Event`** と入力して選ぶ。
-   ノードの `Event` ピンに 2 つの入力が出ます:
-   - **左**: EventMap のアセットピッカー → **`EM_BasicExample`**
+6. **鳴らすエントリを選ぶ**
+   置いたノードに 2 つの入力ピンが出ます:
+   - **`Map`**: EventMap のアセットピッカー → **`EM_BasicExample`**
      （プラグイン同梱。候補に出ない場合はコンテンツブラウザ右上の
      **設定 → Show Plugin Content** が off です）
-   - **右**: そのマップのエントリが並ぶ**ドロップダウン** →
+   - **`Entry`**: そのマップのエントリが並ぶ**ドロップダウン** →
      **`demo_stream_sine_100hz`**
      （CLIP モードなので、**デバイスへの Kit 書き込みは不要**）
 
@@ -424,14 +419,19 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
 > 変更は**次に発火した時点で反映されます**。発火のたびに EventMap を
 > 引き直すので、PIE を再起動する必要はありません。
 
-停止は **`Stop Hapbeat Event`** に同じ `Event` を渡します。
+停止は **`Stop Hapbeat Event`** に同じ `Map` と `Entry` を渡します。
 
 > **保存されるのはエントリの GUID です。** 名前を変えても並べ替えても壊れません。
 > `EM_BasicExample` のように**同じイベント ID が 2 つある**場合（one-shot と loop）も、
 > ドロップダウンで選んだ方が一意に指されます。
 >
-> 同じエントリを何度も使うなら、`Event` ピンを右クリック → **変数に昇格** すれば、
-> 以降は変数の get を繋ぐだけになります（変数の Details にも同じ 2 段が出ます）。
+> 同じ EventMap を何度も使うなら、`Map` ピンを右クリック → **変数に昇格** すると
+> 以降は変数の get を繋ぐだけになります。**`Entry` は昇格させずノード上で選んでください** —
+> エントリだけを BP 変数にすると、詳細パネルに名前のプルダウンが出ません
+>（エントリ名で選べるのは、**隣にある EventMap** が分かる場所だけです。C++ の
+> プロパティなら後述の meta で隣を指せますが、BP 変数にはその手段がありません）。
+> `Map` + `Entry` をひとまとめに使い回したい場合は、両方を引数に取る
+> **BP 関数**にまとめるのが確実です。
 
 > 連打で詰まるようなら、クールダウンを持つパターン部品（[4-3](#4-3-パターン部品)）を
 > 使うか、Blueprint 側で発火間隔を制御してください。
@@ -439,7 +439,7 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
 ### 4-2. C++ から鳴らす
 
 4-1 と同じこと（`EM_BasicExample` のエントリをキーで鳴らす）を C++ で書きます。
-違いは Blueprint ノードの代わりに **`PlayEventRef` を呼ぶ**ことだけで、
+違いは Blueprint ノードの代わりに **`UHapbeatBlueprintLibrary::PlayHapbeatEvent` を呼ぶ**ことだけで、
 **どのエントリを鳴らすかは 4-1 と同じく詳細パネルのプルダウンで選びます**。
 キーは 4-1 の BP と重ならないよう **H** にします。
 
@@ -462,8 +462,10 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
 
    #include "CoreMinimal.h"
    #include "GameFramework/Actor.h"
-   #include "HapbeatEventRef.h"   // FHapbeatEventRef is held by value: needs the full type
+   #include "HapbeatEntryRef.h"   // FHapbeatEntryRef is held by value: needs the full type
    #include "HapbeatCppTest.generated.h"
+
+   class UHapbeatEventMap;
 
    UCLASS()
    class あなたのプロジェクト名_API AHapbeatCppTest : public AActor
@@ -471,9 +473,16 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
        GENERATED_BODY()
 
    public:
-       /** Pick EM_BasicExample and the entry in the Details panel. */
+       /** Pick EM_BasicExample in the Details panel. */
        UPROPERTY(EditAnywhere, Category = "Hapbeat")
-       FHapbeatEventRef Event;
+       TObjectPtr<UHapbeatEventMap> EventMap;
+
+       /**
+        * The meta link makes the Details row for Entry a dropdown of THIS
+        * EventMap's entry names.
+        */
+       UPROPERTY(EditAnywhere, Category = "Hapbeat", meta = (HapbeatEventMap = "EventMap"))
+       FHapbeatEntryRef Entry;
 
    protected:
        virtual void BeginPlay() override;
@@ -483,12 +492,20 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
    };
    ```
 
-   > **`#include "HapbeatEventRef.h"` は `.generated.h` より前に置いてください。**
-   > `FHapbeatEventRef` は構造体を**値で**持つため、前方宣言では足りず実体が要ります。
-   > include が無い / 順番が後ろだと、`FHapbeatEventRef` が未定義というエラーを
-   > 先頭に十数行のエラーが出ます（`.cpp` 側の `Event` を触る行まで芋づる式に
+   > **`#include "HapbeatEntryRef.h"` は `.generated.h` より前に置いてください。**
+   > `FHapbeatEntryRef` は構造体を**値で**持つため、前方宣言では足りず実体が要ります。
+   > include が無い / 順番が後ろだと、`FHapbeatEntryRef` が未定義というエラーを
+   > 先頭に十数行のエラーが出ます（`.cpp` 側の `Entry` を触る行まで芋づる式に
    > 落ちるため、原因が分かりにくくなります）。
    > `.generated.h` は**常に最後**の include です。
+   >
+   > `UHapbeatEventMap` はポインタで持つだけなので、**前方宣言で足ります**
+   >（実体が要るのは `.cpp` 側だけです）。
+
+   > **`Entry` は `EventMap` と必ずセットで書きます。** どのマップのエントリかは
+   > 常に「隣」が示す設計で、`meta = (HapbeatEventMap = "EventMap")` がその
+   > 「隣」を名前で指しています。この meta が無いと、詳細パネルは名前の
+   > プルダウンではなく生の GUID 欄になります（値は編集できます）。
 
    > `あなたのプロジェクト名_API` は、生成されたヘッダに元から入っているマクロを
    > そのまま使ってください（例: プロジェクトが `MyGame` なら `MYGAME_API`）。
@@ -498,9 +515,9 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
    ```cpp
    #include "HapbeatCppTest.h"   // own header must be included first
 
-   #include "HapbeatSubsystem.h"
+   #include "HapbeatBlueprintLibrary.h"
+   #include "HapbeatEventMap.h"   // TObjectPtr passed as an argument: needs the full type
    #include "Components/InputComponent.h"
-   #include "Engine/GameInstance.h"
    #include "Engine/World.h"
    #include "GameFramework/PlayerController.h"
    #include "InputCoreTypes.h"   // EKeys::H
@@ -527,24 +544,19 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
 
    void AHapbeatCppTest::HandleKey()
    {
-       UGameInstance* GameInstance = GetGameInstance();
-       UHapbeatSubsystem* Hb =
-           GameInstance != nullptr ? GameInstance->GetSubsystem<UHapbeatSubsystem>() : nullptr;
-       if (Hb == nullptr)
-       {
-           return;
-       }
-
        // Everything else (Command vs Stream Clip, clip, gain, target, loop)
        // comes from the entry the Details panel points at.
-       Hb->PlayEventRef(Event);
+       UHapbeatBlueprintLibrary::PlayHapbeatEvent(this, EventMap, Entry);
    }
    ```
 
    > **エントリの選択はエディタ（詳細パネル）側の仕事**なので、コードには
-   > `PlayEventRef` の 1 行しか出てきません。EventMap 未設定・エントリ未選択の
-   > ときは `PlayEventRef` が Output Log に警告を出すので、呼び出し側での
+   > `PlayHapbeatEvent` の 1 行しか出てきません。EventMap 未設定・エントリ未選択の
+   > ときは `PlayHapbeatEvent` が Output Log に警告を出すので、呼び出し側での
    > null チェックは省いています。
+   >
+   > 第 1 引数の `this` は**ワールドを引くための文脈**です（Blueprint ノードでは
+   > 自動で埋まる、隠しピンにあたります）。
 
    > **include の順番に注意。** UE は `.cpp` が自分のヘッダを最初に include して
    > いることを要求します。上に他のものを足すと
@@ -561,15 +573,15 @@ Blueprint のピンでも C++ の詳細パネルでも**エントリ名のプル
    エディタを閉じてリビルドし、開き直してください
 
 5. **レベルに配置して鳴らすエントリを指定する**
-   `HapbeatCppTest` をレベルにドラッグ&ドロップし、詳細パネルの `Event` に
-   4-1 と同じ 2 段が出るので、**`EM_BasicExample`** →
-   **`demo_stream_sine_100hz`** を選ぶ
+   `HapbeatCppTest` をレベルにドラッグ&ドロップし、詳細パネルで
+   `Event Map` に **`EM_BasicExample`**、`Entry` に
+   **`demo_stream_sine_100hz`** を選ぶ（4-1 のノードと同じ 2 段です）
 
 6. ▶ Play して **H** を押す → 100Hz が 1 回鳴る
 
-停止は `Hb->StopEventRef(Event)` です。
+停止は `UHapbeatBlueprintLibrary::StopHapbeatEvent(this, EventMap, Entry)` です。
 
-> `PlayEventRef` の第 2 引数 `GainMultiplier` で、**その呼び出しだけ**強さを変えられます
+> `PlayHapbeatEvent` の第 4 引数 `GainMultiplier` で、**その呼び出しだけ**強さを変えられます
 >（エントリの設定は変わりません）。
 >
 > **`Play(TEXT("kit.clip"), Gain)` という直接送信の API もありますが、通常は使いません。**

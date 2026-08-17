@@ -21,8 +21,8 @@ public:
 	virtual void ShutdownModule() override;
 
 private:
-	/** The FHapbeatEventRef graph pin factory. Held because FEdGraphUtilities::UnregisterVisualPinFactory needs the same shared pointer that was registered. */
-	TSharedPtr<class FHapbeatEventRefPinFactory> EventRefPinFactory;
+	/** The FHapbeatEntryRef graph pin factory. Held because FEdGraphUtilities::UnregisterVisualPinFactory needs the same shared pointer that was registered. */
+	TSharedPtr<class FHapbeatEntryRefPinFactory> EntryRefPinFactory;
 
 	/** FEditorDelegates::EndPIE handle, so the editor Test Play socket is closed when a PIE session ends (belt-and-braces; see FHapbeatEditorSender's class doc for why this can't actually collide with the runtime socket). */
 	FDelegateHandle EndPieHandle;

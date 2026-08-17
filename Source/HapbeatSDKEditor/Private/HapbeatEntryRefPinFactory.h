@@ -5,19 +5,19 @@
 #include "EdGraphUtilities.h"
 #include "EdGraph/EdGraphPin.h"
 #include "EdGraphSchema_K2.h"
-#include "HapbeatEventRef.h"
-#include "SHapbeatEventRefGraphPin.h"
+#include "HapbeatEntryRef.h"
+#include "SHapbeatEntryRefGraphPin.h"
 
 /**
- * Substitutes SHapbeatEventRefGraphPin for the default struct pin widget on
- * every FHapbeatEventRef pin in any Blueprint graph.
+ * Substitutes SHapbeatEntryRefGraphPin for the default struct pin widget on
+ * every FHapbeatEntryRef pin in any Blueprint graph.
  *
  * Registered globally (FEdGraphUtilities::RegisterVisualPinFactory) by
  * FHapbeatSDKEditorModule, which also keeps the instance alive -- unregistering
  * needs the same shared pointer. Structurally identical to the engine's
  * FGameplayTagsGraphPanelPinFactory.
  */
-class FHapbeatEventRefPinFactory : public FGraphPanelPinFactory
+class FHapbeatEntryRefPinFactory : public FGraphPanelPinFactory
 {
 	virtual TSharedPtr<SGraphPin> CreatePin(UEdGraphPin* InPin) const override
 	{
@@ -26,12 +26,12 @@ class FHapbeatEventRefPinFactory : public FGraphPanelPinFactory
 			return nullptr;
 		}
 		// IsChildOf rather than == so a future struct deriving from
-		// FHapbeatEventRef inherits the picker instead of silently falling back
+		// FHapbeatEntryRef inherits the picker instead of silently falling back
 		// to the raw struct pin.
 		const UScriptStruct* PinStruct = Cast<UScriptStruct>(InPin->PinType.PinSubCategoryObject.Get());
-		if (PinStruct != nullptr && PinStruct->IsChildOf(FHapbeatEventRef::StaticStruct()))
+		if (PinStruct != nullptr && PinStruct->IsChildOf(FHapbeatEntryRef::StaticStruct()))
 		{
-			return SNew(SHapbeatEventRefGraphPin, InPin);
+			return SNew(SHapbeatEntryRefGraphPin, InPin);
 		}
 		return nullptr;
 	}

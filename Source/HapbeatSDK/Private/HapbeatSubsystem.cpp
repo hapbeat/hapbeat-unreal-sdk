@@ -273,7 +273,8 @@ void UHapbeatSubsystem::StopAll(const FString& Target)
 	SendCommandPacket(FHapbeatProtocol::BuildStopAll(NextSeq(), ResolvedTarget), ResolvedTarget);
 }
 
-UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier)
+UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier,
+	bool bForceNonLoop)
 {
 	FHapbeatEventEntry Entry;
 	if (Map == nullptr || !Map->FindById(EntryId, Entry))
@@ -284,10 +285,12 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		return nullptr;
 	}
 
-	// Authored gain x this call's multiplier. GetEffectiveGain() already folds in
-	// the manifest intensity, because the device plays req.gain verbatim and
-	// never reads the manifest itself.
-	const float Gain = Entry.GetEffectiveGain() * GainMultiplier;
+	// Author intent. GetEffectiveGain() already folds in the manifest intensity,
+	// because the device plays req.gain verbatim and never reads the manifest
+	// itself. For a Stream Clip this is the BASELINE and GainMultiplier stays
+	// separate as the initial modulator (see the header); for a Command there is
+	// nothing to modulate later, so the two are multiplied for the wire value.
+	const float Baseline = Entry.GetEffectiveGain();
 
 	// Audio-latency compensation. Validation stays here, at call time; only the
 	// send itself moves. Zero (the default) takes the untouched synchronous path
@@ -304,9 +307,12 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 				TEXT("PlayEntry: entry '%s' is Stream Clip mode but has no clip assigned."), *Entry.GetEventId());
 			return nullptr;
 		}
+		// One-shot phases (sequence start / stop shots) must not leave a loop
+		// running, whatever the entry says.
+		const bool bLoop = bForceNonLoop ? false : Entry.bLoop;
 		if (!bDeferred)
 		{
-			return StreamClip(Clip, Gain, 1.0f, Entry.Target, Entry.bLoop);
+			return StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop);
 		}
 
 		// Deferred stream: the handle must exist NOW (the caller wires bindings /
@@ -315,19 +321,19 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		// part of that later step: killing it at call time would cut the previous
 		// haptic short by exactly the delay.
 		UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(this);
-		Playback->Init(Gain, 1.0f);
+		Playback->Init(Baseline, GainMultiplier);
 
 		FHapbeatPendingSend Pending;
 		Pending.Kind = EHapbeatPendingKind::StartStream;
 		Pending.Clip = Clip;
 		Pending.Playback = Playback;
 		Pending.Target = Entry.Target;
-		Pending.bLoop = Entry.bLoop;
+		Pending.bLoop = bLoop;
 		if (!SchedulePendingSend(MoveTemp(Pending), Delay))
 		{
 			// Could not schedule — fall back to firing now rather than handing
 			// back a handle whose stream would never start.
-			return StreamClip(Clip, Gain, 1.0f, Entry.Target, Entry.bLoop);
+			return StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop);
 		}
 		return Playback;
 	}
@@ -338,6 +344,8 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		UE_LOG(LogHapbeat, Warning, TEXT("PlayEntry: Command entry has an empty event id (set Event Name)."));
 		return nullptr;
 	}
+
+	const float Gain = Baseline * GainMultiplier;
 
 	if (bDeferred)
 	{

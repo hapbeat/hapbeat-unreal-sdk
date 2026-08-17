@@ -126,14 +126,18 @@ void UHapbeatTriggerComponent::DispatchEntry(UHapbeatSubsystem* Subsystem, const
 			bWarnedMissingIntensity = true;
 		}
 
-		const float WireGain = Entry.GetEffectiveGain() * GainMultiplier * Multiplier;
 		if (bVerboseLog)
 		{
 			UE_LOG(LogHapbeat, Log, TEXT("Fire Command: eventId='%s' target='%s' gain=%.2f x triggerMult=%.2f x callMult=%.2f = %.2f"),
 				*EventId, Target.IsEmpty() ? TEXT("(broadcast)") : *Target,
-				Entry.GetEffectiveGain(), GainMultiplier, Multiplier, WireGain);
+				Entry.GetEffectiveGain(), GainMultiplier, Multiplier,
+				Entry.GetEffectiveGain() * GainMultiplier * Multiplier);
 		}
-		Subsystem->Play(EventId, WireGain, Target);
+		// Through PlayEntry, not Play(): it is the single place where an entry
+		// turns into a send, so the haptic delay (and anything added there later)
+		// applies to trigger components too. It composes the same wire gain
+		// (effGain x multiplier) from the entry itself.
+		Subsystem->PlayEntry(EventMap, Entry.Id, GainMultiplier * Multiplier);
 		break;
 	}
 
@@ -163,20 +167,18 @@ void UHapbeatTriggerComponent::DispatchEntry(UHapbeatSubsystem* Subsystem, const
 		// baseline = author intent (entry.gain x manifest.intensity), frozen at
 		// stream start. The per-trigger multiplier x call multiplier is the
 		// INITIAL MODULATOR (not baked into baseline) so a ParameterBinding can
-		// modulate further: playback.Gain = baseline x modulator. The subsystem's
-		// StreamClip takes (baseline, initialModulator) and computes the initial
-		// Gain = baseline x initialModulator internally (Init()). One-shots force
-		// non-loop (Unity DispatchOneShot passes loop:false).
+		// modulate further: playback.Gain = baseline x modulator. PlayEntry keeps
+		// exactly that split and computes the initial Gain internally (Init()).
+		// One-shots force non-loop (Unity DispatchOneShot passes loop:false).
 		const bool bLoop = bForceNonLoop ? false : Entry.bLoop;
-		const float Baseline = Entry.GetEffectiveGain();
 		const float InitialMod = GainMultiplier * Multiplier;
 		if (bVerboseLog)
 		{
 			UE_LOG(LogHapbeat, Log, TEXT("Fire StreamClip: clip='%s' target='%s' baseline=%.2f initialMod=%.2f loop=%d store=%d"),
 				*GetNameSafe(Clip), Target.IsEmpty() ? TEXT("(broadcast)") : *Target,
-				Baseline, InitialMod, bLoop ? 1 : 0, bStorePlayback ? 1 : 0);
+				Entry.GetEffectiveGain(), InitialMod, bLoop ? 1 : 0, bStorePlayback ? 1 : 0);
 		}
-		UHapbeatStreamPlayback* Handle = Subsystem->StreamClip(Clip, Baseline, InitialMod, Target, bLoop);
+		UHapbeatStreamPlayback* Handle = Subsystem->PlayEntry(EventMap, Entry.Id, InitialMod, bForceNonLoop);
 		if (bStorePlayback)
 		{
 			StoredPlayback = Handle;
@@ -270,8 +272,11 @@ void UHapbeatTriggerComponent::Stop()
 		{
 			return;
 		}
-		// Stop with the same target the Play used.
-		Subsystem->Stop(EventId, Entry.Target);
+		// Through StopEntry (the Play counterpart's merge point) so this stop is
+		// held back by the SAME haptic delay the fire was — otherwise a delayed
+		// Play followed by an immediate Stop would shorten, or even overtake,
+		// the event on the device. It reads the target off the entry itself.
+		Subsystem->StopEntry(EventMap, Entry.Id);
 		break;
 	}
 

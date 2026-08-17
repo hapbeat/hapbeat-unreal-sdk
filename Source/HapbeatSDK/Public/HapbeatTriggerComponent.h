@@ -25,17 +25,19 @@ class UCurveFloat;
  * Get the subsystem internally via:
  *   GetWorld()->GetGameInstance()->GetSubsystem<UHapbeatSubsystem>()
  *
- * Gain composition (matches Hapbeat.HapbeatTriggerBase verbatim):
- *   Command    -> wireGain = entry.GetEffectiveGain() x GainMultiplier x Multiplier;
- *                 Subsystem->Play(eventId, wireGain, target).
- *   StreamClip -> baseline   = entry.GetEffectiveGain();
- *                 initialMod = GainMultiplier x Multiplier;
- *                 Subsystem->StreamClip(clip, baseline, initialMod, target, entry.bLoop).
+ * Gain composition (matches Hapbeat.HapbeatTriggerBase verbatim): this component
+ * only composes GainMultiplier x Multiplier and hands it to
+ * UHapbeatSubsystem::PlayEntry / StopEntry — the one place an entry turns into a
+ * send. PlayEntry folds it in as:
+ *   Command    -> wireGain = entry.GetEffectiveGain() x (GainMultiplier x Multiplier)
+ *   StreamClip -> baseline = entry.GetEffectiveGain(), initial modulator =
+ *                 GainMultiplier x Multiplier
  * The StreamClip multiplier is the INITIAL MODULATOR (not baked into baseline) so
  * a ParameterBinding can modulate further: playback.Gain = baseline x modulator.
  *
- * Latency compensation (Unity's hapticDelaySeconds / DelayOffsetSeconds deferral)
- * is DROPPED for v1 — every fire goes out immediately. Revisit in L2.
+ * Latency compensation (UHapbeatConfig::HapticDelaySeconds + the entry's
+ * DelayOffsetSeconds) therefore applies to these triggers exactly as it does to
+ * the "Play Hapbeat Event" node — it lives inside PlayEntry / StopEntry.
  *
  * NOT spawnable from Add Component on purpose (no BlueprintSpawnableComponent):
  * firing an entry from a graph is the "Play Hapbeat Event" node's job, and a
@@ -135,7 +137,8 @@ public:
 	void FireWithCurve(float Value, UCurveFloat* Curve);
 
 	/**
-	 * Stop the referenced event. Command -> Subsystem->Stop(eventId, target).
+	 * Stop the referenced event. Command -> Subsystem->StopEntry (same merge
+	 * point as the fire, so the same haptic delay applies).
 	 * StreamClip -> stop the active playback this trigger started (per-source,
 	 * never the whole stream session).
 	 */
@@ -176,10 +179,11 @@ protected:
 	void FireInternal(float Multiplier);
 
 	/**
-	 * Compose gain for an already-resolved entry and dispatch it through the
-	 * subsystem. Shared core for FireInternal (loop / single-shot triggers) and the
-	 * sequence component's start/stop one-shots so the gain formula lives in one
-	 * place.
+	 * Validate an already-resolved entry, compose the per-call multiplier and hand
+	 * it to UHapbeatSubsystem::PlayEntry (never Play / StreamClip directly — one
+	 * merge point, so the haptic delay and everything added there applies here
+	 * too). Shared core for FireInternal (loop / single-shot triggers) and the
+	 * sequence component's start/stop one-shots.
 	 *
 	 * @param Subsystem      Resolved subsystem (non-null).
 	 * @param Entry          Resolved entry.

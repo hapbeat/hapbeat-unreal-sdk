@@ -143,12 +143,13 @@ public:
 	 * (UHapbeatBlueprintLibrary::PlayHapbeatEvent), which validates its Map /
 	 * Entry pins and lands here; the AnimNotify lands here too.
 	 *
-	 * NOT the only place Command vs Stream Clip is decided, despite what this
-	 * comment used to claim: UHapbeatTriggerComponent::DispatchEntry makes the
-	 * same decision itself (it composes per-component multipliers and pre-seeds
-	 * bindings around it), and the editor's Test Play has its own sender
-	 * (FHapbeatEditorSender). Anything added here — the haptic delay below, for
-	 * one — therefore does NOT automatically apply to the trigger components.
+	 * THE single runtime decision point for Command vs Stream Clip. The trigger
+	 * components (UHapbeatTriggerComponent::DispatchEntry) compose their
+	 * per-component multipliers and pre-seed bindings AROUND this call rather
+	 * than dispatching themselves, so anything added here — the haptic delay
+	 * below, for one — applies to them too. The editor's Test Play is the one
+	 * remaining separate sender (FHapbeatEditorSender), by design: it runs
+	 * without a game instance.
 	 *
 	 * Everything the entry defines (Command vs Stream Clip, the clip, gain,
 	 * target, loop) comes from the asset, so the caller only says WHICH entry
@@ -168,11 +169,26 @@ public:
 	 * deferred (see ComputeEffectiveDelaySeconds / FirePendingSend). At the
 	 * default 0 s nothing is scheduled and this behaves exactly as before.
 	 *
+	 * Gain semantics for a Stream Clip entry: the authored gain
+	 * (entry.Gain x manifest intensity) is the BASELINE, frozen at stream start,
+	 * and GainMultiplier is the INITIAL MODULATOR — not baked into the baseline.
+	 * The handle starts at baseline x multiplier, and a ParameterBinding (or
+	 * SetGainMultiplier) replaces the modulator afterwards via
+	 * ApplyGainModulation. Same split as Unity's HapbeatTriggerBase.FireHaptic.
+	 * For a Command entry there is no modulator to keep separate, so the wire
+	 * gain is simply baseline x multiplier.
+	 *
 	 * @param GainMultiplier Scales the entry's authored gain for this call only.
+	 * @param bForceNonLoop  C++ only (deliberately not exposed on the "Play
+	 *                       Hapbeat Event" node): stream a Stream Clip entry as a
+	 *                       one-shot regardless of its authored loop flag. Used by
+	 *                       the sequence component's start / stop shots, which must
+	 *                       not leave a loop running (Unity DispatchOneShot).
 	 * @return The stream handle for a Stream Clip entry (for live gain / pan
 	 *         modulation, or to stop just this playback); null for Command.
 	 */
-	UHapbeatStreamPlayback* PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier = 1.0f);
+	UHapbeatStreamPlayback* PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier = 1.0f,
+		bool bForceNonLoop = false);
 
 	/**
 	 * Stop an entry started by PlayEntry: STOP for Command, ends the stream for

@@ -279,11 +279,15 @@ void AHapbeatShowcaseZ5ChargeShotActor::HandleChargeBegin()
 		return;
 	}
 
-	const float Baseline = Entry.GetEffectiveGain();
 	// chargeT = 0 at press time -> curve(0) = 0 -> silent, race-free start
 	// (matches Unity's `initialMod = _gainCurve.Evaluate(0f)`).
 	const float InitialMod = FMath::SmoothStep(0.0f, 1.0f, 0.0f);
-	LoopPlayback = Subsystem->StreamClip(Clip, Baseline, InitialMod, Entry.Target, /*bLoop=*/true);
+	// Through PlayEntry (the single runtime play path) rather than StreamClip:
+	// baseline (entry gain x manifest intensity), target and the authored loop
+	// flag all come off the entry, and the haptic delay applies like anywhere
+	// else. InitialMod stays the initial modulator, which Tick() then replaces
+	// via the handle's ApplyGainModulation.
+	LoopPlayback = Subsystem->PlayEntry(EventMap, ChargeLoopEntryId, InitialMod);
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::HandleChargeRelease()
@@ -368,7 +372,10 @@ void AHapbeatShowcaseZ5ChargeShotActor::FireOneShotEntry(const FGuid& EntryId)
 	// This call REPLACES whatever the subsystem is currently streaming (v1
 	// single-session model) -- by the time this fires, the charge loop has
 	// already been stopped+flushed, so there is nothing to steal from.
-	Subsystem->StreamClip(Clip, Entry.GetEffectiveGain(), /*InitialGain=*/1.0f, Entry.Target, /*bLoop=*/false);
+	// bForceNonLoop states the one-shot intent at the call site: these entries
+	// are authored non-looping, and a shot must never leave a loop running even
+	// if someone flips that flag while tuning.
+	Subsystem->PlayEntry(EventMap, EntryId, /*GainMultiplier=*/1.0f, /*bForceNonLoop=*/true);
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectile(float ChargeT, bool bHeavy)

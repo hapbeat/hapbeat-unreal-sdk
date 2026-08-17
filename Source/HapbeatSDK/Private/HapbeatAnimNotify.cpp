@@ -120,8 +120,10 @@ void UHapbeatAnimNotifyState::NotifyEnd(USkeletalMeshComponent* MeshComp, UAnimS
 	else if (Subsystem != nullptr && bResolved && Entry.Mode == EHapticMode::Command)
 	{
 		// Command mode has no handle -- the device is holding the event, so the
-		// stop has to go out as its own command.
-		Subsystem->Stop(Entry.GetEventId(), Entry.Target);
+		// stop has to go out as its own command. Through StopEntry (the PlayEntry
+		// counterpart) so it carries the same haptic delay as the NotifyBegin
+		// fire and the interval between them survives the compensation.
+		Subsystem->StopEntry(EventMap, EntryId);
 	}
 
 	Super::NotifyEnd(MeshComp, Animation, EventReference);

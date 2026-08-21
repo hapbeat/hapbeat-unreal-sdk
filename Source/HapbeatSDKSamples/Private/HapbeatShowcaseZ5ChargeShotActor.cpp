@@ -89,6 +89,22 @@ void AHapbeatShowcaseZ5ChargeShotActor::EndPlay(const EEndPlayReason::Type EndPl
 		}
 	}
 	LoopPlayback.Reset();
+
+	// Tear down the target boards this zone spawned, same as Z1 does with its
+	// pins and Z3 with its shark: SpawnActor's Owner link does not cascade
+	// destruction, so without this they would outlive the zone (visible, and
+	// still hit-reactive) when the Showcase switcher destroys it to change zones.
+	// In-flight projectiles need no handling -- they carry a 4 s SetLifeSpan.
+	for (AHapbeatShowcaseZ5TargetActor* Target : { TargetLight.Get(), TargetHeavy.Get() })
+	{
+		if (IsValid(Target))
+		{
+			Target->Destroy();
+		}
+	}
+	TargetLight = nullptr;
+	TargetHeavy = nullptr;
+
 	Super::EndPlay(EndPlayReason);
 }
 

@@ -23,7 +23,7 @@ struct FHapbeatEventEntry;
 /** What a deferred (haptic-delay) send does once its timer fires. See FHapbeatPendingSend. */
 enum class EHapbeatPendingKind : uint8
 {
-	/** Command entry: Play(EventId, Gain, Target). */
+	/** Command entry: Play(EventId, Gain, Target, Pan). */
 	PlayCommand,
 	/** Command entry: Stop(EventId, Target). */
 	StopCommand,
@@ -63,6 +63,12 @@ struct HAPBEATSDK_API FHapbeatPendingSend
 	FString EventId;
 	FString Target;
 	float Gain = 1.0f;
+	/**
+	 * PlayCommand only: the pan asked for at call time, carried to the wire when
+	 * the timer fires. StartStream needs no equivalent -- its pan already sits on
+	 * the handle in Playback (the caller holds that handle during the delay).
+	 */
+	float Pan = 0.0f;
 	bool bLoop = false;
 
 	/** The timer this record is waiting on, so Deinitialize can cancel it. */
@@ -127,9 +133,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void Connect(int32 InPort = 7700, const FString& InAppName = TEXT(""));
 
-	/** Play an event id present in the device kit. Gain is 0..1. Target "" = broadcast. */
+	/**
+	 * Play an event id present in the device kit. Gain is 0..1. Target "" = broadcast.
+	 *
+	 * Pan is -1 (left) .. 0 (center) .. +1 (right), applied by the device as a
+	 * linear balance on the voice it starts (contracts DEC-055) -- so a FIRE
+	 * lands off-center without any stream involved. Devices running firmware
+	 * older than DEC-055 ignore it and play centered.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
-	void Play(const FString& EventId, float Gain = 1.0f, const FString& Target = TEXT(""));
+	void Play(const FString& EventId, float Gain = 1.0f, const FString& Target = TEXT(""), float Pan = 0.0f);
 
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void Stop(const FString& EventId, const FString& Target = TEXT(""));
@@ -184,11 +197,18 @@ public:
 	 *                       one-shot regardless of its authored loop flag. Used by
 	 *                       the sequence component's start / stop shots, which must
 	 *                       not leave a loop running (Unity DispatchOneShot).
+	 * @param Pan            Left/right balance for THIS call: -1 left, 0 center,
+	 *                       +1 right. A Command entry carries it on the wire (the
+	 *                       device expands it per voice, DEC-055); a Stream Clip
+	 *                       entry gets it written onto the returned handle, where
+	 *                       a later SetPan / binding may still override it. Not an
+	 *                       entry field: it belongs to the call site, which knows
+	 *                       where the event happened.
 	 * @return The stream handle for a Stream Clip entry (for live gain / pan
 	 *         modulation, or to stop just this playback); null for Command.
 	 */
 	UHapbeatStreamPlayback* PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier = 1.0f,
-		bool bForceNonLoop = false);
+		bool bForceNonLoop = false, float Pan = 0.0f);
 
 	/**
 	 * Stop an entry started by PlayEntry: STOP for Command, ends the stream for

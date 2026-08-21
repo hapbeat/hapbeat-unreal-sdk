@@ -43,8 +43,17 @@ public:
 
 	// ---- Builders (SDK -> device) ----
 
-	/** PLAY: event_id\0 + target\0 + target_time(i64) + gain(f32). */
-	static TArray<uint8> BuildPlay(uint16 Seq, const FString& EventId, const FString& Target, int64 TargetTimeUs, float Gain);
+	/**
+	 * PLAY: event_id\0 + target\0 + target_time(i64) + gain(f32) + pan(f32).
+	 *
+	 * pan is -1 (left) .. 0 (center) .. +1 (right) and is the LAST field. The
+	 * device treats it as optional (absent = 0.0) for older senders, but this
+	 * SDK always writes it, so a FIRE (Command) entry can be panned too -- the
+	 * device mixer expands it to per-voice linear-balance L/R gains, the same
+	 * law the SDK pre-multiplies onto stereo StreamClip PCM (contracts
+	 * message-format.md 0x01, DEC-055).
+	 */
+	static TArray<uint8> BuildPlay(uint16 Seq, const FString& EventId, const FString& Target, int64 TargetTimeUs, float Gain, float Pan);
 	/** STOP: event_id\0 + target\0. */
 	static TArray<uint8> BuildStop(uint16 Seq, const FString& EventId, const FString& Target);
 	/** STOP_ALL: target\0. */

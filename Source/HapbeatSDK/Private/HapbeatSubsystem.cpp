@@ -255,10 +255,11 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 	// which fixes the Unity double-fire (open + first-PONG both firing OnConnected).
 }
 
-void UHapbeatSubsystem::Play(const FString& EventId, float Gain, const FString& Target)
+void UHapbeatSubsystem::Play(const FString& EventId, float Gain, const FString& Target, float Pan)
 {
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
-	SendCommandPacket(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolvedTarget, 0, FMath::Clamp(Gain, 0.0f, 1.0f)), ResolvedTarget);
+	SendCommandPacket(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolvedTarget, 0,
+		FMath::Clamp(Gain, 0.0f, 1.0f), FMath::Clamp(Pan, -1.0f, 1.0f)), ResolvedTarget);
 }
 
 void UHapbeatSubsystem::Stop(const FString& EventId, const FString& Target)
@@ -274,7 +275,7 @@ void UHapbeatSubsystem::StopAll(const FString& Target)
 }
 
 UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier,
-	bool bForceNonLoop)
+	bool bForceNonLoop, float Pan)
 {
 	FHapbeatEventEntry Entry;
 	if (Map == nullptr || !Map->FindById(EntryId, Entry))
@@ -310,9 +311,19 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		// One-shot phases (sequence start / stop shots) must not leave a loop
 		// running, whatever the entry says.
 		const bool bLoop = bForceNonLoop ? false : Entry.bLoop;
+		// Pan reaches a Stream Clip through the HANDLE, not the wire: the SDK
+		// pre-multiplies the balance onto the stereo PCM it sends. Init() has
+		// just reset Pan to 0 (center), so only a non-default value is worth
+		// writing -- and writing it right after the handle is created lands it
+		// on the atomic mirror before the send thread reads its first chunk.
 		if (!bDeferred)
 		{
-			return StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop);
+			UHapbeatStreamPlayback* Playback = StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop);
+			if (Playback != nullptr && Pan != 0.0f)
+			{
+				Playback->SetPan(Pan);
+			}
+			return Playback;
 		}
 
 		// Deferred stream: the handle must exist NOW (the caller wires bindings /
@@ -322,6 +333,12 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		// haptic short by exactly the delay.
 		UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(this);
 		Playback->Init(Baseline, GainMultiplier);
+		if (Pan != 0.0f)
+		{
+			// Rides on the handle's atomic mirror, so the deferred start picks it
+			// up -- no need to carry Pan in the pending record for this kind.
+			Playback->SetPan(Pan);
+		}
 
 		FHapbeatPendingSend Pending;
 		Pending.Kind = EHapbeatPendingKind::StartStream;
@@ -332,8 +349,15 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		if (!SchedulePendingSend(MoveTemp(Pending), Delay))
 		{
 			// Could not schedule — fall back to firing now rather than handing
-			// back a handle whose stream would never start.
-			return StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop);
+			// back a handle whose stream would never start. StreamClip makes its
+			// OWN handle (the pre-panned one above is dropped), so the pan has to
+			// be applied again here.
+			UHapbeatStreamPlayback* Immediate = StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop);
+			if (Immediate != nullptr && Pan != 0.0f)
+			{
+				Immediate->SetPan(Pan);
+			}
+			return Immediate;
 		}
 		return Playback;
 	}
@@ -353,6 +377,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		Pending.Kind = EHapbeatPendingKind::PlayCommand;
 		Pending.EventId = EventId;
 		Pending.Gain = Gain;
+		Pending.Pan = Pan;
 		Pending.Target = Entry.Target;
 		if (SchedulePendingSend(MoveTemp(Pending), Delay))
 		{
@@ -360,7 +385,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		}
 		// Scheduling failed; fall through and send immediately.
 	}
-	Play(EventId, Gain, Entry.Target);
+	Play(EventId, Gain, Entry.Target, Pan);
 	return nullptr;
 }
 
@@ -456,7 +481,7 @@ void UHapbeatSubsystem::FirePendingSend(uint32 PendingId)
 	switch (Pending.Kind)
 	{
 	case EHapbeatPendingKind::PlayCommand:
-		Play(Pending.EventId, Pending.Gain, Pending.Target);
+		Play(Pending.EventId, Pending.Gain, Pending.Target, Pending.Pan);
 		break;
 
 	case EHapbeatPendingKind::StopCommand:

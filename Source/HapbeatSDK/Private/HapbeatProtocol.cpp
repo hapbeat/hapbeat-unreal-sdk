@@ -112,13 +112,16 @@ namespace
 	}
 }
 
-TArray<uint8> FHapbeatProtocol::BuildPlay(uint16 Seq, const FString& EventId, const FString& Target, int64 TargetTimeUs, float Gain)
+TArray<uint8> FHapbeatProtocol::BuildPlay(uint16 Seq, const FString& EventId, const FString& Target, int64 TargetTimeUs, float Gain, float Pan)
 {
 	TArray<uint8> Payload;
 	AppendCStr(Payload, EventId);
 	AppendCStr(Payload, Target);
 	AppendI64(Payload, TargetTimeUs);
 	AppendF32(Payload, Gain);
+	// Always written, never omitted: the field is only "optional" so that a
+	// device can read packets from an older sender (contracts 0x01 / DEC-055).
+	AppendF32(Payload, Pan);
 	return MakePacket(CmdPlay, Seq, Payload);
 }
 

@@ -53,7 +53,7 @@ namespace
 }
 
 UHapbeatStreamPlayback* UHapbeatBlueprintLibrary::PlayHapbeatEvent(const UObject* WorldContextObject,
-	UHapbeatEventMap* Map, FHapbeatEntryRef Entry, float GainMultiplier)
+	UHapbeatEventMap* Map, FHapbeatEntryRef Entry, float GainMultiplier, float Pan)
 {
 	UHapbeatSubsystem* Subsystem = ResolveForCall(WorldContextObject, Map, Entry, TEXT("PlayHapbeatEvent"));
 	if (Subsystem == nullptr)
@@ -62,7 +62,7 @@ UHapbeatStreamPlayback* UHapbeatBlueprintLibrary::PlayHapbeatEvent(const UObject
 	}
 	// Delegate rather than re-implement: PlayEntry owns the whole Command /
 	// Stream Clip decision, so the entry points cannot drift apart.
-	return Subsystem->PlayEntry(Map, Entry.EntryId, GainMultiplier);
+	return Subsystem->PlayEntry(Map, Entry.EntryId, GainMultiplier, /*bForceNonLoop=*/false, Pan);
 }
 
 void UHapbeatBlueprintLibrary::StopHapbeatEvent(const UObject* WorldContextObject,

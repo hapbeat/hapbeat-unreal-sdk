@@ -253,7 +253,9 @@ void FHapbeatEditorSender::SendPlay(const FString& EventId, float Gain, const FS
 		UE_LOG(LogHapbeatEditorSender, Warning, TEXT("[Hapbeat] Test Play: entry has no event id; ignored."));
 		return;
 	}
-	SendRouted(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, Target, /*TargetTimeUs=*/0, Gain));
+	// Pan is fixed at center here: Test Play auditions what the ENTRY authored,
+	// and pan is a per-call argument of the runtime node, not an entry field.
+	SendRouted(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, Target, /*TargetTimeUs=*/0, Gain, /*Pan=*/0.0f));
 }
 
 void FHapbeatEditorSender::SendStop(const FString& EventId, const FString& Target)

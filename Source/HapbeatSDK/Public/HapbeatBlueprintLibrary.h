@@ -52,15 +52,23 @@ public:
 	 *                       a call site routinely varies (per-object strength), so
 	 *                       it stays visible on the node rather than sitting behind
 	 *                       the collapsed arrow.
+	 * @param Pan            -1 = left / 0 = center / +1 = right. Works for FIRE
+	 *                       and CLIP entries alike. FIRE needs a device running
+	 *                       DEC-055 firmware (older firmware plays it centered);
+	 *                       CLIP has no effect on a mono clip (stereo only).
+	 *                       Visible on the node for the same reason as
+	 *                       GainMultiplier: it is a per-call value the caller
+	 *                       varies, since only the call site knows where the event
+	 *                       happened.
 	 * @return The stream handle for a Stream Clip entry (for live gain / pan
 	 *         modulation, or to stop just this playback); null for Command, and
 	 *         null when the arguments do not resolve to an entry.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Play Hapbeat Event",
-			Keywords = "haptic play event hapbeat"))
+			Keywords = "haptic play event hapbeat pan"))
 	static UHapbeatStreamPlayback* PlayHapbeatEvent(const UObject* WorldContextObject,
-		UHapbeatEventMap* Map, FHapbeatEntryRef Entry, float GainMultiplier = 1.0f);
+		UHapbeatEventMap* Map, FHapbeatEntryRef Entry, float GainMultiplier = 1.0f, float Pan = 0.0f);
 
 	/** Stop an entry started by Play Hapbeat Event: STOP for Command, ends the stream for Stream Clip. */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat",

@@ -275,7 +275,7 @@ void UHapbeatSubsystem::StopAll(const FString& Target)
 }
 
 UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier,
-	bool bForceNonLoop, float Pan)
+	bool bForceNonLoop, float Pan, float ExtraDelaySeconds)
 {
 	FHapbeatEventEntry Entry;
 	if (Map == nullptr || !Map->FindById(EntryId, Entry))
@@ -293,10 +293,16 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 	// nothing to modulate later, so the two are multiplied for the wire value.
 	const float Baseline = Entry.GetEffectiveGain();
 
+	// Pan composes ADDITIVELY (gain multiplies): the entry authors where the event
+	// normally sits and the call site nudges it from there, so the neutral pair
+	// 0 + 0 stays dead centre. Clamped once, here, so every path below — command,
+	// stream, immediate, deferred — puts the same value on the wire / mirror.
+	const float EffectivePan = FMath::Clamp(Entry.Pan + Pan, -1.0f, 1.0f);
+
 	// Audio-latency compensation. Validation stays here, at call time; only the
 	// send itself moves. Zero (the default) takes the untouched synchronous path
 	// below — no timer, no allocation, no behaviour change.
-	const float Delay = ComputeEffectiveDelaySeconds(Entry);
+	const float Delay = ComputeEffectiveDelaySeconds(Entry, ExtraDelaySeconds);
 	const bool bDeferred = Delay > KINDA_SMALL_NUMBER;
 
 	if (Entry.Mode == EHapticMode::StreamClip)
@@ -312,18 +318,14 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		// running, whatever the entry says.
 		const bool bLoop = bForceNonLoop ? false : Entry.bLoop;
 		// Pan reaches a Stream Clip through the HANDLE, not the wire: the SDK
-		// pre-multiplies the balance onto the stereo PCM it sends. Init() has
-		// just reset Pan to 0 (center), so only a non-default value is worth
-		// writing -- and writing it right after the handle is created lands it
-		// on the atomic mirror before the send thread reads its first chunk.
+		// pre-multiplies the balance onto the (possibly upmixed) stereo PCM it
+		// sends. It is handed to StreamClip rather than written on the returned
+		// handle so it is already on the atomic mirror when the session starts --
+		// a MONO clip is upmixed to stereo only if the pan is non-zero at that
+		// moment (STREAM_BEGIN fixes the channel count for the session).
 		if (!bDeferred)
 		{
-			UHapbeatStreamPlayback* Playback = StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop);
-			if (Playback != nullptr && Pan != 0.0f)
-			{
-				Playback->SetPan(Pan);
-			}
-			return Playback;
+			return StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop, EffectivePan);
 		}
 
 		// Deferred stream: the handle must exist NOW (the caller wires bindings /
@@ -333,11 +335,11 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		// haptic short by exactly the delay.
 		UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(this);
 		Playback->Init(Baseline, GainMultiplier);
-		if (Pan != 0.0f)
+		if (EffectivePan != 0.0f)
 		{
 			// Rides on the handle's atomic mirror, so the deferred start picks it
 			// up -- no need to carry Pan in the pending record for this kind.
-			Playback->SetPan(Pan);
+			Playback->SetPan(EffectivePan);
 		}
 
 		FHapbeatPendingSend Pending;
@@ -351,13 +353,8 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 			// Could not schedule — fall back to firing now rather than handing
 			// back a handle whose stream would never start. StreamClip makes its
 			// OWN handle (the pre-panned one above is dropped), so the pan has to
-			// be applied again here.
-			UHapbeatStreamPlayback* Immediate = StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop);
-			if (Immediate != nullptr && Pan != 0.0f)
-			{
-				Immediate->SetPan(Pan);
-			}
-			return Immediate;
+			// be passed again here.
+			return StreamClip(Clip, Baseline, GainMultiplier, Entry.Target, bLoop, EffectivePan);
 		}
 		return Playback;
 	}
@@ -377,7 +374,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		Pending.Kind = EHapbeatPendingKind::PlayCommand;
 		Pending.EventId = EventId;
 		Pending.Gain = Gain;
-		Pending.Pan = Pan;
+		Pending.Pan = EffectivePan;
 		Pending.Target = Entry.Target;
 		if (SchedulePendingSend(MoveTemp(Pending), Delay))
 		{
@@ -385,7 +382,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		}
 		// Scheduling failed; fall through and send immediately.
 	}
-	Play(EventId, Gain, Entry.Target, Pan);
+	Play(EventId, Gain, Entry.Target, EffectivePan);
 	return nullptr;
 }
 
@@ -434,13 +431,14 @@ void UHapbeatSubsystem::StopEntry(UHapbeatEventMap* Map, FGuid EntryId)
 	Stop(Entry.GetEventId(), Entry.Target);
 }
 
-float UHapbeatSubsystem::ComputeEffectiveDelaySeconds(const FHapbeatEventEntry& Entry) const
+float UHapbeatSubsystem::ComputeEffectiveDelaySeconds(const FHapbeatEventEntry& Entry, float ExtraDelaySeconds) const
 {
 	const UHapbeatConfig* Cfg = GetDefault<UHapbeatConfig>();
 	const float Global = Cfg != nullptr ? Cfg->HapticDelaySeconds : 0.0f;
-	// Clamped at 0: a negative per-entry offset can pull the haptic back towards
-	// "now", never before it (Unity ComputeEffectiveDelaySeconds).
-	return FMath::Max(0.0f, Global + Entry.DelayOffsetSeconds);
+	// Clamped at 0: a negative per-entry offset (or a negative per-call extra) can
+	// pull the haptic back towards "now", never before it (Unity
+	// ComputeEffectiveDelaySeconds).
+	return FMath::Max(0.0f, Global + Entry.DelayOffsetSeconds + ExtraDelaySeconds);
 }
 
 bool UHapbeatSubsystem::SchedulePendingSend(FHapbeatPendingSend&& Pending, float DelaySeconds)
@@ -561,7 +559,7 @@ void UHapbeatSubsystem::Ping()
 }
 
 UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float BaselineGain, float InitialGain,
-	const FString& Target, bool bLoop)
+	const FString& Target, bool bLoop, float InitialPan)
 {
 	if (Clip == nullptr || Clip->Pcm16.Num() == 0)
 	{
@@ -575,6 +573,13 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 	// exists — this public entry point is otherwise unchanged.
 	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(this);
 	Playback->Init(BaselineGain, InitialGain);
+	if (InitialPan != 0.0f)
+	{
+		// BEFORE the session starts, not after: the streamer decides at that
+		// moment whether a mono clip has to be upmixed to stereo to be pannable
+		// at all (see FHapbeatStreamer's bUpmixMonoToStereo).
+		Playback->SetPan(InitialPan);
+	}
 
 	return StartStreamSession(Clip, Playback, Target, bLoop) ? Playback : nullptr;
 }

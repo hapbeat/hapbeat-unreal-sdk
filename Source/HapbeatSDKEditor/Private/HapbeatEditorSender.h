@@ -35,8 +35,13 @@ class FInternetAddr;
 class FHapbeatEditorSender
 {
 public:
-	/** Send a PLAY for EventId at Gain (0..1 nominal; already gain x intensity composed by the caller). Immediate (target_time = 0). No-op (warns) if EventId is empty. */
-	static void SendPlay(const FString& EventId, float Gain, const FString& Target = TEXT(""));
+	/**
+	 * Send a PLAY for EventId at Gain (0..1 nominal; already gain x intensity
+	 * composed by the caller). Immediate (target_time = 0). No-op (warns) if
+	 * EventId is empty. Pan is the entry's authored balance (-1..+1); a device on
+	 * firmware older than DEC-055 ignores it and plays centred.
+	 */
+	static void SendPlay(const FString& EventId, float Gain, const FString& Target = TEXT(""), float Pan = 0.0f);
 
 	/** Send a STOP for EventId. No-op (warns) if EventId is empty. */
 	static void SendStop(const FString& EventId, const FString& Target = TEXT(""));
@@ -67,8 +72,13 @@ public:
 	 * Starting a stream replaces any stream already running: the device mixes a
 	 * single ring buffer, so two overlapping editor streams would interleave
 	 * into noise rather than layer.
+	 *
+	 * Pan is the entry's authored balance and is placed on the mirror BEFORE the
+	 * stream thread starts, so a mono clip gets upmixed to stereo exactly as it
+	 * would at runtime -- the audition and the game hear the same thing.
 	 */
-	static void StartStream(const class UHapbeatClip* Clip, float Gain, const FString& Target, bool bLoop);
+	static void StartStream(const class UHapbeatClip* Clip, float Gain, const FString& Target, bool bLoop,
+		float Pan = 0.0f);
 
 	/** Stop the editor stream and emit STREAM_END. Safe when nothing is streaming. */
 	static void StopStream();

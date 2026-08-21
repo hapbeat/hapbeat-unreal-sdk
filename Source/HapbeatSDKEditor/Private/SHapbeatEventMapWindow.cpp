@@ -1033,6 +1033,28 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildPlaybackSection()
 			]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 			[
+				MakeRow(LOCTEXT("Pan", "Pan"),
+					LOCTEXT("PanTooltip",
+						"Left/right balance authored for this entry: -1 = left only, 0 = centre, +1 = right only. "
+						"The Pan given at the call site is ADDED to this and the sum clamped. "
+						"Command needs a device on DEC-055 firmware (older firmware plays centred); "
+						"a mono Stream Clip is upmixed to stereo when the effective pan is non-zero."),
+					SNew(SSpinBox<float>)
+					.MinValue(-1.0f).MaxValue(1.0f)
+					.MinSliderValue(-1.0f).MaxSliderValue(1.0f)
+					.Value_Lambda([this]
+					{
+						const FHapbeatEventEntry* Entry = FindSelectedEntry();
+						return Entry != nullptr ? Entry->Pan : 0.0f;
+					})
+					.OnValueChanged_Lambda([this](float NewValue)
+					{
+						ModifySelectedEntry(LOCTEXT("SetPan", "Set Hapbeat Pan"),
+							[NewValue](FHapbeatEventEntry& Entry) { Entry.Pan = NewValue; });
+					}))
+			]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			[
 				MakeRow(LOCTEXT("EffectiveGain", "Effective Gain"),
 					LOCTEXT("EffectiveGainTooltip",
 						"Gain x baked manifest intensity -- the value actually sent. "
@@ -1297,11 +1319,12 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 								// designer clicking Test expects the clip now.
 								FHapbeatEditorSender::StartStream(
 									Entry->StreamClip.LoadSynchronous(),
-									Entry->GetEffectiveGain(), Entry->Target, Entry->bLoop);
+									Entry->GetEffectiveGain(), Entry->Target, Entry->bLoop, Entry->Pan);
 							}
 							else
 							{
-								FHapbeatEditorSender::SendPlay(Entry->GetEventId(), Entry->GetEffectiveGain(), Entry->Target);
+								FHapbeatEditorSender::SendPlay(Entry->GetEventId(), Entry->GetEffectiveGain(),
+									Entry->Target, Entry->Pan);
 							}
 							return FReply::Handled();
 						})

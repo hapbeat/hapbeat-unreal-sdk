@@ -25,8 +25,10 @@
  * BlueprintPure getters' backing store (fast game-thread reads); the mirror is
  * the cross-thread channel.
  *
- * Pan semantics: -1 = full left, 0 = centered, +1 = full right. For mono clips
- * the pan value is ignored. LINEAR balance is used (center = passthrough,
+ * Pan semantics: -1 = full left, 0 = centered, +1 = full right. A mono clip is
+ * upmixed to stereo by the streamer when the pan is non-zero at stream start, so
+ * it pans too — but only if the value was set BEFORE the session began (see
+ * SetPan). LINEAR balance is used (center = passthrough,
  * gainL = gainR = 1.0) — NOT equal-power: Hapbeat's left / right actuators are
  * physically separate on the body and do not binaurally sum, so equal-power's
  * sqrt(1/2) compensation would silently attenuate every centered stereo clip by
@@ -63,7 +65,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void ApplyGainModulation(float Modulator);
 
-	/** Set the stereo pan, clamped to [-1, 1]. Ignored for mono clips. */
+	/**
+	 * Set the pan, clamped to [-1, 1].
+	 *
+	 * Has no effect on a session that STARTED centred with a mono clip: the
+	 * streamer only upmixes mono to stereo when the pan is already non-zero at
+	 * STREAM_BEGIN, which fixes the channel count for the whole session. To pan a
+	 * mono clip, give the pan before the stream starts (the entry's Pan, the Play
+	 * node's Pan, or StreamClip's InitialPan).
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void SetPan(float NewPan);
 

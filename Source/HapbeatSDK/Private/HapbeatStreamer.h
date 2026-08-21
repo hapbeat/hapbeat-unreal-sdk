@@ -21,6 +21,19 @@
  *   - Every int16 sample is pre-multiplied by the live Gain x L/R Pan balance
  *     read off the mirror, into a SCRATCH buffer (the source bytes are never
  *     mutated), then clamped to the int16 range.
+ *   - The channel count advertised in STREAM_BEGIN is exactly what every
+ *     STREAM_DATA chunk then carries. That is why the mono->stereo upmix below
+ *     is decided ONCE, in the ctor, and never re-evaluated mid-session.
+ *
+ * Mono upmix: a mono clip has no left/right to balance, so pan would simply be
+ * lost on it. When the session STARTS with a non-zero pan (the entry's Pan +
+ * the call site's, already on the mirror by then), the streamer instead
+ * advertises 2 channels and duplicates each mono sample into L/R as it builds
+ * every chunk — the balance is then applied exactly as for a real stereo clip.
+ * The duplication happens per chunk, not up-front, so the clip is never held
+ * twice in memory. A session that starts CENTRED stays mono for its whole life:
+ * a SetPan afterwards has no channels to steer (see UHapbeatSubsystem::
+ * StreamClip's InitialPan, which exists to get the pan in before this decision).
  *
  * Threading: ALL methods run on the stream-send thread ONLY (FHapbeatStreamRunnable::Run()
  * is the sole caller). This class owns every byte of its mutable session state
@@ -77,10 +90,14 @@ private:
 	// --- immutable session state ---
 	TArray<uint8> Pcm16; // COPY of the clip bytes; premultiply reads from here, never writes.
 	int32 SampleRate = 0;
-	int32 Channels = 0;
+	int32 Channels = 0;      // channels in Pcm16 (the SOURCE clip).
+	int32 WireChannels = 0;  // channels advertised in STREAM_BEGIN and carried by every chunk.
 	FString Target;
 	bool bLoop = false;
-	int32 BytesPerFrame = 2; // 2 * Channels, computed in the ctor.
+	int32 SrcBytesPerFrame = 2;  // 2 * Channels — how far the read cursor advances per frame.
+	int32 WireBytesPerFrame = 2; // 2 * WireChannels — how many bytes each frame occupies on the wire.
+	/** Mono source sent as stereo so a non-zero pan has two channels to balance. Decided once, in the ctor. */
+	bool bUpmixMonoToStereo = false;
 	float SendAheadSeconds = 0.05f;
 
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;

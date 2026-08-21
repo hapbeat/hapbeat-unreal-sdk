@@ -246,16 +246,16 @@ int64 FHapbeatEditorSender::UnixMicros()
 	return (FDateTime::UtcNow().GetTicks() - UnixEpochTicks) / 10;
 }
 
-void FHapbeatEditorSender::SendPlay(const FString& EventId, float Gain, const FString& Target)
+void FHapbeatEditorSender::SendPlay(const FString& EventId, float Gain, const FString& Target, float Pan)
 {
 	if (EventId.IsEmpty())
 	{
 		UE_LOG(LogHapbeatEditorSender, Warning, TEXT("[Hapbeat] Test Play: entry has no event id; ignored."));
 		return;
 	}
-	// Pan is fixed at center here: Test Play auditions what the ENTRY authored,
-	// and pan is a per-call argument of the runtime node, not an entry field.
-	SendRouted(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, Target, /*TargetTimeUs=*/0, Gain, /*Pan=*/0.0f));
+	// The caller passes the ENTRY's authored pan: Test Play auditions what the
+	// entry says, without the per-call value a runtime node would add on top.
+	SendRouted(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, Target, /*TargetTimeUs=*/0, Gain, Pan));
 }
 
 void FHapbeatEditorSender::SendStop(const FString& EventId, const FString& Target)
@@ -309,7 +309,7 @@ void FHapbeatEditorSender::WaitForFirstDevice()
 	}
 }
 
-void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, const FString& Target, bool bLoop)
+void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, const FString& Target, bool bLoop, float Pan)
 {
 	if (Clip == nullptr || Clip->Pcm16.Num() == 0 || Clip->SampleRate <= 0 || Clip->NumChannels <= 0)
 	{
@@ -346,6 +346,10 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 	// square it.
 	StreamMirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
 	StreamMirror->Gain.store(Gain, std::memory_order_release);
+	// BEFORE the runnable is constructed: the streamer reads the pan once, there,
+	// to decide whether a mono clip has to be upmixed to stereo to be pannable at
+	// all (STREAM_BEGIN fixes the channel count for the session).
+	StreamMirror->Pan.store(FMath::Clamp(Pan, -1.0f, 1.0f), std::memory_order_release);
 
 	const UHapbeatConfig* Config = GetDefault<UHapbeatConfig>();
 	const int32 Port = Config != nullptr ? Config->Port : 7700;

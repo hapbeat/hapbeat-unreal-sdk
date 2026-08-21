@@ -116,8 +116,8 @@ void FHapbeatEditorTools::ExportEventMapToMarkdown(UHapbeatEventMap* Map)
 
 	FString Out;
 	Out += FString::Printf(TEXT("# %s\n\n"), *Map->GetName());
-	Out += TEXT("| # | Name | Event Id | Mode | Gain | Intensity | Effective | Target | Loop | Notes |\n");
-	Out += TEXT("|---|---|---|---|---|---|---|---|---|---|\n");
+	Out += TEXT("| # | Name | Event Id | Mode | Gain | Intensity | Effective | Pan | Target | Loop | Notes |\n");
+	Out += TEXT("|---|---|---|---|---|---|---|---|---|---|---|\n");
 
 	int32 Index = 0;
 	for (const FHapbeatEventEntry& Entry : Map->Entries)
@@ -130,7 +130,7 @@ void FHapbeatEditorTools::ExportEventMapToMarkdown(UHapbeatEventMap* Map)
 		FString Notes = Entry.Notes.Replace(TEXT("|"), TEXT("\\|"));
 		Notes.ReplaceInline(TEXT("\n"), TEXT(" "));
 
-		Out += FString::Printf(TEXT("| %d | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n"),
+		Out += FString::Printf(TEXT("| %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |\n"),
 			Index++,
 			*Entry.DisplayName,
 			*Entry.GetEventId(),
@@ -138,6 +138,7 @@ void FHapbeatEditorTools::ExportEventMapToMarkdown(UHapbeatEventMap* Map)
 			*FString::SanitizeFloat(Entry.Gain),
 			*Intensity,
 			*FString::SanitizeFloat(Entry.GetEffectiveGain()),
+			*FString::SanitizeFloat(Entry.Pan),
 			Entry.Target.IsEmpty() ? TEXT("(broadcast)") : *Entry.Target,
 			Entry.bLoop ? TEXT("yes") : TEXT(""),
 			*Notes);

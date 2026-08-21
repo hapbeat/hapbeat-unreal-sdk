@@ -197,24 +197,36 @@ public:
 	 *                       one-shot regardless of its authored loop flag. Used by
 	 *                       the sequence component's start / stop shots, which must
 	 *                       not leave a loop running (Unity DispatchOneShot).
-	 * @param Pan            Left/right balance for THIS call: -1 left, 0 center,
-	 *                       +1 right. A Command entry carries it on the wire (the
+	 * @param Pan            Left/right balance for THIS call, ADDED to the entry's
+	 *                       authored Pan and the sum clamped to [-1, 1] (pan is
+	 *                       additive where gain is multiplicative, so the
+	 *                       0 + 0 = 0 default leaves behaviour unchanged). A
+	 *                       Command entry carries the result on the wire (the
 	 *                       device expands it per voice, DEC-055); a Stream Clip
-	 *                       entry gets it written onto the returned handle, where
-	 *                       a later SetPan / binding may still override it. Not an
-	 *                       entry field: it belongs to the call site, which knows
-	 *                       where the event happened.
+	 *                       entry gets it written onto the returned handle BEFORE
+	 *                       the session starts, where a later SetPan / binding may
+	 *                       still override it.
+	 * @param ExtraDelaySeconds Additional deferral for THIS call only, summed with
+	 *                       the global HapticDelaySeconds and the entry's
+	 *                       DelayOffsetSeconds (the total is clamped at 0). For
+	 *                       gameplay timing prefer a Delay node; this exists for
+	 *                       per-call latency compensation.
 	 * @return The stream handle for a Stream Clip entry (for live gain / pan
 	 *         modulation, or to stop just this playback); null for Command.
 	 */
 	UHapbeatStreamPlayback* PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier = 1.0f,
-		bool bForceNonLoop = false, float Pan = 0.0f);
+		bool bForceNonLoop = false, float Pan = 0.0f, float ExtraDelaySeconds = 0.0f);
 
 	/**
 	 * Stop an entry started by PlayEntry: STOP for Command, ends the stream for
 	 * Stream Clip. Deferred by the SAME haptic delay as PlayEntry, so the
 	 * perceived Play->Stop interval is the one the caller asked for (parity with
 	 * Unity HapbeatTriggerBase.StopHaptic).
+	 *
+	 * Deliberately no ExtraDelaySeconds counterpart: the per-call extra delay is a
+	 * fire-side effect (Unity has no stop-side equivalent either), and applying it
+	 * here would need the Stop call site to remember what the Play call site asked
+	 * for to keep the interval intact.
 	 */
 	void StopEntry(UHapbeatEventMap* Map, FGuid EntryId);
 
@@ -240,11 +252,17 @@ public:
 	 * @param InitialGain  Initial modulator; Gain starts at Baseline x InitialGain.
 	 * @param Target       Address filter ("" = broadcast).
 	 * @param bLoop        Loop the clip until StopStream() / handle Stop().
+	 * @param InitialPan   Pan written onto the handle BEFORE the session starts.
+	 *                     It has to be set here rather than on the returned handle
+	 *                     because a MONO clip is upmixed to stereo only when the
+	 *                     pan is already non-zero at session start — STREAM_BEGIN
+	 *                     fixes the channel count for the whole session, so a pan
+	 *                     applied afterwards would have nothing to steer.
 	 * @return Per-stream handle, or nullptr if the clip was invalid.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (AdvancedDisplay = "3"))
 	UHapbeatStreamPlayback* StreamClip(UHapbeatClip* Clip, float BaselineGain = 1.0f, float InitialGain = 1.0f,
-		const FString& Target = TEXT(""), bool bLoop = false);
+		const FString& Target = TEXT(""), bool bLoop = false, float InitialPan = 0.0f);
 
 	/**
 	 * Stop the active stream: signal the stream thread to send STREAM_END, JOIN
@@ -364,7 +382,7 @@ private:
 
 	/**
 	 * Effective deferral for this entry: max(0, global HapticDelaySeconds +
-	 * entry DelayOffsetSeconds). Port of Unity
+	 * entry DelayOffsetSeconds + the call site's ExtraDelaySeconds). Port of Unity
 	 * HapbeatTriggerBase.ComputeEffectiveDelaySeconds — a negative per-entry
 	 * offset pulls the haptic earlier but can never go below "now".
 	 *
@@ -381,7 +399,7 @@ private:
 	 * / FlushPendingDelayCoroutines) is deliberately not ported for v1; the next
 	 * fire picks the new value up.
 	 */
-	float ComputeEffectiveDelaySeconds(const FHapbeatEventEntry& Entry) const;
+	float ComputeEffectiveDelaySeconds(const FHapbeatEventEntry& Entry, float ExtraDelaySeconds = 0.0f) const;
 
 	/**
 	 * Register Pending on the GameInstance timer manager and keep it (with its

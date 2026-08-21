@@ -33,9 +33,20 @@ FHapbeatStreamer::FHapbeatStreamer(
 	// Guard against degenerate inputs so the pacing loop can never spin forever
 	// (the subsystem already rejects empty clips, but defend in depth).
 	Channels = FMath::Max(1, Channels);
-	BytesPerFrame = 2 * Channels;
+	SrcBytesPerFrame = 2 * Channels;
 	SampleRate = FMath::Max(1, SampleRate);
 	SendAheadSeconds = InSendAheadSeconds > 0.01f ? InSendAheadSeconds : 0.05f;
+
+	// Decide the wire channel count ONCE, here, because STREAM_BEGIN fixes it for
+	// the whole session: a mono clip asked to play off-centre is sent as stereo
+	// (each sample duplicated into L/R per chunk) so the pan balance has two
+	// channels to act on. The pan read here is the one the game thread wrote onto
+	// the mirror BEFORE the session was started (UHapbeatSubsystem::StreamClip's
+	// InitialPan); a SetPan issued later cannot change the channel count.
+	bUpmixMonoToStereo = (Channels == 1)
+		&& (Mirror->Pan.load(std::memory_order_relaxed) != 0.0f);
+	WireChannels = bUpmixMonoToStereo ? 2 : Channels;
+	WireBytesPerFrame = 2 * WireChannels;
 
 	// Size the premultiply scratch buffer ONCE to the maximum possible chunk
 	// size (the MTU cap, which is always >= the ~10ms target) and keep it for
@@ -44,8 +55,9 @@ FHapbeatStreamer::FHapbeatStreamer(
 	// SetNumUninitialized shrink-argument overload, which differs between UE
 	// versions (bool bAllowShrinking on 5.3/5.4 vs EAllowShrinking on 5.5+),
 	// keeping the streamer source-compatible across 5.3 -> latest.
-	const int32 MaxFramesPerChunk = FMath::Max(1, FHapbeatProtocol::StreamDataMaxPayload / BytesPerFrame);
-	Scratch.SetNumUninitialized(MaxFramesPerChunk * BytesPerFrame);
+	// Sized in WIRE bytes: an upmixed chunk is twice the source bytes it came from.
+	const int32 MaxFramesPerChunk = FMath::Max(1, FHapbeatProtocol::StreamDataMaxPayload / WireBytesPerFrame);
+	Scratch.SetNumUninitialized(MaxFramesPerChunk * WireBytesPerFrame);
 }
 
 void FHapbeatStreamer::Start(double NowSeconds)
@@ -61,10 +73,12 @@ void FHapbeatStreamer::Start(double NowSeconds)
 	// must pass the audio through unscaled — sending the baseline here would
 	// double-apply it. Exact parity with HapbeatManager.cs (SendStreamBegin(..,
 	// 1.0f, target) + per-sample premultiply in MixerCoroutine).
+	// WireChannels, not Channels: an upmixed mono clip is announced as stereo
+	// because that is what every STREAM_DATA chunk below will carry.
 	SendFn(FHapbeatProtocol::BuildStreamBegin(
 		NextSeqFn(),
 		static_cast<uint16>(SampleRate),
-		static_cast<uint8>(Channels),
+		static_cast<uint8>(WireChannels),
 		FHapbeatProtocol::AudioFormatPcm16,
 		TotalSamples,
 		1.0f,
@@ -88,7 +102,7 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 	}
 
 	// Nothing to stream (degenerate) -> end immediately.
-	if (Pcm16.Num() < BytesPerFrame)
+	if (Pcm16.Num() < SrcBytesPerFrame)
 	{
 		SendEnd();
 		return;
@@ -106,8 +120,10 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 	// Max frames per STREAM_DATA chunk: the smaller of (a) the ~10ms pacing
 	// target and (b) the spec's 1400-byte payload budget (StreamDataMaxPayload,
 	// NOT the larger MaxStreamPacketSize MTU guardrail), frame-aligned so
-	// stereo L/R never splits across packets.
-	const int32 MtuFramesCap = FMath::Max(1, FHapbeatProtocol::StreamDataMaxPayload / BytesPerFrame);
+	// stereo L/R never splits across packets. Measured in WIRE bytes, so an
+	// upmixed session simply fits half as many frames per packet — the ~10ms
+	// pacing target below is unchanged, and so is the send cadence.
+	const int32 MtuFramesCap = FMath::Max(1, FHapbeatProtocol::StreamDataMaxPayload / WireBytesPerFrame);
 	const int32 TargetFrames = FMath::Max(1, FMath::RoundToInt(static_cast<float>(SampleRate) * TargetChunkSeconds));
 	const int32 FramesPerChunk = FMath::Min(MtuFramesCap, TargetFrames);
 
@@ -128,7 +144,7 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 	{
 		// Frames left until the end of the clip from the current read cursor.
 		const int32 BytesRemaining = Pcm16.Num() - ByteOffset;
-		const int32 FramesAvail = BytesRemaining / BytesPerFrame;
+		const int32 FramesAvail = BytesRemaining / SrcBytesPerFrame;
 
 		if (FramesAvail <= 0)
 		{
@@ -149,8 +165,8 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 		// never straddles the loop boundary (the wrap is handled by the branch
 		// above on the next iteration). chunkBytes <= StreamDataMaxPayload (1400).
 		const int32 FramesThisChunk = FMath::Min(FramesPerChunk, FramesAvail);
-		const int32 ChunkBytes = FramesThisChunk * BytesPerFrame;
-		const int32 SampleCount = FramesThisChunk * Channels; // interleaved int16 samples
+		const int32 SrcChunkBytes = FramesThisChunk * SrcBytesPerFrame;
+		const int32 ChunkBytes = FramesThisChunk * WireBytesPerFrame; // what actually goes out
 
 		// Scratch was pre-sized in the ctor to the max chunk; only the first
 		// ChunkBytes are written/sent below (a wrap-boundary chunk may be smaller).
@@ -161,41 +177,56 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 		const uint8* Src = Pcm16.GetData() + ByteOffset;
 		uint8* Dst = Scratch.GetData();
 
-		// Scale one source int16 by Coeff, clamp to int16 range, write LE into Dst
-		// at sample index i. Matches Unity's `(short)Mathf.Clamp(v*scale, -32768,
-		// 32767)`: clamp in float, then a truncating (toward-zero) cast — same
-		// per-sample math the device-side expects (the gain is baked here, not
-		// re-applied on the device).
-		auto WriteScaled = [Src, Dst](int32 i, float Coeff)
+		// Scale the source int16 at SrcIndex by Coeff, clamp to int16 range, write
+		// LE into Dst at DstIndex. Source and destination indices are separate
+		// because the upmix path reads one sample and writes two. Matches Unity's
+		// `(short)Mathf.Clamp(v*scale, -32768, 32767)`: clamp in float, then a
+		// truncating (toward-zero) cast — same per-sample math the device-side
+		// expects (the gain is baked here, not re-applied on the device).
+		auto WriteScaled = [Src, Dst](int32 SrcIndex, int32 DstIndex, float Coeff)
 		{
-			const int16 In = static_cast<int16>(static_cast<uint16>(Src[i * 2]) |
-				(static_cast<uint16>(Src[i * 2 + 1]) << 8));
+			const int16 In = static_cast<int16>(static_cast<uint16>(Src[SrcIndex * 2]) |
+				(static_cast<uint16>(Src[SrcIndex * 2 + 1]) << 8));
 			const float Scaled = FMath::Clamp(static_cast<float>(In) * Coeff, -32768.0f, 32767.0f);
 			const uint16 Out = static_cast<uint16>(static_cast<int16>(Scaled)); // trunc toward zero
-			Dst[i * 2] = static_cast<uint8>(Out & 0xFF);
-			Dst[i * 2 + 1] = static_cast<uint8>((Out >> 8) & 0xFF);
+			Dst[DstIndex * 2] = static_cast<uint8>(Out & 0xFF);
+			Dst[DstIndex * 2 + 1] = static_cast<uint8>((Out >> 8) & 0xFF);
 		};
 
-		if (Channels == 2)
+		if (bUpmixMonoToStereo)
 		{
-			// SampleCount is even (2 per frame): even index = L, odd = R.
+			// One source sample -> an L/R pair, each with its own balance
+			// coefficient. This is what makes a mono clip pannable at all.
+			for (int32 f = 0; f < FramesThisChunk; ++f)
+			{
+				WriteScaled(f, f * 2, G * GainL);
+				WriteScaled(f, f * 2 + 1, G * GainR);
+			}
+		}
+		else if (Channels == 2)
+		{
+			// 2 samples per frame: even index = L, odd = R.
+			const int32 SampleCount = FramesThisChunk * 2;
 			for (int32 i = 0; i < SampleCount; ++i)
 			{
-				WriteScaled(i, ((i & 1) == 0) ? (G * GainL) : (G * GainR));
+				WriteScaled(i, i, ((i & 1) == 0) ? (G * GainL) : (G * GainR));
 			}
 		}
 		else
 		{
+			// Mono and centred (or any other channel count): no balance to apply,
+			// so the frames pass through with the channel layout they came in with.
+			const int32 SampleCount = FramesThisChunk * Channels;
 			for (int32 i = 0; i < SampleCount; ++i)
 			{
-				WriteScaled(i, G);
+				WriteScaled(i, i, G);
 			}
 		}
 
 		SendFn(FHapbeatProtocol::BuildStreamData(
 			NextSeqFn(), WireOffset, Scratch.GetData(), ChunkBytes));
 
-		ByteOffset += ChunkBytes;
+		ByteOffset += SrcChunkBytes;                   // read cursor advances in SOURCE bytes
 		WireOffset += static_cast<uint32>(ChunkBytes); // monotonic across loop wraps (Unity parity)
 		TotalFramesSent += FramesThisChunk;
 

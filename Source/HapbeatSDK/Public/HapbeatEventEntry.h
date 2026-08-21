@@ -79,6 +79,13 @@ struct HAPBEATSDK_API FHapbeatEventEntry
 		meta = (Tooltip = "Gain multiplier (0.0 to 2.0).", UIMin = "0.0", UIMax = "2.0", ClampMin = "0.0", ClampMax = "2.0"))
 	float Gain = 1.0f;
 
+	// ---- Pan ----
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat",
+		meta = (Tooltip = "Left/right balance authored for this entry: -1 = left only, 0 = centre, +1 = right only. The call-site Pan is ADDED to this and the sum clamped. Command needs a DEC-055 firmware; Stream Clip upmixes mono clips to stereo when the effective pan is non-zero.",
+			UIMin = "-1.0", UIMax = "1.0", ClampMin = "-1.0", ClampMax = "1.0"))
+	float Pan = 0.0f;
+
 	// ---- Targeting ----
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat",

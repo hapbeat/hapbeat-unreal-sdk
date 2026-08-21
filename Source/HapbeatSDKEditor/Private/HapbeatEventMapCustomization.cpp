@@ -304,7 +304,7 @@ FReply FHapbeatEventMapCustomization::OnTestPlayClicked()
 				TEXT("Test Play '%s': manifest intensity unresolved (-1); sending plain gain=%.2f. Run Refresh Intensities and confirm the Kit manifest is under Content/."),
 				*Entry.GetEventId(), Entry.Gain);
 		}
-		FHapbeatEditorSender::SendPlay(Entry.GetEventId(), Entry.GetEffectiveGain(), Entry.Target);
+		FHapbeatEditorSender::SendPlay(Entry.GetEventId(), Entry.GetEffectiveGain(), Entry.Target, Entry.Pan);
 	}
 	return FReply::Handled();
 }

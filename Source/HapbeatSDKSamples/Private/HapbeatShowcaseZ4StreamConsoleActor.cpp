@@ -276,9 +276,14 @@ void AHapbeatShowcaseZ4StreamConsoleActor::Tick(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-		TEXT("Z4 Stream Console -- T: toggle loop | U/J: gain +/- | N/M: pan +/-"),
-		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	// The Showcase switcher draws a shared Slate key guide covering this, so
+	// only print the line when this zone is running on its own.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+			TEXT("Z4 Stream Console -- T: toggle loop | U/J: gain +/- | N/M: pan +/-"),
+			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	}
 
 	bool bStreaming = false;
 	if (LoopTrigger != nullptr)
@@ -290,5 +295,42 @@ void AHapbeatShowcaseZ4StreamConsoleActor::Tick(float DeltaSeconds)
 		FString::Printf(TEXT("Gain=%.2f Pan=%.2f Streaming=%s"),
 			GainValue, PanValue, bStreaming ? TEXT("Yes") : TEXT("No")),
 		bStreaming ? FColor::Green : FColor::Silver, HudRefreshIntervalSeconds * 2.0f);
-	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	// Same reason: the shared HUD has a device / ping footer.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	}
+}
+
+FText AHapbeatShowcaseZ4StreamConsoleActor::GetZoneLabel() const
+{
+	return FText::FromString(TEXT("Stream Console"));
+}
+
+TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ4StreamConsoleActor::GetHudCommands() const
+{
+	// Phase 1A keeps the keyboard console; the on-screen sliders Unity uses
+	// arrive with the zone rework.
+	TArray<FHapbeatShowcaseHudCommand> Commands;
+	Commands.Add({ FText::FromString(TEXT("T")), FText::FromString(TEXT("toggle the looping stream")) });
+	Commands.Add({ FText::FromString(TEXT("U / J")), FText::FromString(TEXT("gain + / -")) });
+	Commands.Add({ FText::FromString(TEXT("N / M")), FText::FromString(TEXT("pan + / -")) });
+	return Commands;
+}
+
+FTransform AHapbeatShowcaseZ4StreamConsoleActor::GetPlayerSpawnRelative() const
+{
+	// Unity puts this spawn at the zone origin because its console stands
+	// elsewhere in the zone; the UE console IS at the zone origin, so back off
+	// far enough to see it.
+	return FTransform(FRotator::ZeroRotator, FVector(-250.0f, 0.0f, 0.0f));
+}
+
+bool AHapbeatShowcaseZ4StreamConsoleActor::WantsCursorUnlocked() const
+{
+	// The one UI zone (Unity ZoneEntry.unlockCursorOnEnter). Its interaction is
+	// on-screen, not in the world, so the mouse belongs to the UI here. The
+	// character switches to Game-and-UI input, so this zone's keys keep working
+	// while the cursor is free.
+	return true;
 }

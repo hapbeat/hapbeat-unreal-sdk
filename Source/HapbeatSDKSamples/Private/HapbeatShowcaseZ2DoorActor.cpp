@@ -386,9 +386,14 @@ void AHapbeatShowcaseZ2DoorActor::Tick(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-		TEXT("Z2 Door -- F: open/close (rattles when locked)  G: slam (open)  L: lock/unlock"),
-		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	// The Showcase switcher draws a shared Slate key guide covering this, so
+	// only print the line when this zone is running on its own.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+			TEXT("Z2 Door -- F: open/close (rattles when locked)  G: slam (open)  L: lock/unlock"),
+			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	}
 
 	FString StateName;
 	switch (State)
@@ -402,5 +407,30 @@ void AHapbeatShowcaseZ2DoorActor::Tick(float DeltaSeconds)
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
 		FString::Printf(TEXT("Z2 state: %s"), *StateName),
 		FColor::Silver, HudRefreshIntervalSeconds * 2.0f);
-	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	// Same reason: the shared HUD has a device / ping footer.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	}
+}
+
+FText AHapbeatShowcaseZ2DoorActor::GetZoneLabel() const
+{
+	return FText::FromString(TEXT("Door"));
+}
+
+TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ2DoorActor::GetHudCommands() const
+{
+	TArray<FHapbeatShowcaseHudCommand> Commands;
+	Commands.Add({ FText::FromString(TEXT("F")), FText::FromString(TEXT("open / close (rattles when locked)")) });
+	Commands.Add({ FText::FromString(TEXT("G")), FText::FromString(TEXT("slam (while open)")) });
+	Commands.Add({ FText::FromString(TEXT("L")), FText::FromString(TEXT("lock / unlock")) });
+	return Commands;
+}
+
+FTransform AHapbeatShowcaseZ2DoorActor::GetPlayerSpawnRelative() const
+{
+	// Unity Showcase.unity: Z2_Door/PlayerSpawn at (0.2, 0.2, -4) m. Unity
+	// (x, y, z) m -> UE (z, x, y) cm, so 4 m back, 20 cm right, 20 cm up.
+	return FTransform(FRotator::ZeroRotator, FVector(-400.0f, 20.0f, 20.0f));
 }

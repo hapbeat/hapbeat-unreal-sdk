@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "HapbeatEventEntry.h" // EHapticMode
+#include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ2DoorActor.generated.h"
 
 class UHapbeatClip;
@@ -60,12 +61,17 @@ enum class EHapbeatZ2DoorState : uint8
  * Kit deployment is needed. Haptics-only (no SFX).
  */
 UCLASS()
-class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ2DoorActor : public AActor
+class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ2DoorActor : public AActor, public IHapbeatShowcaseZone
 {
 	GENERATED_BODY()
 
 public:
 	AHapbeatShowcaseZ2DoorActor();
+
+	// ---- IHapbeatShowcaseZone ----
+	virtual FText GetZoneLabel() const override;
+	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override;
+	virtual FTransform GetPlayerSpawnRelative() const override;
 
 	/** See AHapbeatShowcaseZ1BowlingActor::FootprintOffset -- same convention across every Showcase zone. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")

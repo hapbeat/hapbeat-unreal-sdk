@@ -5,7 +5,12 @@
 #include "GameFramework/Actor.h"
 #include "HapbeatShowcaseActor.generated.h"
 
+class AHapbeatShowcaseCharacter;
+class SHapbeatShowcaseHud;
+class UHapbeatClip;
+class UHapbeatEventMap;
 class UHapbeatSubsystem;
+struct FHapbeatShowcaseHudCommand;
 
 /** One switchable Showcase zone: the actor class to spawn plus its HUD label. */
 USTRUCT(BlueprintType)
@@ -43,10 +48,18 @@ struct FHapbeatShowcaseZoneEntry
  * braces measure the switcher also calls StopStream() + StopAll() between the
  * two, so nothing a zone failed to stop can outlive it.
  *
- * NOTE ON KEYS: the number keys are reserved by this actor. The zones' own keys
- * (B / F / G / L / H / T / U / J / N / M / V) never collide with them, but
- * BasicExample's F does collide with Z2's F -- keep the Showcase in its own
- * level, not alongside BasicExample.
+ * PLAYER: when the possessed pawn is an AHapbeatShowcaseCharacter (which the
+ * Showcase game mode spawns), switching zones also teleports it to that zone's
+ * IHapbeatShowcaseZone::GetPlayerSpawnRelative() pose and applies the zone's
+ * cursor policy -- Unity ZoneSwitcher.TeleportPlayer + unlockCursorOnEnter. Any
+ * other pawn (the engine's DefaultPawn, e.g. when this actor is dropped into a
+ * bare level) is left alone, so the switcher still works without a player.
+ *
+ * NOTE ON KEYS: the number keys plus Q (manual fire) and P (ping) are reserved
+ * by this actor, and the player character owns WASD / arrows / mouse / Tab. The
+ * zones' own keys (B / F / G / L / H / T / U / J / N / M / V) never collide with
+ * them, but BasicExample's F does collide with Z2's F -- keep the Showcase in
+ * its own level, not alongside BasicExample.
  */
 UCLASS(meta = (DisplayName = "Hapbeat Showcase"))
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseActor : public AActor
@@ -79,6 +92,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hapbeat|Showcase")
 	int32 GetCurrentZone() const { return CurrentZone; }
 
+	/**
+	 * The Event Map the Q key's manual test fire comes from. Defaults to the
+	 * Showcase map that ships with the plugin; a code-built one-entry fallback
+	 * is used if the asset is missing, exactly like each zone does.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
+	TObjectPtr<UHapbeatEventMap> ManualFireEventMapOverride;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -96,6 +117,31 @@ private:
 
 	UHapbeatSubsystem* ResolveSubsystem() const;
 
+	/** The possessed pawn, when it is the Showcase's own character; null otherwise. */
+	AHapbeatShowcaseCharacter* ResolveShowcaseCharacter() const;
+
+	/**
+	 * Teleport the player to the active zone's spawn pose and apply its cursor
+	 * policy. No-op unless the pawn is an AHapbeatShowcaseCharacter.
+	 */
+	void ApplyZonePlayerState();
+
+	/** Resolve the Q-key test entry (from the asset, or a one-entry fallback map). */
+	void BuildManualFireEventMap();
+
+	/** Add the shared Slate guide to the viewport; called once at BeginPlay. */
+	void CreateHud();
+	/** Push the active zone's label / key rows / zone list into the HUD. */
+	void RefreshHudContent();
+
+	void HandleManualFireKey();
+	void HandlePingKey();
+
+	/** PONG handler -- feeds the HUD's round-trip readout. Dynamic delegate, so UFUNCTION. */
+	UFUNCTION()
+	void HandlePong(const FString& Endpoint, int64 RttUs, const FString& DeviceName,
+		const FString& Address, const FString& Firmware);
+
 	// BindKey needs a no-argument member function per key, so there is one thin
 	// forwarder per digit (same explicit style as Z4's five key handlers).
 	void HandleZone1Key();
@@ -108,15 +154,36 @@ private:
 	void HandleZone8Key();
 	void HandleZone9Key();
 
-	/** Fixed on-screen-message keys; 700s so they never collide with a zone's own HUD lines (0/1, 100s..600s). */
-	static constexpr int32 KeyGuideHudLineKey = 700;
-	static constexpr int32 StatusHudLineKey = 701;
 	static constexpr float HudRefreshIntervalSeconds = 0.5f;
 	float HudRefreshTimer = 0.0f;
 
 	/** 1-based index of the displayed zone; 0 = none. */
 	int32 CurrentZone = 0;
 
+	/**
+	 * Zone whose spawn pose / cursor policy has actually been applied to the
+	 * player, 0 = none. The pawn may not be possessed yet when the initial zone
+	 * is shown at BeginPlay, so Tick retries until it is -- otherwise the player
+	 * would spend the whole session standing at the PlayerStart.
+	 */
+	int32 PlayerStateAppliedZone = 0;
+
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> ActiveZoneActor;
+
+	/** Resolved manual-fire map (the override asset, or the built fallback). */
+	UPROPERTY(Transient)
+	TObjectPtr<UHapbeatEventMap> ManualFireEventMap;
+
+	/** Keeps the fallback map's clip alive -- a soft pointer on the entry does not (see FHapbeatSampleLibrary). */
+	UPROPERTY(Transient)
+	TObjectPtr<UHapbeatClip> ManualFireClip;
+
+	FGuid ManualFireEntryId;
+
+	/** The one guide widget for the session; rows are replaced on zone change, the widget is not. */
+	TSharedPtr<SHapbeatShowcaseHud> HudWidget;
+
+	/** True once OnPong was subscribed, so EndPlay only unsubscribes what it added. */
+	bool bPongSubscribed = false;
 };

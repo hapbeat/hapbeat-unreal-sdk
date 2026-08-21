@@ -471,9 +471,14 @@ void AHapbeatShowcaseZ5ChargeShotActor::Tick(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-		TEXT("Z5 Target Range -- Hold V to charge, release to fire"),
-		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	// The Showcase switcher draws a shared Slate key guide covering this, so
+	// only print the line when this zone is running on its own.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+			TEXT("Z5 Target Range -- Hold V to charge, release to fire"),
+			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	}
 
 	FString StatusSuffix = TEXT("");
 	FColor StatusColor = FColor::Silver;
@@ -486,7 +491,31 @@ void AHapbeatShowcaseZ5ChargeShotActor::Tick(float DeltaSeconds)
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
 		FString::Printf(TEXT("Charge=%.2f%s"), LastChargeT, *StatusSuffix),
 		StatusColor, HudRefreshIntervalSeconds * 2.0f);
-	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	// Same reason: the shared HUD has a device / ping footer.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	}
+}
+
+FText AHapbeatShowcaseZ5ChargeShotActor::GetZoneLabel() const
+{
+	return FText::FromString(TEXT("Charge Shot"));
+}
+
+TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ5ChargeShotActor::GetHudCommands() const
+{
+	// Phase 1A keeps V; Unity's hold-LMB blaster lands with the zone rework.
+	TArray<FHapbeatShowcaseHudCommand> Commands;
+	Commands.Add({ FText::FromString(TEXT("V (hold)")), FText::FromString(TEXT("charge, release to fire")) });
+	return Commands;
+}
+
+FTransform AHapbeatShowcaseZ5ChargeShotActor::GetPlayerSpawnRelative() const
+{
+	// As with Z4, Unity's spawn sits at the zone origin because its blaster is
+	// elsewhere in the zone; here the stand is at the origin, so stand back.
+	return FTransform(FRotator::ZeroRotator, FVector(-250.0f, 0.0f, 0.0f));
 }
 
 // =============================================================================

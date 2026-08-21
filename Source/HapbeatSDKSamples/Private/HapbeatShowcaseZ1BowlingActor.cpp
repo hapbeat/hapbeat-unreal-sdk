@@ -276,13 +276,44 @@ void AHapbeatShowcaseZ1BowlingActor::Tick(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-		TEXT("Z1 Bowling -- B: launch ball (pins fire haptics on their own, velocity-scaled)"),
-		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	// The Showcase switcher draws a shared Slate key guide covering this, so
+	// only print the line when this zone is running on its own.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+			TEXT("Z1 Bowling -- B: launch ball (pins fire haptics on their own, velocity-scaled)"),
+			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	}
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
 		FString::Printf(TEXT("Z1: %d pin(s) racked"), PinActors.Num()),
 		FColor::Silver, HudRefreshIntervalSeconds * 2.0f);
-	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	// Same reason: the shared HUD has a device / ping footer.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	}
+}
+
+FText AHapbeatShowcaseZ1BowlingActor::GetZoneLabel() const
+{
+	return FText::FromString(TEXT("Bowling"));
+}
+
+TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ1BowlingActor::GetHudCommands() const
+{
+	// Phase 1A keeps this zone's existing key; the Unity parity pass (LMB to
+	// launch, Space to reset) lands with the rest of the zone rework.
+	TArray<FHapbeatShowcaseHudCommand> Commands;
+	Commands.Add({ FText::FromString(TEXT("B")),
+		FText::FromString(TEXT("launch ball (pins fire haptics themselves, velocity-scaled)")) });
+	return Commands;
+}
+
+FTransform AHapbeatShowcaseZ1BowlingActor::GetPlayerSpawnRelative() const
+{
+	// Unity Showcase.unity: Z1_Bowling/PlayerSpawn at (0, 0, -1.87) m, i.e.
+	// 1.87 m behind the zone origin looking down the lane. Unity -Z is UE -X.
+	return FTransform(FRotator::ZeroRotator, FVector(-187.0f, 0.0f, 0.0f));
 }
 
 // =============================================================================

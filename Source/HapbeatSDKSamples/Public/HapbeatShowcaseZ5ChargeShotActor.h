@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ5ChargeShotActor.generated.h"
 
 class UHapbeatClip;
@@ -52,12 +53,17 @@ class AHapbeatShowcaseZ5ProjectileActor;
  * assets in this sample; see the class .cpp / handoff note "uncertainties").
  */
 UCLASS()
-class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ5ChargeShotActor : public AActor
+class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ5ChargeShotActor : public AActor, public IHapbeatShowcaseZone
 {
 	GENERATED_BODY()
 
 public:
 	AHapbeatShowcaseZ5ChargeShotActor();
+
+	// ---- IHapbeatShowcaseZone ----
+	virtual FText GetZoneLabel() const override;
+	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override;
+	virtual FTransform GetPlayerSpawnRelative() const override;
 
 	/**
 	 * Local offset applied to this zone's own root (mesh + spawned targets +

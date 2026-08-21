@@ -523,9 +523,14 @@ void AHapbeatShowcaseZ3FishingActor::RefreshHud(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-		TEXT("Hapbeat Showcase Z3 Fishing -- H: hook / release the shark"),
-		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	// The Showcase switcher draws a shared Slate key guide covering this, so
+	// only print the line when this zone is running on its own.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+			TEXT("Hapbeat Showcase Z3 Fishing -- H: hook / release the shark"),
+			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
+	}
 
 	float Distance = 0.0f;
 	if (SharkMeshComp != nullptr)
@@ -535,5 +540,28 @@ void AHapbeatShowcaseZ3FishingActor::RefreshHud(float DeltaSeconds)
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
 		FString::Printf(TEXT("Hooked: %s | line: %.0f / %.0f uu"), bHooked ? TEXT("yes") : TEXT("no"), Distance, MaxLineLength),
 		bHooked ? FColor::Orange : FColor::Silver, HudRefreshIntervalSeconds * 2.0f);
-	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	// Same reason: the shared HUD has a device / ping footer.
+	if (!IsOwnedByShowcaseSwitcher(this))
+	{
+		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
+	}
+}
+
+FText AHapbeatShowcaseZ3FishingActor::GetZoneLabel() const
+{
+	return FText::FromString(TEXT("Fishing"));
+}
+
+TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ3FishingActor::GetHudCommands() const
+{
+	TArray<FHapbeatShowcaseHudCommand> Commands;
+	Commands.Add({ FText::FromString(TEXT("H")), FText::FromString(TEXT("hook / release the shark")) });
+	return Commands;
+}
+
+FTransform AHapbeatShowcaseZ3FishingActor::GetPlayerSpawnRelative() const
+{
+	// Unity Showcase.unity: Z3_Fishing/PlayerSpawn at (0, 1, -2) m -- 2 m back
+	// and 1 m up, standing on the pier rather than in the water.
+	return FTransform(FRotator::ZeroRotator, FVector(-200.0f, 0.0f, 100.0f));
 }

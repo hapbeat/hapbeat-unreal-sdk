@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ1BowlingActor.generated.h"
 
 class UHapbeatClip;
@@ -45,12 +46,17 @@ class AHapbeatShowcaseZ1PinActor;
  * rolled off the lane or came to rest downrange.
  */
 UCLASS()
-class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ1BowlingActor : public AActor
+class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ1BowlingActor : public AActor, public IHapbeatShowcaseZone
 {
 	GENERATED_BODY()
 
 public:
 	AHapbeatShowcaseZ1BowlingActor();
+
+	// ---- IHapbeatShowcaseZone ----
+	virtual FText GetZoneLabel() const override;
+	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override;
+	virtual FTransform GetPlayerSpawnRelative() const override;
 
 	/**
 	 * Local offset applied to this zone's own root (lane + ball + pin rack) at

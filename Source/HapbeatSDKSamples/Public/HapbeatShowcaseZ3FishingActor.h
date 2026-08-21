@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ3FishingActor.generated.h"
 
 class AStaticMeshActor;
@@ -59,12 +60,17 @@ class UStaticMeshComponent;
  * the design doc's Faithfulness ledger -- the shark is a scaled Cube.
  */
 UCLASS()
-class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ3FishingActor : public AActor
+class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ3FishingActor : public AActor, public IHapbeatShowcaseZone
 {
 	GENERATED_BODY()
 
 public:
 	AHapbeatShowcaseZ3FishingActor();
+
+	// ---- IHapbeatShowcaseZone ----
+	virtual FText GetZoneLabel() const override;
+	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override;
+	virtual FTransform GetPlayerSpawnRelative() const override;
 
 	/**
 	 * Added to this actor's own placed transform (via the root component) in

@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ4StreamConsoleActor.generated.h"
 
 class UHapbeatClip;
@@ -46,12 +47,18 @@ class UStaticMeshComponent;
  * handoff note's "uncertainties" section for the full discussion.
  */
 UCLASS()
-class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ4StreamConsoleActor : public AActor
+class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ4StreamConsoleActor : public AActor, public IHapbeatShowcaseZone
 {
 	GENERATED_BODY()
 
 public:
 	AHapbeatShowcaseZ4StreamConsoleActor();
+
+	// ---- IHapbeatShowcaseZone ----
+	virtual FText GetZoneLabel() const override;
+	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override;
+	virtual FTransform GetPlayerSpawnRelative() const override;
+	virtual bool WantsCursorUnlocked() const override;
 
 	/**
 	 * Local offset applied to this zone's own root (mesh + everything else in

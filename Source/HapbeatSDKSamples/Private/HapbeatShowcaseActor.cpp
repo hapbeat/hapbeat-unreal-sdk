@@ -1,20 +1,29 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatShowcaseActor.h"
 
+#include "HapbeatClip.h"
+#include "HapbeatEventMap.h"
 #include "HapbeatSampleLibrary.h"
+#include "HapbeatShowcaseCharacter.h"
+#include "HapbeatShowcaseZone.h"
 #include "HapbeatShowcaseZ1BowlingActor.h"
 #include "HapbeatShowcaseZ2DoorActor.h"
 #include "HapbeatShowcaseZ3FishingActor.h"
 #include "HapbeatShowcaseZ4StreamConsoleActor.h"
 #include "HapbeatShowcaseZ5ChargeShotActor.h"
 #include "HapbeatSubsystem.h"
+#include "SHapbeatShowcaseHud.h"
 
+#include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::*
+#include "Kismet/GameplayStatics.h"
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcase, Log, All);
 
@@ -29,6 +38,34 @@ namespace
 		Entry.ZoneClass = ZoneClass;
 		Entry.Label = FText::FromString(Label);
 		return Entry;
+	}
+
+	/**
+	 * The event the Q key fires. Unity wires its "manual_fire" hotkey to one
+	 * fixed EventMap entry -- z5_tar_hit_light, a short, unmistakable one-shot --
+	 * rather than to anything zone-specific (Showcase.unity, HapbeatKeyDispatcher
+	 * binding key 113 -> HapbeatUnityEventTrigger.Fire on entry
+	 * c840e0dd... = showcase-kit / z5_tar_hit_light). Same here, so Q means "is
+	 * the device answering?" in every zone.
+	 */
+	const TCHAR* ManualFireCategory = TEXT("showcase-kit");
+	const TCHAR* ManualFireEventName = TEXT("z5_tar_hit_light");
+	/** From showcase-kit-manifest.json, same value Z5 hardcodes for this event. */
+	constexpr float ManualFireIntensity = 0.45f;
+
+	/** Rows shown in every zone; the zone's own rows follow them. */
+	TArray<FHapbeatShowcaseHudCommand> MakeGlobalHudCommands()
+	{
+		// Mirrors Unity HudGuide._globalHeader, plus Tab (UE needs the cursor
+		// toggle spelled out because PIE starts with the mouse captured).
+		TArray<FHapbeatShowcaseHudCommand> Commands;
+		Commands.Add({ FText::FromString(TEXT("WASD")), FText::FromString(TEXT("move")) });
+		Commands.Add({ FText::FromString(TEXT("Mouse")), FText::FromString(TEXT("look")) });
+		Commands.Add({ FText::FromString(TEXT("1-5")), FText::FromString(TEXT("zone switch")) });
+		Commands.Add({ FText::FromString(TEXT("Q")), FText::FromString(TEXT("manual fire")) });
+		Commands.Add({ FText::FromString(TEXT("P")), FText::FromString(TEXT("ping")) });
+		Commands.Add({ FText::FromString(TEXT("Tab")), FText::FromString(TEXT("cursor lock / release")) });
+		return Commands;
 	}
 }
 
@@ -48,20 +85,62 @@ AHapbeatShowcaseActor::AHapbeatShowcaseActor()
 	Zones.Add(MakeZone(AHapbeatShowcaseZ3FishingActor::StaticClass(), TEXT("Fishing")));
 	Zones.Add(MakeZone(AHapbeatShowcaseZ4StreamConsoleActor::StaticClass(), TEXT("Stream Console")));
 	Zones.Add(MakeZone(AHapbeatShowcaseZ5ChargeShotActor::StaticClass(), TEXT("Charge Shot")));
+
+	// Same authored asset the zones default to, so Q fires through the same
+	// EventMap the rest of the Showcase does.
+	static ConstructorHelpers::FObjectFinder<UHapbeatEventMap> DefaultEventMap(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/EM_Showcase.EM_Showcase"));
+	if (DefaultEventMap.Succeeded())
+	{
+		ManualFireEventMapOverride = DefaultEventMap.Object;
+	}
 }
 
 void AHapbeatShowcaseActor::BeginPlay()
 {
 	Super::BeginPlay();
 
+	BuildManualFireEventMap();
 	BindInput();
+	CreateHud();
+
+	if (UHapbeatSubsystem* Subsystem = ResolveSubsystem())
+	{
+		// The HUD's round-trip readout: Unity's GlobalHotkeys does the same,
+		// subscribing to OnPong and showing the RTT the P key asked for.
+		Subsystem->OnPong.AddDynamic(this, &AHapbeatShowcaseActor::HandlePong);
+		bPongSubscribed = true;
+	}
+
 	ShowZone(InitialZone);
 }
 
 void AHapbeatShowcaseActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (bPongSubscribed)
+	{
+		if (UHapbeatSubsystem* Subsystem = ResolveSubsystem())
+		{
+			Subsystem->OnPong.RemoveDynamic(this, &AHapbeatShowcaseActor::HandlePong);
+		}
+		bPongSubscribed = false;
+	}
+
+	// Take the guide down before the zone, so nothing is left drawing over a
+	// stopped session.
+	if (HudWidget.IsValid())
+	{
+		const UWorld* World = GetWorld();
+		if (UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr)
+		{
+			Viewport->RemoveViewportWidgetContent(HudWidget.ToSharedRef());
+		}
+		HudWidget.Reset();
+	}
+
 	ClearActiveZone();
 	CurrentZone = 0;
+	PlayerStateAppliedZone = 0;
 
 	Super::EndPlay(EndPlayReason);
 }
@@ -96,6 +175,12 @@ void AHapbeatShowcaseActor::BindInput()
 	if (BindCount >= 7) { InputComponent->BindKey(EKeys::Seven, IE_Pressed, this, &AHapbeatShowcaseActor::HandleZone7Key); }
 	if (BindCount >= 8) { InputComponent->BindKey(EKeys::Eight, IE_Pressed, this, &AHapbeatShowcaseActor::HandleZone8Key); }
 	if (BindCount >= 9) { InputComponent->BindKey(EKeys::Nine, IE_Pressed, this, &AHapbeatShowcaseActor::HandleZone9Key); }
+
+	// The two global hotkeys, bound here rather than on a zone because they mean
+	// the same thing everywhere (Unity keeps them on a scene-level
+	// [Hapbeat Event Router] object for the same reason).
+	InputComponent->BindKey(EKeys::Q, IE_Pressed, this, &AHapbeatShowcaseActor::HandleManualFireKey);
+	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &AHapbeatShowcaseActor::HandlePingKey);
 }
 
 void AHapbeatShowcaseActor::ShowZone(int32 OneBasedIndex)
@@ -115,6 +200,11 @@ void AHapbeatShowcaseActor::ShowZone(int32 OneBasedIndex)
 	ClearActiveZone();
 	CurrentZone = Index;
 	SpawnActiveZone();
+
+	// After the spawn: the zone actor is what answers where the player stands
+	// and whether it wants the cursor, and what its key rows are.
+	ApplyZonePlayerState();
+	RefreshHudContent();
 }
 
 void AHapbeatShowcaseActor::ClearActiveZone()
@@ -189,6 +279,17 @@ void AHapbeatShowcaseActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// The player pawn may not exist yet when the initial zone is shown from
+	// BeginPlay (spawning / possession is not ordered against actor BeginPlay),
+	// so keep trying until it does -- otherwise the player would never leave
+	// the PlayerStart. Costs one pawn lookup per frame and stops as soon as it
+	// succeeds; with a non-Showcase pawn it simply never succeeds, which is the
+	// same no-op as before.
+	if (CurrentZone != 0 && PlayerStateAppliedZone != CurrentZone)
+	{
+		ApplyZonePlayerState();
+	}
+
 	HudRefreshTimer -= DeltaSeconds;
 	if (HudRefreshTimer > 0.0f)
 	{
@@ -196,21 +297,171 @@ void AHapbeatShowcaseActor::Tick(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	// One line listing every zone, the active one wrapped in asterisks --
-	// each zone prints its own key guide on its own HUD line below this.
-	FString Guide = TEXT("Showcase");
+	// Only the live number here -- the key rows change on zone switch, not on a
+	// timer, so they are pushed from RefreshHudContent instead.
+	if (HudWidget.IsValid())
+	{
+		const UHapbeatSubsystem* Subsystem = ResolveSubsystem();
+		HudWidget->SetDeviceCount(Subsystem != nullptr ? Subsystem->GetAliveDeviceCount() : 0);
+	}
+}
+
+void AHapbeatShowcaseActor::CreateHud()
+{
+	const UWorld* World = GetWorld();
+	UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr;
+	if (Viewport == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcase, Warning,
+			TEXT("Showcase: no game viewport; the on-screen key guide will not be shown."));
+		return;
+	}
+
+	HudWidget = SNew(SHapbeatShowcaseHud).GlobalCommands(MakeGlobalHudCommands());
+	// ZOrder 0: this is ordinary HUD content, and must sit UNDER the runtime's
+	// address-override panel (ZOrder 100) if a level shows both.
+	Viewport->AddViewportWidgetContent(HudWidget.ToSharedRef(), /*ZOrder=*/0);
+}
+
+void AHapbeatShowcaseActor::RefreshHudContent()
+{
+	if (!HudWidget.IsValid())
+	{
+		return;
+	}
+
+	const IHapbeatShowcaseZone* Zone = Cast<IHapbeatShowcaseZone>(ActiveZoneActor.Get());
+
+	// "[2] Door" -- Unity HudGuide builds the same "[Zone N] Label" title. The
+	// zone's own label wins over the switcher's entry, so a zone dropped in by
+	// hand (or an entry left unlabelled) still names itself correctly.
+	FText Label = Zone != nullptr ? Zone->GetZoneLabel() : FText::GetEmpty();
+	if (Label.IsEmpty() && Zones.IsValidIndex(CurrentZone - 1))
+	{
+		Label = Zones[CurrentZone - 1].Label;
+	}
+	const FText Title = FText::FromString(FString::Printf(TEXT("[%d] %s"),
+		CurrentZone, Label.IsEmpty() ? TEXT("Zone") : *Label.ToString()));
+
+	// One line listing every zone, the active one wrapped in asterisks.
+	FString ZoneList;
 	const int32 ShownCount = FMath::Min(Zones.Num(), MaxSwitchableZones);
 	for (int32 i = 0; i < ShownCount; ++i)
 	{
-		const FString Label = Zones[i].Label.IsEmpty()
+		const FString ZoneLabel = Zones[i].Label.IsEmpty()
 			? FString::Printf(TEXT("Zone %d"), i + 1)
 			: Zones[i].Label.ToString();
-		Guide += (i + 1 == CurrentZone)
-			? FString::Printf(TEXT("  *[%d] %s*"), i + 1, *Label)
-			: FString::Printf(TEXT("  [%d] %s"), i + 1, *Label);
+		ZoneList += (i + 1 == CurrentZone)
+			? FString::Printf(TEXT("*[%d] %s*  "), i + 1, *ZoneLabel)
+			: FString::Printf(TEXT("[%d] %s  "), i + 1, *ZoneLabel);
 	}
-	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey, Guide,
-		FColor::Yellow, HudRefreshIntervalSeconds * 2.0f);
 
-	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey, HudRefreshIntervalSeconds * 2.0f);
+	TArray<FHapbeatShowcaseHudCommand> ZoneCommands;
+	if (Zone != nullptr)
+	{
+		ZoneCommands = Zone->GetHudCommands();
+	}
+
+	HudWidget->SetContent(Title, ZoneCommands, FText::FromString(ZoneList.TrimEnd()));
+}
+
+void AHapbeatShowcaseActor::ApplyZonePlayerState()
+{
+	AHapbeatShowcaseCharacter* Character = ResolveShowcaseCharacter();
+	if (Character == nullptr)
+	{
+		// A DefaultPawn (or no pawn at all): the switcher still works, there is
+		// just nobody to move. Not a warning -- placing this actor in a bare
+		// level is a supported way to look at a zone.
+		return;
+	}
+
+	const IHapbeatShowcaseZone* Zone = Cast<IHapbeatShowcaseZone>(ActiveZoneActor.Get());
+	if (Zone == nullptr)
+	{
+		return;
+	}
+
+	// Zone-relative -> world. Zones spawn at this actor's transform, so this
+	// actor's transform is the zone origin the spawn pose is relative to.
+	FTransform Spawn = Zone->GetPlayerSpawnRelative() * GetActorTransform();
+
+	// The interface's Z is the player's FEET; a capsule is positioned by its
+	// centre, so lift it by the half-height (see GetPlayerSpawnRelative).
+	FVector Location = Spawn.GetLocation();
+	if (const UCapsuleComponent* Capsule = Character->GetCapsuleComponent())
+	{
+		Location.Z += Capsule->GetScaledCapsuleHalfHeight();
+	}
+	Spawn.SetLocation(Location);
+
+	Character->TeleportToSpawn(Spawn);
+	Character->SetCursorUnlocked(Zone->WantsCursorUnlocked());
+
+	// Applied: Tick stops retrying until the next zone change.
+	PlayerStateAppliedZone = CurrentZone;
+}
+
+AHapbeatShowcaseCharacter* AHapbeatShowcaseActor::ResolveShowcaseCharacter() const
+{
+	return Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
+}
+
+void AHapbeatShowcaseActor::BuildManualFireEventMap()
+{
+	ManualFireEventMap = ManualFireEventMapOverride;
+
+	if (ManualFireEventMap == nullptr)
+	{
+		// Same shape as each zone's fallback: load the WAV, keep it alive in a
+		// UPROPERTY (the entry's soft pointer is not a strong reference), and
+		// author the single entry Q needs.
+		ManualFireClip = FHapbeatSampleLibrary::LoadSampleClip(this,
+			TEXT("Showcase/Kit/showcase-kit/stream-clips/z5_tar_hit_light.wav"));
+
+		UHapbeatEventMap* Fallback = NewObject<UHapbeatEventMap>(this);
+		Fallback->Entries.Reset(1);
+		Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
+			EHapticMode::StreamClip, ManualFireCategory, ManualFireEventName,
+			1.0f, /*bLoop=*/false, ManualFireIntensity, ManualFireClip, ManualFireEventName));
+		ManualFireEventMap = Fallback;
+	}
+
+	ManualFireEntryId = FHapbeatSampleLibrary::FindEntryId(
+		ManualFireEventMap, EHapticMode::StreamClip, ManualFireCategory, ManualFireEventName);
+}
+
+void AHapbeatShowcaseActor::HandleManualFireKey()
+{
+	UHapbeatSubsystem* Subsystem = ResolveSubsystem();
+	if (Subsystem == nullptr || ManualFireEventMap == nullptr || !ManualFireEntryId.IsValid())
+	{
+		UE_LOG(LogHapbeatShowcase, Warning,
+			TEXT("Showcase: manual fire (Q) has no event to play."));
+		return;
+	}
+	Subsystem->PlayEntry(ManualFireEventMap, ManualFireEntryId);
+}
+
+void AHapbeatShowcaseActor::HandlePingKey()
+{
+	if (UHapbeatSubsystem* Subsystem = ResolveSubsystem())
+	{
+		Subsystem->Ping();
+		if (HudWidget.IsValid())
+		{
+			// Shows "ping: ..." until the PONG lands, so a dead link is visible
+			// as a reading that never resolves (Unity NotifyPingSent).
+			HudWidget->SetPingPending();
+		}
+	}
+}
+
+void AHapbeatShowcaseActor::HandlePong(const FString& Endpoint, int64 RttUs, const FString& DeviceName,
+	const FString& Address, const FString& Firmware)
+{
+	if (HudWidget.IsValid())
+	{
+		HudWidget->SetRoundTripMs(static_cast<float>(RttUs) / 1000.0f);
+	}
 }

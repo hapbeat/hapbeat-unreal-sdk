@@ -13,6 +13,9 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::*
+#include "Kismet/GameplayStatics.h" // PlaySoundAtLocation
+#include "Materials/MaterialInterface.h"
+#include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ2, Log, All);
@@ -81,10 +84,55 @@ void AHapbeatShowcaseZ2DoorActor::BeginPlay()
 		RootComponent->SetRelativeLocation(FootprintOffset);
 	}
 
+	ApplyShowcaseAssets();
 	BuildEventMap();
 	BindInput();
 
 	SetDoorYaw(0.0f); // Closed
+}
+
+void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
+{
+	if (UStaticMesh* ImportedDoor =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Door")))
+	{
+		if (DoorMesh != nullptr)
+		{
+			// SM_Door is one combined mesh (frame + leaf) whose pivot is wherever
+			// the source model put it, so the hinge line is recovered from bounds:
+			// park the mesh's -X edge on the hinge (Root, the component that is
+			// rotated), centre it on Y, and sit its bottom on the floor. Scale
+			// stays 1 -- the import is already ~175 x 33 x 314 cm, a real door.
+			const FBoxSphereBounds Bounds = ImportedDoor->GetBounds();
+			DoorMesh->SetStaticMesh(ImportedDoor);
+			DoorMesh->SetRelativeScale3D(FVector::OneVector);
+			DoorMesh->SetRelativeLocation(FVector(
+				-(Bounds.Origin.X - Bounds.BoxExtent.X),
+				-Bounds.Origin.Y,
+				-(Bounds.Origin.Z - Bounds.BoxExtent.Z)));
+
+			if (UMaterialInterface* DoorMaterial =
+				FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")))
+			{
+				DoorMesh->SetMaterial(0, DoorMaterial);
+			}
+		}
+	}
+
+	OpenSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_open"));
+	CloseSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_close"));
+	SlamSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_slam"));
+	LockSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_lock"));
+	UnlockSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_unlock"));
+	RattleSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_rattle"));
+}
+
+void AHapbeatShowcaseZ2DoorActor::PlayDoorSound(USoundBase* Sound) const
+{
+	if (Sound != nullptr)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, Sound, GetActorLocation());
+	}
 }
 
 void AHapbeatShowcaseZ2DoorActor::BuildEventMap()
@@ -227,6 +275,7 @@ void AHapbeatShowcaseZ2DoorActor::HandleToggleKey()
 		{
 			OpenTrigger->Fire();
 		}
+		PlayDoorSound(OpenSound);
 		break;
 
 	case EHapbeatZ2DoorState::Open:
@@ -236,6 +285,7 @@ void AHapbeatShowcaseZ2DoorActor::HandleToggleKey()
 		{
 			CloseTrigger->Fire();
 		}
+		PlayDoorSound(CloseSound);
 		break;
 
 	case EHapbeatZ2DoorState::Locked:
@@ -248,6 +298,7 @@ void AHapbeatShowcaseZ2DoorActor::HandleToggleKey()
 		{
 			RattleTrigger->Fire();
 		}
+		PlayDoorSound(RattleSound);
 		break;
 
 	default:
@@ -270,6 +321,7 @@ void AHapbeatShowcaseZ2DoorActor::HandleActionKey()
 		{
 			SlamTrigger->Fire();
 		}
+		PlayDoorSound(SlamSound);
 		break;
 
 	case EHapbeatZ2DoorState::Locked:
@@ -279,6 +331,7 @@ void AHapbeatShowcaseZ2DoorActor::HandleActionKey()
 		{
 			RattleTrigger->Fire();
 		}
+		PlayDoorSound(RattleSound);
 		break;
 
 	default:
@@ -297,6 +350,7 @@ void AHapbeatShowcaseZ2DoorActor::HandleLockKey()
 		{
 			LockTrigger->Fire();
 		}
+		PlayDoorSound(LockSound);
 		break;
 
 	case EHapbeatZ2DoorState::Locked:
@@ -307,6 +361,7 @@ void AHapbeatShowcaseZ2DoorActor::HandleLockKey()
 		{
 			UnlockTrigger->Fire();
 		}
+		PlayDoorSound(UnlockSound);
 		break;
 
 	default:

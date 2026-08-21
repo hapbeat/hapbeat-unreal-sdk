@@ -6,6 +6,7 @@
 #include "HapbeatParameterBinding.h"
 #include "HapbeatSampleLibrary.h"
 #include "HapbeatSequenceComponent.h"
+#include "HapbeatShowcaseCharacter.h"
 
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
@@ -17,7 +18,8 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
-#include "InputCoreTypes.h" // EKeys::H
+#include "InputCoreTypes.h" // EKeys::LeftMouseButton
+#include "Kismet/GameplayStatics.h" // GetPlayerPawn
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
@@ -117,7 +119,7 @@ void AHapbeatShowcaseZ3FishingActor::BeginPlay()
 	BuildEventMapAndHaptics();
 	BindInput();
 
-	PrevRodTipWorldPos = RodTipMeshComp != nullptr ? RodTipMeshComp->GetComponentLocation() : FVector::ZeroVector;
+	PrevRodTipWorldPos = GetRodTipWorldLocation();
 	TimeToNextWanderImpulse = FMath::FRandRange(WanderIntervalMinSeconds, WanderIntervalMaxSeconds);
 }
 
@@ -130,6 +132,15 @@ void AHapbeatShowcaseZ3FishingActor::EndPlay(const EEndPlayReason::Type EndPlayR
 		HookSequenceComp->Stop();
 	}
 
+	// Take the rod out of the player's hand: the character outlives this zone
+	// (the switcher only destroys zones), so a rod left mounted would follow the
+	// player into the next zone.
+	if (AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
+	{
+		Character->UnmountItem();
+	}
+	MountedCharacter.Reset();
+
 	if (SharkActor != nullptr)
 	{
 		SharkActor->Destroy();
@@ -137,6 +148,103 @@ void AHapbeatShowcaseZ3FishingActor::EndPlay(const EEndPlayReason::Type EndPlayR
 	}
 
 	Super::EndPlay(EndPlayReason);
+}
+
+void AHapbeatShowcaseZ3FishingActor::TryDeferredMount()
+{
+	if (bMountAttempted)
+	{
+		return;
+	}
+	if (UGameplayStatics::GetPlayerPawn(this, 0) == nullptr)
+	{
+		return; // nothing possessed yet -- try again next frame
+	}
+	bMountAttempted = true;
+	MountRodOnCharacter();
+	// The tip just moved from the zone's prop to the player's hand; without this
+	// the next frame would read that jump as an enormous rod-tip velocity.
+	PrevRodTipWorldPos = GetRodTipWorldLocation();
+}
+
+void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
+{
+	AHapbeatShowcaseCharacter* Character =
+		Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
+	UStaticMesh* RodMesh = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(
+		TEXT("Meshes"), TEXT("SM_FishingRod"));
+	if (Character == nullptr || RodMesh == nullptr)
+	{
+		// No Showcase character (bare level / default pawn) or no imported rod:
+		// keep this zone's own standing rod props, which is what it did before
+		// there was a player at all.
+		return;
+	}
+
+	FTransform MountPose = AHapbeatShowcaseCharacter::GetDefaultHandMountRelativeTransform();
+	MountPose.SetRotation((MountPose.Rotator() + RodMountExtraRotation).Quaternion());
+	Character->MountItem(RodMesh, MountPose,
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")));
+	MountedCharacter = Character;
+
+	// ~389 cm along its longest axis: the rod length Unity's Showcase instance
+	// works out to (35 x 389 x 25 cm). MountItem takes no scale, so it is set on
+	// the mount component afterwards.
+	if (UStaticMeshComponent* Mount = Character->GetHandMount())
+	{
+		Mount->SetRelativeScale3D(FVector(
+			FHapbeatSampleLibrary::ComputeUniformScaleForLength(RodMesh, 389.0f)));
+	}
+
+	// Where the line hangs from, in the rod's own space. The rod is a long thin
+	// mesh, so its tip is the far end of its longest axis -- which axis that is
+	// depends on how the source model was authored, so read it from the bounds
+	// rather than assuming one.
+	if (!RodTipLocalOffsetOverride.IsNearlyZero())
+	{
+		RodTipLocalOffset = RodTipLocalOffsetOverride;
+	}
+	else
+	{
+		const FBoxSphereBounds Bounds = RodMesh->GetBounds();
+		const FVector Extent = Bounds.BoxExtent;
+		FVector Offset = Bounds.Origin;
+		if (Extent.X >= Extent.Y && Extent.X >= Extent.Z)
+		{
+			Offset.X += Extent.X;
+		}
+		else if (Extent.Y >= Extent.Z)
+		{
+			Offset.Y += Extent.Y;
+		}
+		else
+		{
+			Offset.Z += Extent.Z;
+		}
+		RodTipLocalOffset = Offset;
+	}
+
+	// The zone's own rod props would now be a second, floating rod.
+	if (RodBaseMeshComp != nullptr)
+	{
+		RodBaseMeshComp->SetVisibility(false);
+	}
+	if (RodTipMeshComp != nullptr)
+	{
+		RodTipMeshComp->SetVisibility(false);
+	}
+}
+
+FVector AHapbeatShowcaseZ3FishingActor::GetRodTipWorldLocation() const
+{
+	if (const AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
+	{
+		if (const UStaticMeshComponent* Mount = Character->GetHandMount())
+		{
+			return Mount->GetComponentTransform().TransformPosition(RodTipLocalOffset);
+		}
+	}
+	return RodTipMeshComp != nullptr ? RodTipMeshComp->GetComponentLocation() : GetActorLocation();
 }
 
 void AHapbeatShowcaseZ3FishingActor::SetupVisuals()
@@ -194,8 +302,31 @@ void AHapbeatShowcaseZ3FishingActor::SpawnShark()
 	// AStaticMeshActor's component defaults to Static mobility (fine for level geometry, but a
 	// simulating body must be Movable) -- flip it before enabling physics.
 	SharkMeshComp->SetMobility(EComponentMobility::Movable);
-	SharkMeshComp->SetStaticMesh(SharkMesh);
-	SharkMeshComp->SetRelativeScale3D(FVector(1.6f, 0.55f, 0.45f)); // elongated cube ~1.6 m long -- a "shark" silhouette stand-in
+	if (UStaticMesh* ImportedShark =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Shark")))
+	{
+		SharkMeshComp->SetStaticMesh(ImportedShark);
+		// ~96 cm along its longest axis -- the size Unity's Showcase instance
+		// works out to (69 x 69 x 96 cm).
+		SharkMeshComp->SetRelativeScale3D(FVector(
+			FHapbeatSampleLibrary::ComputeUniformScaleForLength(ImportedShark, 96.0f)));
+		// SM_Shark comes in with four slots named after the source .mtl
+		// (Shark_Main / Shark_Dark / Shark_Light / Eyes); match on the name, and
+		// fall back to the .obj's declaration order if an importer renamed them.
+		FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMeshComp, TEXT("Dark"), 0,
+			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Dark")));
+		FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMeshComp, TEXT("Main"), 1,
+			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Main")));
+		FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMeshComp, TEXT("Light"), 2,
+			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Light")));
+		FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMeshComp, TEXT("Eyes"), 3,
+			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Eyes")));
+	}
+	else
+	{
+		SharkMeshComp->SetStaticMesh(SharkMesh);
+		SharkMeshComp->SetRelativeScale3D(FVector(1.6f, 0.55f, 0.45f)); // elongated cube ~1.6 m long -- a "shark" silhouette stand-in
+	}
 	SharkMeshComp->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
 	SharkMeshComp->SetSimulatePhysics(true);
 	// A swimming creature, not a sinking prop -- deliberate divergence from FishingController.cs's
@@ -205,7 +336,12 @@ void AHapbeatShowcaseZ3FishingActor::SpawnShark()
 	SharkMeshComp->SetLinearDamping(SwimLinearDamping);
 	SharkMeshComp->SetAngularDamping(SwimAngularDamping);
 
-	TintMesh(SharkMeshComp, FLinearColor(0.35f, 0.37f, 0.4f, 1.0f));
+	// The stand-in tint is only meaningful on the primitive fallback; the imported
+	// shark already carries its own materials.
+	if (SharkMeshComp->GetStaticMesh() == SharkMesh)
+	{
+		TintMesh(SharkMeshComp, FLinearColor(0.35f, 0.37f, 0.4f, 1.0f));
+	}
 
 	SharkHomeWorldLocation = SharkActor->GetActorLocation();
 }
@@ -319,12 +455,20 @@ void AHapbeatShowcaseZ3FishingActor::BindInput()
 		return;
 	}
 
-	InputComponent->BindKey(EKeys::H, IE_Pressed, this, &AHapbeatShowcaseZ3FishingActor::HandleHKey);
+	// Hold to hook, release to let go -- Unity FishingController.HandleInput's
+	// leftButton.wasPressedThisFrame / wasReleasedThisFrame pair, not a toggle.
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AHapbeatShowcaseZ3FishingActor::HandleFirePressed);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &AHapbeatShowcaseZ3FishingActor::HandleFireReleased);
 }
 
-void AHapbeatShowcaseZ3FishingActor::HandleHKey()
+void AHapbeatShowcaseZ3FishingActor::HandleFirePressed()
 {
-	SetHooked(!bHooked);
+	SetHooked(true);
+}
+
+void AHapbeatShowcaseZ3FishingActor::HandleFireReleased()
+{
+	SetHooked(false);
 }
 
 void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
@@ -344,7 +488,7 @@ void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 		// "_object.position = rodTip.position + Vector3.down * maxLineLength". ETeleportType::
 		// ResetPhysics re-syncs the simulating body's transform cleanly instead of fighting the
 		// solver with an ordinary (non-teleporting) SetWorldLocation.
-		const FVector RodTipPos = RodTipMeshComp->GetComponentLocation();
+		const FVector RodTipPos = GetRodTipWorldLocation();
 		const FVector SnapPos = RodTipPos + FVector::DownVector * MaxLineLength;
 		SharkMeshComp->SetWorldLocation(SnapPos, false, nullptr, ETeleportType::ResetPhysics);
 		SharkMeshComp->SetPhysicsLinearVelocity(FVector::ZeroVector);
@@ -359,6 +503,13 @@ void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 		SharkMeshComp->SetLinearDamping(SwimLinearDamping);
 		SharkMeshComp->SetAngularDamping(SwimAngularDamping);
 
+		// Unity FishingController.Detach() snaps the object back to its rest pose,
+		// so every hook starts from the same place instead of from wherever the
+		// last one left it drifting.
+		SharkMeshComp->SetWorldLocation(SharkHomeWorldLocation, false, nullptr, ETeleportType::ResetPhysics);
+		SharkMeshComp->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		SharkMeshComp->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+
 		if (HookSequenceComp != nullptr)
 		{
 			HookSequenceComp->Stop(); // Phase 3: stop the loop, then (after StopShotDelay) the release one-shot
@@ -370,10 +521,12 @@ void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (SharkMeshComp == nullptr || RodTipMeshComp == nullptr)
+	if (SharkMeshComp == nullptr)
 	{
 		return; // setup failed (see the BeginPlay warnings above); nothing to simulate
 	}
+
+	TryDeferredMount();
 
 	ElapsedTimeSeconds += DeltaSeconds;
 	UpdateRodTipSway(DeltaSeconds);
@@ -388,16 +541,21 @@ void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
 
 void AHapbeatShowcaseZ3FishingActor::UpdateRodTipSway(float DeltaSeconds)
 {
-	// A gentle, ever-present idle sway -- gives the taut-line inertia transfer (see
-	// UpdateHookedLinePhysics) a non-zero rod-tip velocity to work with even with no player
-	// input driving the rod (this zone has no camera/pawn dependency; see the class comment).
-	const FVector Sway(
-		FMath::Sin(ElapsedTimeSeconds * 0.6f) * RodTipSwayAmplitude,
-		FMath::Cos(ElapsedTimeSeconds * 0.45f) * RodTipSwayAmplitude * 0.6f,
-		FMath::Sin(ElapsedTimeSeconds * 0.33f) * RodTipSwayAmplitude * 0.35f);
-	RodTipMeshComp->SetRelativeLocation(RodTipBaseRelativeLocation + Sway);
+	// Optional idle sway: a rod held by the player already moves because the view
+	// moves (Unity's only source of rod-tip velocity), so this is only useful for
+	// a zone standing on its own -- hence off by default.
+	if (bEnableRodTipSway && RodTipMeshComp != nullptr && !MountedCharacter.IsValid())
+	{
+		const FVector Sway(
+			FMath::Sin(ElapsedTimeSeconds * 0.6f) * RodTipSwayAmplitude,
+			FMath::Cos(ElapsedTimeSeconds * 0.45f) * RodTipSwayAmplitude * 0.6f,
+			FMath::Sin(ElapsedTimeSeconds * 0.33f) * RodTipSwayAmplitude * 0.35f);
+		RodTipMeshComp->SetRelativeLocation(RodTipBaseRelativeLocation + Sway);
+	}
 
-	const FVector CurWorldPos = RodTipMeshComp->GetComponentLocation();
+	// Measured from the tip's world motion either way, so a hand-held rod feeds
+	// the tension model exactly as a swaying prop one does.
+	const FVector CurWorldPos = GetRodTipWorldLocation();
 	RodTipVelocity = DeltaSeconds > KINDA_SMALL_NUMBER
 		? (CurWorldPos - PrevRodTipWorldPos) / DeltaSeconds
 		: FVector::ZeroVector;
@@ -406,6 +564,12 @@ void AHapbeatShowcaseZ3FishingActor::UpdateRodTipSway(float DeltaSeconds)
 
 void AHapbeatShowcaseZ3FishingActor::UpdateSharkWander(float DeltaSeconds)
 {
+	if (!bEnableSharkWander)
+	{
+		// Unity's target does nothing until it is pulled; that is the default here too.
+		return;
+	}
+
 	// Discrete, occasional kick -- a fixed real-time cadence (not frame-rate scaled: a "burst"
 	// should feel the same regardless of framerate, and the interval itself is already real-time
 	// based via the DeltaSeconds countdown).
@@ -436,7 +600,7 @@ void AHapbeatShowcaseZ3FishingActor::UpdateSharkWander(float DeltaSeconds)
 
 void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 {
-	const FVector RodTipPos = RodTipMeshComp->GetComponentLocation();
+	const FVector RodTipPos = GetRodTipWorldLocation();
 	const FVector SharkPos = SharkMeshComp->GetComponentLocation();
 	const FVector ToShark = SharkPos - RodTipPos;
 	const float Dist = ToShark.Size();
@@ -494,8 +658,9 @@ void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 
 	SharkMeshComp->SetPhysicsLinearVelocity(Velocity);
 
-	// Auto-release: the line snaps under too much tension (master spec: "tension exceeds a break threshold").
-	if (Overshoot > BreakDistance)
+	// Auto-release when the line is overstretched. Unity has no such rule (you let
+	// go when you let go), so this is opt-in.
+	if (bEnableLineBreak && Overshoot > BreakDistance)
 	{
 		SetHooked(false);
 	}
@@ -503,11 +668,7 @@ void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 
 void AHapbeatShowcaseZ3FishingActor::DrawLineVisual() const
 {
-	if (RodTipMeshComp == nullptr)
-	{
-		return;
-	}
-	const FVector RodTipPos = RodTipMeshComp->GetComponentLocation();
+	const FVector RodTipPos = GetRodTipWorldLocation();
 	const FVector EndPos = (bHooked && SharkMeshComp != nullptr)
 		? SharkMeshComp->GetComponentLocation()
 		: RodTipPos + FVector::DownVector * MaxLineLength;
@@ -528,14 +689,14 @@ void AHapbeatShowcaseZ3FishingActor::RefreshHud(float DeltaSeconds)
 	if (!IsOwnedByShowcaseSwitcher(this))
 	{
 		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-			TEXT("Hapbeat Showcase Z3 Fishing -- H: hook / release the shark"),
+			TEXT("Hapbeat Showcase Z3 Fishing -- hold LMB: hook the shark, release: let go"),
 			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
 	}
 
 	float Distance = 0.0f;
 	if (SharkMeshComp != nullptr)
 	{
-		Distance = FVector::Dist(SharkMeshComp->GetComponentLocation(), RodTipMeshComp->GetComponentLocation());
+		Distance = FVector::Dist(SharkMeshComp->GetComponentLocation(), GetRodTipWorldLocation());
 	}
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
 		FString::Printf(TEXT("Hooked: %s | line: %.0f / %.0f uu"), bHooked ? TEXT("yes") : TEXT("no"), Distance, MaxLineLength),
@@ -555,7 +716,8 @@ FText AHapbeatShowcaseZ3FishingActor::GetZoneLabel() const
 TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ3FishingActor::GetHudCommands() const
 {
 	TArray<FHapbeatShowcaseHudCommand> Commands;
-	Commands.Add({ FText::FromString(TEXT("H")), FText::FromString(TEXT("hook / release the shark")) });
+	Commands.Add({ FText::FromString(TEXT("LMB (hold)")),
+		FText::FromString(TEXT("hook the shark; release to let go")) });
 	return Commands;
 }
 

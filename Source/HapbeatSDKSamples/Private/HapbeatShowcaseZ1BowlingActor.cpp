@@ -5,6 +5,7 @@
 #include "HapbeatCollisionTriggerComponent.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatSampleLibrary.h"
+#include "HapbeatShowcaseCharacter.h"
 
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
@@ -13,8 +14,10 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::*
+#include "Kismet/GameplayStatics.h" // PlaySoundAtLocation / GetPlayerPawn
+#include "Materials/MaterialInterface.h"
 #include "PhysicsEngine/BodyInstance.h" // BodyInstance.bNotifyRigidBodyCollision (pre-BeginPlay flag set)
-#include "TimerManager.h"
+#include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ1, Log, All);
@@ -104,6 +107,7 @@ void AHapbeatShowcaseZ1BowlingActor::BeginPlay()
 		BallMesh->SetSimulatePhysics(true);
 	}
 
+	ApplyShowcaseAssets();
 	BuildEventMap();
 	SpawnPinRack();
 	BindInput();
@@ -111,10 +115,6 @@ void AHapbeatShowcaseZ1BowlingActor::BeginPlay()
 
 void AHapbeatShowcaseZ1BowlingActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (UWorld* World = GetWorld())
-	{
-		World->GetTimerManager().ClearTimer(RespawnTimer);
-	}
 	for (AHapbeatShowcaseZ1PinActor* Pin : PinActors)
 	{
 		if (IsValid(Pin))
@@ -123,8 +123,32 @@ void AHapbeatShowcaseZ1BowlingActor::EndPlay(const EEndPlayReason::Type EndPlayR
 		}
 	}
 	PinActors.Reset();
+	PinRestTransforms.Reset();
 
 	Super::EndPlay(EndPlayReason);
+}
+
+void AHapbeatShowcaseZ1BowlingActor::ApplyShowcaseAssets()
+{
+	// The lane and the ball keep their engine primitive shapes (a box and a
+	// sphere are already the right forms) and only take the imported materials;
+	// the pins swap mesh AND material, which happens per pin in SpawnPinRack.
+	if (UMaterialInterface* LaneMaterial =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingLane")))
+	{
+		if (LaneMesh != nullptr)
+		{
+			LaneMesh->SetMaterial(0, LaneMaterial);
+		}
+	}
+	if (UMaterialInterface* BallMaterial =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingBall")))
+	{
+		if (BallMesh != nullptr)
+		{
+			BallMesh->SetMaterial(0, BallMaterial);
+		}
+	}
 }
 
 void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
@@ -181,20 +205,27 @@ void AHapbeatShowcaseZ1BowlingActor::SpawnPinRack()
 		FVector2D(RackApexX + PinRowSpacing * 2.0f, 0.0f),
 		FVector2D(RackApexX + PinRowSpacing * 2.0f, PinLaneSpacing),
 	};
-	const float PinZ = PinHeight * 0.5f;
-
-	FActorSpawnParameters Params;
-	Params.Owner = this;
-	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	// Optional imported art, resolved once for the whole rack.
+	UStaticMesh* ImportedPin = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(
+		TEXT("Meshes"), TEXT("SM_BowlingPin"));
+	UMaterialInterface* PinMaterial = FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(
+		TEXT("Materials"), TEXT("MI_DefaultMaterial"));
+	USoundBase* PinHitSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(
+		TEXT("Sounds"), TEXT("S_z1_pin_hit"));
 
 	PinActors.Reset(RackLayout.Num());
+	PinRestTransforms.Reset(RackLayout.Num());
 	for (const FVector2D& LocalXY : RackLayout)
 	{
-		const FVector SpawnLocation = GetActorLocation()
-			+ GetActorRotation().RotateVector(FVector(LocalXY.X, LocalXY.Y, PinZ));
-
-		AHapbeatShowcaseZ1PinActor* Pin = World->SpawnActor<AHapbeatShowcaseZ1PinActor>(
-			SpawnLocation, GetActorRotation(), Params);
+		// DEFERRED spawn, so the mesh swap and the trigger wiring both land
+		// BEFORE the pin's BeginPlay: BeginPlay is where the pin starts simulating
+		// physics (swapping the mesh afterwards would rebuild the body it just
+		// created) and where its HitTrigger reads the EventMap it was given.
+		AHapbeatShowcaseZ1PinActor* Pin = World->SpawnActorDeferred<AHapbeatShowcaseZ1PinActor>(
+			AHapbeatShowcaseZ1PinActor::StaticClass(),
+			FTransform(GetActorRotation(), GetActorLocation()),
+			/*Owner=*/this, /*Instigator=*/nullptr,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 		if (Pin == nullptr || Pin->HitTrigger == nullptr)
 		{
 			UE_LOG(LogHapbeatShowcaseZ1, Warning, TEXT("Z1: failed to spawn/wire a pin."));
@@ -202,7 +233,17 @@ void AHapbeatShowcaseZ1BowlingActor::SpawnPinRack()
 		}
 		Pin->HitTrigger->EventMap = EventMap;
 		Pin->HitTrigger->EntryId = PinHitEntryId;
+		Pin->HitSound = PinHitSound;
+
+		// The mesh swap decides how high the actor origin has to sit for the pin
+		// to stand on the floor, so it happens BEFORE the final placement.
+		const float PinZ = Pin->ApplyPinMesh(ImportedPin, PinMaterial, PinMeshHeight);
+		const FTransform RackPose(GetActorRotation(),
+			GetActorLocation() + GetActorRotation().RotateVector(FVector(LocalXY.X, LocalXY.Y, PinZ)));
+		Pin->FinishSpawning(RackPose);
+
 		PinActors.Add(Pin);
+		PinRestTransforms.Add(RackPose);
 	}
 }
 
@@ -224,7 +265,29 @@ void AHapbeatShowcaseZ1BowlingActor::BindInput()
 		return;
 	}
 
-	InputComponent->BindKey(EKeys::B, IE_Pressed, this, &AHapbeatShowcaseZ1BowlingActor::HandleLaunchKey);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AHapbeatShowcaseZ1BowlingActor::HandleLaunchKey);
+	InputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &AHapbeatShowcaseZ1BowlingActor::HandleResetKey);
+}
+
+FVector AHapbeatShowcaseZ1BowlingActor::ResolveLaunchDirection() const
+{
+	if (const AHapbeatShowcaseCharacter* Character =
+		Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0)))
+	{
+		// Flattened onto the ground plane so looking up or down changes where the
+		// ball goes, never whether it leaves the lane. Unity:
+		// Vector3.ProjectOnPlane(_aimReference.forward, Vector3.up).
+		FVector Forward = Character->GetViewTransform().GetRotation().GetForwardVector();
+		Forward.Z = 0.0f;
+		if (!Forward.Normalize())
+		{
+			// Looking straight up or down: no horizontal component to aim with.
+			return GetActorForwardVector();
+		}
+		return Forward;
+	}
+	// Zone placed on its own, with the engine's default pawn or none at all.
+	return GetActorForwardVector();
 }
 
 void AHapbeatShowcaseZ1BowlingActor::HandleLaunchKey()
@@ -238,13 +301,23 @@ void AHapbeatShowcaseZ1BowlingActor::HandleLaunchKey()
 	// AddImpulse with bVelChange=true adds directly to velocity (mass-independent),
 	// matching Unity BallLauncher.Launch()'s direct `_ball.linearVelocity = dir *
 	// _launchSpeed;` assignment onto a ball that was just zeroed by ResetBallToSpawn.
-	BallMesh->AddImpulse(GetActorForwardVector() * LaunchSpeed, NAME_None, /*bVelChange=*/true);
+	BallMesh->AddImpulse(ResolveLaunchDirection() * LaunchSpeed, NAME_None, /*bVelChange=*/true);
+}
 
-	if (UWorld* World = GetWorld())
+void AHapbeatShowcaseZ1BowlingActor::HandleResetKey()
+{
+	ResetBallToSpawn();
+	ResetPinsToRack();
+}
+
+void AHapbeatShowcaseZ1BowlingActor::ResetPinsToRack()
+{
+	for (int32 Index = 0; Index < PinActors.Num() && Index < PinRestTransforms.Num(); ++Index)
 	{
-		World->GetTimerManager().ClearTimer(RespawnTimer);
-		World->GetTimerManager().SetTimer(RespawnTimer, this,
-			&AHapbeatShowcaseZ1BowlingActor::ResetBallToSpawn, RespawnDelaySeconds, /*bLoop=*/false);
+		if (AHapbeatShowcaseZ1PinActor* Pin = PinActors[Index])
+		{
+			Pin->ResetToTransform(PinRestTransforms[Index]);
+		}
 	}
 }
 
@@ -281,7 +354,7 @@ void AHapbeatShowcaseZ1BowlingActor::Tick(float DeltaSeconds)
 	if (!IsOwnedByShowcaseSwitcher(this))
 	{
 		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-			TEXT("Z1 Bowling -- B: launch ball (pins fire haptics on their own, velocity-scaled)"),
+			TEXT("Z1 Bowling -- LMB: launch ball / Space: reset (pins fire haptics on their own, velocity-scaled)"),
 			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
 	}
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
@@ -301,11 +374,12 @@ FText AHapbeatShowcaseZ1BowlingActor::GetZoneLabel() const
 
 TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ1BowlingActor::GetHudCommands() const
 {
-	// Phase 1A keeps this zone's existing key; the Unity parity pass (LMB to
-	// launch, Space to reset) lands with the rest of the zone rework.
+	// Unity HudGuide's Z1 row: "LMB | Launch ball" + "Space | Reset".
 	TArray<FHapbeatShowcaseHudCommand> Commands;
-	Commands.Add({ FText::FromString(TEXT("B")),
+	Commands.Add({ FText::FromString(TEXT("LMB")),
 		FText::FromString(TEXT("launch ball (pins fire haptics themselves, velocity-scaled)")) });
+	Commands.Add({ FText::FromString(TEXT("Space")),
+		FText::FromString(TEXT("reset ball and pin rack")) });
 	return Commands;
 }
 
@@ -364,5 +438,91 @@ void AHapbeatShowcaseZ1PinActor::BeginPlay()
 	{
 		PinMesh->SetSimulatePhysics(true);
 		PinMesh->SetNotifyRigidBodyCollision(true); // required for OnComponentHit to fire
+		// The haptic side is already handled by HitTrigger; this is only the SFX,
+		// which Unity keeps in its own CollisionAudio component for the same reason.
+		PinMesh->OnComponentHit.AddDynamic(this, &AHapbeatShowcaseZ1PinActor::HandlePinHit);
 	}
+}
+
+float AHapbeatShowcaseZ1PinActor::ApplyPinMesh(UStaticMesh* Mesh, UMaterialInterface* Material, float DesiredHeight)
+{
+	if (PinMesh == nullptr)
+	{
+		return 0.0f;
+	}
+
+	if (Mesh != nullptr)
+	{
+		const FBoxSphereBounds Bounds = Mesh->GetBounds();
+		const float SourceHeight = FMath::Max(Bounds.BoxExtent.Z * 2.0f, KINDA_SMALL_NUMBER);
+		// Uniform, so the pin keeps its proportions -- the imported mesh is already
+		// pin-shaped, only its absolute size differs from Unity's rack.
+		const float Scale = DesiredHeight / SourceHeight;
+		PinMesh->SetStaticMesh(Mesh);
+		PinMesh->SetRelativeScale3D(FVector(Scale));
+		if (Material != nullptr)
+		{
+			PinMesh->SetMaterial(0, Material);
+		}
+		return -(Bounds.Origin.Z - Bounds.BoxExtent.Z) * Scale;
+	}
+
+	// Fallback cylinder: same computation against whatever mesh is on it, which
+	// keeps one rule for both paths instead of a hardcoded half-height.
+	if (const UStaticMesh* Current = PinMesh->GetStaticMesh())
+	{
+		const FBoxSphereBounds Bounds = Current->GetBounds();
+		const FVector Scale3D = PinMesh->GetRelativeScale3D();
+		return -(Bounds.Origin.Z - Bounds.BoxExtent.Z) * Scale3D.Z;
+	}
+	return 0.0f;
+}
+
+void AHapbeatShowcaseZ1PinActor::ResetToTransform(const FTransform& RestTransform)
+{
+	// ResetPhysics: teleport AND clear the body's momentum, so a knocked-over pin
+	// comes back upright and still instead of continuing its tumble.
+	SetActorTransform(RestTransform, false, nullptr, ETeleportType::ResetPhysics);
+	if (PinMesh != nullptr && PinMesh->IsSimulatingPhysics())
+	{
+		PinMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		PinMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	}
+}
+
+void AHapbeatShowcaseZ1PinActor::HandlePinHit(UPrimitiveComponent* HitComponent, AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent, FVector NormalImpulse, const FHitResult& Hit)
+{
+	if (HitSound == nullptr || HitComponent == nullptr)
+	{
+		return;
+	}
+
+	const UWorld* World = GetWorld();
+	const float Now = World != nullptr ? World->GetTimeSeconds() : 0.0f;
+	if (Now - LastHitSoundTime < HitSoundCooldownSeconds)
+	{
+		return;
+	}
+
+	// Closing speed between the two bodies -- UE's counterpart of Unity's
+	// Collision.relativeVelocity. UE reports the hit after the solver has already
+	// resolved it, so this reads slightly lower than Unity's pre-impact value;
+	// the velocity-to-volume curve is a feel mapping, so that is acceptable.
+	FVector RelativeVelocity = HitComponent->GetPhysicsLinearVelocity();
+	if (OtherComponent != nullptr && OtherComponent->IsSimulatingPhysics())
+	{
+		RelativeVelocity -= OtherComponent->GetPhysicsLinearVelocity();
+	}
+	const float Speed = RelativeVelocity.Size();
+	if (Speed < HitSoundMinSpeed)
+	{
+		return;
+	}
+
+	const float Alpha = FMath::Clamp(
+		(Speed - HitSoundMinSpeed) / (HitSoundMaxSpeed - HitSoundMinSpeed), 0.0f, 1.0f);
+	const float Volume = FMath::Lerp(HitSoundMinVolume, 1.0f, Alpha);
+	UGameplayStatics::PlaySoundAtLocation(this, HitSound, GetActorLocation(), Volume);
+	LastHitSoundTime = Now;
 }

@@ -6,6 +6,7 @@
 #include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ3FishingActor.generated.h"
 
+class AHapbeatShowcaseCharacter;
 class AStaticMeshActor;
 class UHapbeatClip;
 class UHapbeatEventMap;
@@ -15,14 +16,23 @@ class UStaticMeshComponent;
 
 /**
  * Z3 Fishing -- the physics-heavy Showcase zone. A rod dangles a line with a
- * fixed max length over a water plane; a "shark" swims freely nearby (periodic
- * wander impulses -- see UpdateSharkWander). Pressing H hooks it: while the
- * line is taut (distance to the rod tip >= MaxLineLength) the SAME line-
- * tension model as the Unity SDK's FishingController.cs applies -- the rod
- * tip's own velocity transfers into the shark as inertia, and the shark is
- * pulled back toward the max-length sphere (see UpdateHookedLinePhysics).
- * Pressing H again, or the line breaking under too much tension
- * (Dist - MaxLineLength > BreakDistance), releases it.
+ * fixed max length over a water plane, and a shark hangs in the water nearby.
+ * HOLDING THE LEFT MOUSE BUTTON hooks it and RELEASING lets go -- Unity
+ * FishingController.cs's LMB-hold, not a toggle. While the line is taut
+ * (distance to the rod tip >= MaxLineLength) the SAME line-tension model as
+ * FishingController.cs applies: the rod tip's own velocity transfers into the
+ * shark as inertia, and the shark is pulled back toward the max-length sphere
+ * (see UpdateHookedLinePhysics).
+ *
+ * When the possessed pawn is an AHapbeatShowcaseCharacter the rod is put in its
+ * hand mount (Unity CameraFollowMount) and the rod tip -- the anchor the whole
+ * tension model hangs off -- rides with the view. Without such a pawn the zone
+ * falls back to its own rod props standing in the scene, so it still works when
+ * dropped into a bare level.
+ *
+ * Three behaviours this zone once had unconditionally (target wander, rod-tip
+ * sway, line breaking) are UE-side additions Unity does not have, and are now
+ * off by default -- see the bEnable* switches.
  *
  * Haptics: a UHapbeatSequenceComponent (3-phase: hook-start one-shot / hook
  * loop / hook-release one-shot) plus a UHapbeatParameterBinding
@@ -54,10 +64,10 @@ class UStaticMeshComponent;
  * distance/speed constant below is the Unity value x100 (documented per
  * field); dimensionless ratios (RodInertiaFactor) are unchanged.
  *
- * Audio is intentionally out of scope (haptics only) -- see
- * AHapbeatBasicExampleActor's class comment for the same USoundWave-import
- * rationale. Visuals are engine-primitive meshes (Cube/Sphere/Cylinder), per
- * the design doc's Faithfulness ledger -- the shark is a scaled Cube.
+ * Audio: none, matching Unity's Z3, which has no SFX either -- the only thing
+ * this zone makes is haptics. Visuals use the Showcase's imported SM_Shark /
+ * SM_FishingRod when that optional content is present and fall back to engine
+ * primitives (the shark becomes a scaled Cube) when it is not.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ3FishingActor : public AActor, public IHapbeatShowcaseZone
@@ -119,13 +129,51 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0"))
 	float RadialDampingFactor = 5.0f;
 
-	/** Extra distance (uu) beyond MaxLineLength that snaps the line and auto-releases the hook ("tension exceeds a break threshold"). */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0"))
+	/** Extra distance (uu) beyond MaxLineLength that snaps the line and auto-releases the hook. Off by default -- see bEnableLineBreak. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0", EditCondition = "bEnableLineBreak"))
 	float BreakDistance = 60.0f;
 
-	/** Sway amplitude (uu) for the rod tip's idle motion -- gives the taut line rod-tip velocity to transfer even with no player input. */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0"))
+	/** Sway amplitude (uu) for the rod tip's idle motion. Off by default -- see bEnableRodTipSway. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0", EditCondition = "bEnableRodTipSway"))
 	float RodTipSwayAmplitude = 40.0f;
+
+	// ---- UE-only extras, all OFF by default ----
+	//
+	// Unity's Z3 is deliberately plainer than this zone grew to be: the rod is
+	// held by the player, the target just hangs there, and nothing snaps. These
+	// three switches are UE-side additions that used to be always on; they are
+	// kept (they are genuinely nicer to look at when the zone is placed on its
+	// own without a player) but default to false so the shipped Showcase behaves
+	// exactly like Unity's. Turn them on per instance in the details panel.
+
+	/** Idle wander impulses on the target. Unity's target is inert until you pull it. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Extras")
+	bool bEnableSharkWander = false;
+
+	/** Procedural rod-tip sway. Unity's rod moves only because the player's hand moves. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Extras")
+	bool bEnableRodTipSway = false;
+
+	/** Auto-release when the line is overstretched. Unity has no line-break rule. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Extras")
+	bool bEnableLineBreak = false;
+
+	/**
+	 * Extra rotation applied on top of the default hand-mount pose, to correct
+	 * for whichever way SM_FishingRod's authored axes point. Exposed rather than
+	 * hardcoded because the correction is a property of the imported asset, and
+	 * it can be dialled in from the details panel without a rebuild.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
+	FRotator RodMountExtraRotation = FRotator::ZeroRotator;
+
+	/**
+	 * Rod-tip position in the mounted rod's local space. Left at zero (the
+	 * default) the tip is derived from SM_FishingRod's bounds: the far end along
+	 * the mesh's longest axis. Set it non-zero to override that guess.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
+	FVector RodTipLocalOffsetOverride = FVector::ZeroVector;
 
 	// ---- Shark "swims" behavior (not in FishingController.cs -- this zone's own addition per the master spec: "swims (randomized wander force in Tick)") ----
 
@@ -174,10 +222,31 @@ private:
 	/** Build the transient EventMap used when no asset is assigned. */
 	UHapbeatEventMap* BuildFallbackEventMap();
 
-	/** EnableInput on the first PlayerController found (mirrors AHapbeatBasicExampleActor's pattern) and bind H. */
+	/** EnableInput on the first PlayerController found (mirrors AHapbeatBasicExampleActor's pattern) and bind the mouse button. */
 	void BindInput();
 
-	void HandleHKey();
+	/**
+	 * Put SM_FishingRod in the player's hand mount and hide this zone's own rod
+	 * props, so the rod follows the view the way Unity's CameraFollowMount does.
+	 * No-op (props stay visible, rod stays where the zone put it) when the
+	 * possessed pawn is not an AHapbeatShowcaseCharacter or the mesh is absent.
+	 */
+	void MountRodOnCharacter();
+
+	/**
+	 * One deferred attempt at MountRodOnCharacter(), made on the first Tick that
+	 * has a player pawn to look at. WHY NOT IN BeginPlay: a zone spawned by the
+	 * Showcase switcher can begin play before the pawn is possessed (the switcher
+	 * has the same race for the spawn pose, which is why it retries in Tick), and
+	 * a mount attempt made too early would silently leave the rod on the floor.
+	 */
+	void TryDeferredMount();
+
+	/** World position of the rod's tip: the mounted rod's far end, or the zone's own tip marker. */
+	FVector GetRodTipWorldLocation() const;
+
+	void HandleFirePressed();  // left mouse down -- hook
+	void HandleFireReleased(); // left mouse up -- release
 
 	/** Toggle the hook: fires/stops the sequence, swaps the shark's damping, and (on hook) snaps it to tether range. No-op if already in that state. */
 	void SetHooked(bool bNewHooked);
@@ -264,6 +333,16 @@ private:
 	// ---- runtime state ----
 
 	bool bHooked = false;
+
+	/** The character carrying the rod, when there is one; drives GetRodTipWorldLocation(). */
+	TWeakObjectPtr<AHapbeatShowcaseCharacter> MountedCharacter;
+
+	/** True once the deferred mount attempt has been made (successful or not). */
+	bool bMountAttempted = false;
+
+	/** Rod-tip offset in the mounted rod's local space (bounds-derived, or the override). */
+	FVector RodTipLocalOffset = FVector::ZeroVector;
+
 	float ElapsedTimeSeconds = 0.0f;
 	float TimeToNextWanderImpulse = 0.0f;
 	FVector PrevRodTipWorldPos = FVector::ZeroVector;

@@ -4,7 +4,9 @@
 #include "HapbeatClip.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatSubsystem.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Interfaces/IPluginManager.h"
@@ -102,6 +104,67 @@ FGuid FHapbeatSampleLibrary::FindEntryId(const UHapbeatEventMap* Map, EHapticMod
 		TEXT("FindEntryId: EventMap '%s' has no entry for '%s' in the requested mode; that event will not fire."),
 		*GetNameSafe(Map), *WantedEventId);
 	return FGuid();
+}
+
+UObject* FHapbeatSampleLibrary::LoadShowcaseObject(UClass* Class, const TCHAR* Folder, const TCHAR* AssetName)
+{
+	if (Class == nullptr || Folder == nullptr || AssetName == nullptr)
+	{
+		return nullptr;
+	}
+	// /Package/Path/Asset.Asset -- UE's package-plus-object form.
+	const FString Path = FString::Printf(TEXT("/HapbeatSDK/HapbeatSamples/Showcase/%s/%s.%s"),
+		Folder, AssetName, AssetName);
+	// LOAD_NoWarn | LOAD_Quiet: a missing Showcase asset is an expected state
+	// (the art is script-generated and optional), and the caller falls back to an
+	// engine primitive -- so it must not print an error on the way past.
+	return StaticLoadObject(Class, nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
+}
+
+float FHapbeatSampleLibrary::ComputeUniformScaleForLength(const UStaticMesh* Mesh, float DesiredLongestAxisCm)
+{
+	if (Mesh == nullptr || DesiredLongestAxisCm <= 0.0f)
+	{
+		return 1.0f;
+	}
+	const FVector SourceSize = Mesh->GetBounds().BoxExtent * 2.0f;
+	const float LongestAxis = SourceSize.GetAbsMax();
+	if (LongestAxis <= KINDA_SMALL_NUMBER)
+	{
+		return 1.0f;
+	}
+	return DesiredLongestAxisCm / LongestAxis;
+}
+
+void FHapbeatSampleLibrary::AssignMaterialBySlotName(UStaticMeshComponent* MeshComponent,
+	const TCHAR* SlotNameSubstring, int32 FallbackSlotIndex, UMaterialInterface* Material)
+{
+	if (MeshComponent == nullptr || Material == nullptr)
+	{
+		return;
+	}
+
+	int32 SlotIndex = INDEX_NONE;
+	if (SlotNameSubstring != nullptr)
+	{
+		const TArray<FName> SlotNames = MeshComponent->GetMaterialSlotNames();
+		for (int32 Index = 0; Index < SlotNames.Num(); ++Index)
+		{
+			if (SlotNames[Index].ToString().Contains(SlotNameSubstring))
+			{
+				SlotIndex = Index;
+				break;
+			}
+		}
+	}
+	if (SlotIndex == INDEX_NONE)
+	{
+		SlotIndex = FallbackSlotIndex;
+	}
+	if (SlotIndex >= 0 && SlotIndex < MeshComponent->GetNumMaterials())
+	{
+		MeshComponent->SetMaterial(SlotIndex, Material);
+	}
 }
 
 void FHapbeatSampleLibrary::ShowHudLine(int32 LineKey, const FString& Text, FColor Color, float Duration)

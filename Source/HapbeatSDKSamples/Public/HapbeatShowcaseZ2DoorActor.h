@@ -10,6 +10,7 @@
 class UHapbeatClip;
 class UHapbeatEventMap;
 class UHapbeatTriggerComponent;
+class USoundBase;
 class UStaticMeshComponent;
 
 /**
@@ -58,7 +59,12 @@ enum class EHapbeatZ2DoorState : uint8
  * Reuses showcase-kit exactly as authored in the Unity Showcase's
  * ShowcaseEventMap.asset: all six z2_door_* events are StreamClip (WAVs shipped
  * under Content/HapbeatSamples/Showcase/Kit/showcase-kit/stream-clips/), so no
- * Kit deployment is needed. Haptics-only (no SFX).
+ * Kit deployment is needed.
+ *
+ * Each transition also plays its S_z2_door_* one-shot when the Showcase's
+ * optional imported art is present -- the audio counterpart of the haptic
+ * event, fired at the same instant Unity's Animation Event calls
+ * SoundPlayer.Play("door_open") etc. (the transition start).
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ2DoorActor : public AActor, public IHapbeatShowcaseZone
@@ -123,6 +129,15 @@ private:
 	/** Set the hinge (Root)'s relative yaw, degrees. */
 	void SetDoorYaw(float Degrees);
 
+	/**
+	 * Swap the primitive slab for the imported SM_Door and load the six door
+	 * SFX; no-op for whichever pieces of that optional content are missing.
+	 */
+	void ApplyShowcaseAssets();
+
+	/** One-shot SFX at the door, mirroring Unity's SoundPlayer.Play(name) calls off the door animations. */
+	void PlayDoorSound(USoundBase* Sound) const;
+
 	EHapbeatZ2DoorState State = EHapbeatZ2DoorState::Closed;
 	/** Seconds elapsed in the current Opening/Closing tween. */
 	float StateElapsedSeconds = 0.0f;
@@ -168,6 +183,21 @@ private:
 	TObjectPtr<UHapbeatClip> UnlockClip;
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> RattleClip;
+
+	// Optional imported SFX (S_z2_door_*), resolved at BeginPlay. Null = silent,
+	// which is the correct behaviour when the Showcase art was never generated.
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> OpenSound;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> CloseSound;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> SlamSound;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> LockSound;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> UnlockSound;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> RattleSound;
 
 	// Constructor-created default subobjects (VisibleAnywhere, not Transient).
 

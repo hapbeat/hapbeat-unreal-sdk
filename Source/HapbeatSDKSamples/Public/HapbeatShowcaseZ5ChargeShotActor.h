@@ -11,7 +11,13 @@ class UHapbeatEventMap;
 class UHapbeatStreamPlayback;
 class UHapbeatSubsystem;
 class UHapbeatCollisionTriggerComponent;
+class UAudioComponent;
+class UMaterialInterface;
+class USoundBase;
+class UStaticMesh;
 class UStaticMeshComponent;
+class SWidget;
+class AHapbeatShowcaseCharacter;
 class AHapbeatShowcaseZ5TargetActor;
 class AHapbeatShowcaseZ5ProjectileActor;
 
@@ -23,10 +29,14 @@ class AHapbeatShowcaseZ5ProjectileActor;
  * straight from script so both patterns are shown side by side." Reuses
  * showcase-kit verbatim (6 events -- see
  * Samples~/Showcase/EventMaps/ShowcaseEventMap.md for the authoritative
- * gain/intensity table). Haptics-only: game SFX is intentionally out of scope
- * (would need a USoundWave import); the material hit-flash is also dropped.
+ * gain/intensity table).
  *
- * Hold V to charge:
+ * When the possessed pawn is an AHapbeatShowcaseCharacter the blaster is put in
+ * its hand mount and shots leave along the view direction (Unity
+ * CameraFollowMount + ChargeShooter._muzzle); without such a pawn the zone fires
+ * from its own stand, so it still works dropped into a bare level.
+ *
+ * HOLD THE LEFT MOUSE BUTTON to charge (Unity ChargeShooter's LMB hold):
  *   - press:   starts the z5_charge_loop StreamClip loop (baseline =
  *              entry.GetEffectiveGain(), initial modulator = the charge
  *              curve at t=0 => silent start, race-free).
@@ -98,6 +108,15 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.0", ClampMax = "0.5"))
 	float ShotDelayAfterLoop = 0.05f;
 
+	/**
+	 * Extra rotation on top of the default hand-mount pose, correcting for
+	 * whichever way SM_BlasterG's authored axes point. Exposed rather than
+	 * hardcoded for the same reason as Z3's rod: it is a property of the
+	 * imported asset and wants dialling in from the details panel.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
+	FRotator BlasterMountExtraRotation = FRotator::ZeroRotator;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -110,14 +129,37 @@ private:
 	/** Build the transient EventMap used when no asset is assigned. */
 	UHapbeatEventMap* BuildFallbackEventMap();
 
-	/** EnableInput on the first PlayerController found, then BindKey(V, Pressed/Released). Warns (no-op) if none exists. */
+	/** EnableInput on the first PlayerController found, then bind the mouse button (pressed / released). Warns (no-op) if none exists. */
 	void BindInput();
+
+	/** Put SM_BlasterG in the player's hand mount; no-op without an AHapbeatShowcaseCharacter or the mesh. */
+	void MountBlasterOnCharacter();
+
+	/**
+	 * One deferred attempt at MountBlasterOnCharacter(), made on the first Tick
+	 * that has a player pawn to look at. WHY NOT IN BeginPlay: a zone spawned by
+	 * the Showcase switcher can begin play before the pawn is possessed (the
+	 * switcher retries its own spawn-pose apply in Tick for the same reason), and
+	 * an attempt made too early would leave the player empty-handed.
+	 */
+	void TryDeferredMount();
+
+	/** Load the projectile meshes / SFX this zone uses; whatever is missing simply stays null. */
+	void LoadShowcaseAssets();
+
+	/** Build the charge bar and add it to the viewport; removed again in EndPlay. */
+	void CreateChargeBar();
+	/** Take the charge bar back out of the viewport. Safe when it was never created. */
+	void DestroyChargeBar();
+
+	/** Where a shot starts and which way it goes: the player's view, or this actor's stand. */
+	FTransform GetMuzzleTransform() const;
 
 	/** Spawn TargetLight / TargetHeavy in front of the stand and wire each one's HitTrigger to the matching EventMap entry + ActorTag filter. */
 	void SpawnTargets();
 
-	void HandleChargeBegin();   // V pressed
-	void HandleChargeRelease(); // V released
+	void HandleChargeBegin();   // left mouse down
+	void HandleChargeRelease(); // left mouse up
 
 	/** Timer callback: fires the light/heavy shot ShotDelayAfterLoop seconds after Release(). */
 	void FireShotAfterDelay();
@@ -174,6 +216,32 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<AHapbeatShowcaseZ5TargetActor> TargetHeavy;
 
+	// Optional imported art / SFX; null = keep the primitive or stay silent.
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> ProjectileMeshLight;
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> ProjectileMeshHeavy;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> ChargeLoopSound;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> ShotLightSound;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> ShotHeavySound;
+
+	/** The charge loop's audio voice while the button is held; stopped on release. */
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> ChargeAudio;
+
+	/** The character carrying the blaster, when there is one. */
+	TWeakObjectPtr<AHapbeatShowcaseCharacter> MountedCharacter;
+
+	/** True once the deferred mount attempt has been made (successful or not). */
+	bool bMountAttempted = false;
+
+	/** The viewport-hosted charge bar, owned for this zone's lifetime. */
+	TSharedPtr<SWidget> ChargeBarWidget;
+
 	FGuid ChargeLoopEntryId;
 	FGuid ChargeThresholdEntryId;
 	FGuid ShotLightEntryId;
@@ -225,9 +293,56 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UHapbeatCollisionTriggerComponent> HitTrigger;
 
+	/**
+	 * Give this board the Showcase's imported look and sound, and tell it which
+	 * projectile tag counts as a hit. Called by the zone right after SpawnActor;
+	 * every argument is optional (null keeps the primitive / stays silent), which
+	 * is what makes the zone survive a checkout without the generated art.
+	 *
+	 * @param Mesh           SM_TargetLarge, or null to keep the cube.
+	 * @param InBaseMaterial The resting look.
+	 * @param InFlashMaterial Shown for FlashSeconds after a hit (Unity TargetReceiver's material swap).
+	 * @param InHitSound     One-shot played on a hit.
+	 * @param InAcceptTag    Projectile actor tag this board reacts to; matches HitTrigger.TagFilter.
+	 * @param DesiredLongestAxisCm Finished size of the board's longest axis.
+	 */
+	void ApplyShowcaseAssets(UStaticMesh* Mesh, UMaterialInterface* InBaseMaterial, UMaterialInterface* InFlashMaterial,
+		USoundBase* InHitSound, FName InAcceptTag, float DesiredLongestAxisCm);
+
+protected:
+	virtual void BeginPlay() override;
+
 private:
+	/**
+	 * Visual + audio half of a hit. The haptic half is HitTrigger's own, so this
+	 * repeats HitTrigger's tag test rather than depending on it -- the two are
+	 * independent subscribers to the same overlap, exactly as Unity splits
+	 * TargetReceiver (flash + SFX) from the haptic trigger.
+	 */
+	UFUNCTION()
+	void HandleTargetOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
+
+	/** Put the base material back once the flash has run its course. */
+	void EndFlash();
+
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UStaticMeshComponent> TargetMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> BaseMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> FlashMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> HitSound;
+
+	/** Projectile tag that counts as a hit on this board. */
+	FName AcceptTag;
+
+	FTimerHandle FlashTimer;
+
+	/** Unity TargetReceiver._flashSeconds. */
+	static constexpr float FlashSeconds = 0.2f;
 };
 
 /**
@@ -256,9 +371,12 @@ public:
 	 * @param InVelocity World-space velocity (cm/s). Movement is Tick-integrated.
 	 * @param bInHeavy   Tags the actor "ProjectileHeavy" (else "ProjectileLight"),
 	 *                   read by AHapbeatShowcaseZ5TargetActor's HitTrigger TagFilter.
-	 * @param InScale    Uniform mesh scale (visual only; no gameplay effect).
+	 * @param InScale    Charge-driven scale multiplier (visual only; no gameplay effect).
+	 * @param InMesh     SM_BulletFoam / SM_Missile, or null to keep the sphere.
+	 * @param InBaseLengthCm  Finished length of the mesh's longest axis at scale 1.
 	 */
-	void Configure(const FVector& InVelocity, bool bInHeavy, float InScale);
+	void Configure(const FVector& InVelocity, bool bInHeavy, float InScale,
+		UStaticMesh* InMesh = nullptr, float InBaseLengthCm = 0.0f);
 
 protected:
 	virtual void BeginPlay() override;

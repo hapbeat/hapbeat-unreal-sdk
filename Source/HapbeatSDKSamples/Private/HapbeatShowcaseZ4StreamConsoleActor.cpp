@@ -14,8 +14,17 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Engine/GameViewportClient.h"
 #include "InputCoreTypes.h" // EKeys::*
+#include "Kismet/GameplayStatics.h" // PlaySound2D
+#include "Materials/MaterialInterface.h"
+#include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Input/SSlider.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/Text/STextBlock.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ4, Log, All);
 
@@ -83,8 +92,19 @@ void AHapbeatShowcaseZ4StreamConsoleActor::BeginPlay()
 		RootComponent->SetRelativeLocation(FootprintOffset);
 	}
 
+	if (UMaterialInterface* ConsoleMaterial =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Floor")))
+	{
+		if (ConsoleMesh != nullptr)
+		{
+			ConsoleMesh->SetMaterial(0, ConsoleMaterial);
+		}
+	}
+	TickSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z4_ui_tick"));
+
 	BuildEventMap();
 	BindInput();
+	CreateSliderPanel();
 
 	// Push the initial Gain/Pan so a StreamClip started later (T) picks them up
 	// immediately via PreSeedBindings() rather than defaulting to raw baseline.
@@ -104,6 +124,7 @@ void AHapbeatShowcaseZ4StreamConsoleActor::EndPlay(const EEndPlayReason::Type En
 	{
 		LoopTrigger->Stop();
 	}
+	DestroySliderPanel();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -177,11 +198,89 @@ void AHapbeatShowcaseZ4StreamConsoleActor::BindInput()
 		return;
 	}
 
-	InputComponent->BindKey(EKeys::T, IE_Pressed, this, &AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey);
-	InputComponent->BindKey(EKeys::U, IE_Pressed, this, &AHapbeatShowcaseZ4StreamConsoleActor::HandleGainUpKey);
-	InputComponent->BindKey(EKeys::J, IE_Pressed, this, &AHapbeatShowcaseZ4StreamConsoleActor::HandleGainDownKey);
-	InputComponent->BindKey(EKeys::N, IE_Pressed, this, &AHapbeatShowcaseZ4StreamConsoleActor::HandlePanLeftKey);
-	InputComponent->BindKey(EKeys::M, IE_Pressed, this, &AHapbeatShowcaseZ4StreamConsoleActor::HandlePanRightKey);
+	InputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this, &AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey);
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::CreateSliderPanel()
+{
+	const UWorld* World = GetWorld();
+	UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr;
+	if (Viewport == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcaseZ4, Warning,
+			TEXT("Z4: no game viewport; the gain / pan sliders were not created."));
+		return;
+	}
+
+	// Value_Lambda reads the actor's field every frame so a slider stays right
+	// even when something else moves the value; OnValueChanged_Lambda is the only
+	// writer. The lambdas capture `this`, and the panel is removed in EndPlay, so
+	// they cannot outlive the actor.
+	SliderPanel =
+		SNew(SBox)
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Bottom)
+		.Padding(FMargin(0.0f, 0.0f, 0.0f, 48.0f))
+		[
+			SNew(SBorder)
+			.Padding(FMargin(16.0f, 12.0f))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+				[
+					SNew(STextBlock).Text_Lambda([this]()
+					{
+						return FText::FromString(FString::Printf(TEXT("Gain  %.2f"), GainValue));
+					})
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+				[
+					SNew(SBox).WidthOverride(320.0f)
+					[
+						SNew(SSlider)
+						.Value_Lambda([this]() { return GainValue; })
+						.OnValueChanged_Lambda([this](float NewValue) { OnGainSliderChanged(NewValue); })
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 2.0f)
+				[
+					SNew(STextBlock).Text_Lambda([this]()
+					{
+						return FText::FromString(FString::Printf(TEXT("Pan  %+.2f"), PanValue));
+					})
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+				[
+					SNew(SBox).WidthOverride(320.0f)
+					[
+						// SSlider's value range is 0..1, so pan rides through it as
+						// 0..1 and is mapped back to -1..1 on the way out.
+						SNew(SSlider)
+						.Value_Lambda([this]() { return (PanValue + 1.0f) * 0.5f; })
+						.OnValueChanged_Lambda([this](float NewValue)
+						{
+							OnPanSliderChanged(NewValue * 2.0f - 1.0f);
+						})
+					]
+				]
+			]
+		];
+
+	Viewport->AddViewportWidgetContent(SliderPanel.ToSharedRef(), /*ZOrder=*/1);
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::DestroySliderPanel()
+{
+	if (!SliderPanel.IsValid())
+	{
+		return;
+	}
+	const UWorld* World = GetWorld();
+	if (UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr)
+	{
+		Viewport->RemoveViewportWidgetContent(SliderPanel.ToSharedRef());
+	}
+	SliderPanel.Reset();
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey()
@@ -202,48 +301,58 @@ void AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey()
 	}
 }
 
-void AHapbeatShowcaseZ4StreamConsoleActor::HandleGainUpKey()
+void AHapbeatShowcaseZ4StreamConsoleActor::OnGainSliderChanged(float NewValue)
 {
-	StepGain(GainStep);
-}
-
-void AHapbeatShowcaseZ4StreamConsoleActor::HandleGainDownKey()
-{
-	StepGain(-GainStep);
-}
-
-void AHapbeatShowcaseZ4StreamConsoleActor::HandlePanLeftKey()
-{
-	StepPan(-PanStep);
-}
-
-void AHapbeatShowcaseZ4StreamConsoleActor::HandlePanRightKey()
-{
-	StepPan(PanStep);
-}
-
-void AHapbeatShowcaseZ4StreamConsoleActor::StepGain(float Delta)
-{
-	GainValue = FMath::Clamp(GainValue + Delta, 0.0f, 1.0f);
+	const float OldValue = GainValue;
+	GainValue = FMath::Clamp(NewValue, 0.0f, 1.0f);
 	if (GainBinding != nullptr)
 	{
 		GainBinding->SetValue(GainValue);
 	}
-	FireTick();
+	EmitDetentTicks(OldValue, GainValue);
 }
 
-void AHapbeatShowcaseZ4StreamConsoleActor::StepPan(float Delta)
+void AHapbeatShowcaseZ4StreamConsoleActor::OnPanSliderChanged(float NewValue)
 {
-	PanValue = FMath::Clamp(PanValue + Delta, -1.0f, 1.0f);
+	const float OldValue = PanValue;
+	PanValue = FMath::Clamp(NewValue, -1.0f, 1.0f);
 	if (PanBinding != nullptr)
 	{
 		PanBinding->SetValue(PanValue);
 	}
-	FireTick();
+	EmitDetentTicks(OldValue, PanValue);
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::EmitDetentTicks(float OldValue, float NewValue)
+{
+	if (TickThreshold <= 0.0f)
+	{
+		return;
+	}
+	// AbsolutePosition snap (Unity HapbeatTickEmitter): detents sit at fixed
+	// multiples of the threshold, so the number of ticks is the difference
+	// between the two quantised band indices -- a slow drag emits one per band
+	// crossed, and a jump emits the bands it skipped, never one per pixel.
+	const int32 OldBand = FMath::FloorToInt(OldValue / TickThreshold);
+	const int32 NewBand = FMath::FloorToInt(NewValue / TickThreshold);
+	// Same 64 cap Unity's emitter uses, so a click at the far end of the track
+	// cannot spray events at the device.
+	const int32 TicksToFire = FMath::Min(FMath::Abs(NewBand - OldBand), 64);
+	for (int32 Index = 0; Index < TicksToFire; ++Index)
+	{
+		FireTick();
+	}
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::FireTick()
 {
+	// The SFX is under no such constraint, so the detent still clicks audibly
+	// even when the haptic tick below has to stand down.
+	if (TickSound != nullptr)
+	{
+		UGameplayStatics::PlaySound2D(this, TickSound);
+	}
+
 	// v1 single-active-stream REPLACE model: firing the tick StreamClip while
 	// the loop is streaming would permanently steal (kill) the loop session.
 	// Unity's runtime mixes the two; v1 has no mixing, so prefer keeping the
@@ -281,7 +390,7 @@ void AHapbeatShowcaseZ4StreamConsoleActor::Tick(float DeltaSeconds)
 	if (!IsOwnedByShowcaseSwitcher(this))
 	{
 		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-			TEXT("Z4 Stream Console -- T: toggle loop | U/J: gain +/- | N/M: pan +/-"),
+			TEXT("Z4 Stream Console -- Space: toggle loop | drag the on-screen Gain / Pan sliders"),
 			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
 	}
 
@@ -309,12 +418,10 @@ FText AHapbeatShowcaseZ4StreamConsoleActor::GetZoneLabel() const
 
 TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ4StreamConsoleActor::GetHudCommands() const
 {
-	// Phase 1A keeps the keyboard console; the on-screen sliders Unity uses
-	// arrive with the zone rework.
 	TArray<FHapbeatShowcaseHudCommand> Commands;
-	Commands.Add({ FText::FromString(TEXT("T")), FText::FromString(TEXT("toggle the looping stream")) });
-	Commands.Add({ FText::FromString(TEXT("U / J")), FText::FromString(TEXT("gain + / -")) });
-	Commands.Add({ FText::FromString(TEXT("N / M")), FText::FromString(TEXT("pan + / -")) });
+	Commands.Add({ FText::FromString(TEXT("Space")), FText::FromString(TEXT("toggle the looping stream")) });
+	Commands.Add({ FText::FromString(TEXT("Mouse")),
+		FText::FromString(TEXT("drag the Gain / Pan sliders (one tick per detent)")) });
 	return Commands;
 }
 

@@ -56,10 +56,11 @@ struct FHapbeatShowcaseZoneEntry
  * bare level) is left alone, so the switcher still works without a player.
  *
  * NOTE ON KEYS: the number keys plus Q (manual fire) and P (ping) are reserved
- * by this actor, and the player character owns WASD / arrows / mouse / Tab. The
- * zones' own keys (B / F / G / L / H / T / U / J / N / M / V) never collide with
- * them, but BasicExample's F does collide with Z2's F -- keep the Showcase in
- * its own level, not alongside BasicExample.
+ * by this actor, and the player character owns WASD / arrows / mouse-look / Tab.
+ * The zones' own inputs (left mouse button, Space, F / G / L) never collide with
+ * them -- only one zone exists at a time, so Z1's Space and Z4's Space cannot
+ * both be live. BasicExample's F does collide with Z2's F, so keep the Showcase
+ * in its own level, not alongside BasicExample.
  */
 UCLASS(meta = (DisplayName = "Hapbeat Showcase"))
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseActor : public AActor

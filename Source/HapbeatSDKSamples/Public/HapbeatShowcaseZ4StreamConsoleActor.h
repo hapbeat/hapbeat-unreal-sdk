@@ -10,41 +10,43 @@ class UHapbeatClip;
 class UHapbeatEventMap;
 class UHapbeatTriggerComponent;
 class UHapbeatParameterBinding;
+class USoundBase;
 class UStaticMeshComponent;
+class SWidget;
 
 /**
- * Z4 Stream Console -- keyboard-only demo of live StreamClip gain / pan
- * modulation via UHapbeatParameterBinding (External source). UE counterpart of
- * the Unity Showcase Z4 (StreamDemoController.cs + a UI Slider wired to 2
- * HapbeatParameterBinding components), reusing showcase-kit verbatim
- * (z4_stream_loop / z4_slider_tick, both StreamClip mode -- see
- * Samples~/Showcase/EventMaps/ShowcaseEventMap.md for the authoritative
- * gain/intensity table).
+ * Z4 Stream Console -- live StreamClip gain / pan modulation driven by two
+ * ON-SCREEN SLIDERS, the UE counterpart of the Unity Showcase Z4
+ * (StreamDemoController.cs + a UI Slider wired to two HapbeatParameterBinding
+ * components). Reuses showcase-kit verbatim (z4_stream_loop / z4_slider_tick,
+ * both StreamClip mode -- see Samples~/Showcase/EventMaps/ShowcaseEventMap.md
+ * for the authoritative gain/intensity table).
  *
- * A single cube pedestal represents the console -- there is no UMG slider
- * widget (a Slate/UMG asset would need editor authoring, and the design doc
- * favors a keyboard-only stand-in over binary UI assets). Haptics-only: game
- * SFX is intentionally out of scope (would need a USoundWave import).
- * Controls:
+ * Controls (Unity parity):
+ *   SPACE          - toggle the z4_stream_loop loop (Fire() / Stop()).
+ *   Gain slider    - drag with the mouse; pushes 0..1 into GainBinding
+ *                    (External source -> StreamGain).
+ *   Pan slider     - drag with the mouse; pushes -1..1 into PanBinding
+ *                    (External source -> StreamPan).
  *
- *   T     - toggle the z4_stream_loop StreamClip loop (Fire() / Stop() on
- *           LoopTrigger, a UHapbeatTriggerComponent).
- *   U / J - step the Gain modulator up / down by GainStep (default 0.1) in
- *           [0, 1] and push it to GainBinding (External source ->
- *           StreamGain). Also fires the z4_slider_tick one-shot for the
- *           "tick-detent" feel, mirroring Unity's HapbeatTickEmitter click.
- *   N / M - step the Pan modulator left / right by PanStep (default 0.2) in
- *           [-1, 1] and push it to PanBinding (External source ->
- *           StreamPan). Also fires the tick one-shot.
+ * Each slider fires the z4_slider_tick one-shot ONCE PER DETENT rather than on
+ * every pixel of drag, using the same snap rule as Unity's HapbeatTickEmitter /
+ * TickAudioEmitter in AbsolutePosition mode: quantise the value by
+ * TickThreshold and fire only when the quantised index changes. Without that a
+ * drag would emit hundreds of events a second.
  *
- * IMPORTANT v1 caveat: the runtime supports a SINGLE active stream session
- * with REPLACE semantics (see unreal-sdk-v1-design.md Sec 3.5); Unity's
- * mixer instead truly overlaps concurrent sources. Firing the tick one-shot
- * WHILE the loop is playing therefore replaces (permanently stops) the loop
- * session -- press T again to restart it. This mirrors the sample spec's
- * explicit instruction ("call trigger->Fire() per step") rather than
- * silently gating the tick to avoid disrupting the loop; see the Z4/Z5
- * handoff note's "uncertainties" section for the full discussion.
+ * The sliders are Slate built in code (SSlider), added straight to the viewport
+ * -- same reasoning as the shared Showcase HUD: no UI .uasset to author, and it
+ * still draws in a packaged build. The zone reports WantsCursorUnlocked() so the
+ * switcher frees the mouse on entry.
+ *
+ * IMPORTANT v1 caveat: the runtime supports a SINGLE active stream session with
+ * REPLACE semantics (see unreal-sdk-v1-design.md Sec 3.5); Unity's mixer instead
+ * truly overlaps concurrent sources. Firing the haptic tick WHILE the loop is
+ * playing would replace (permanently stop) the loop, so the haptic tick is
+ * skipped while the loop streams -- the gain/pan change itself is still felt in
+ * the loop, and the tick's SFX still plays. Local stream mixing is the real fix
+ * and is scheduled as its own phase.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ4StreamConsoleActor : public AActor, public IHapbeatShowcaseZone
@@ -69,13 +71,13 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
 	FVector FootprintOffset = FVector::ZeroVector;
 
-	/** Gain step applied per U/J press, in [0, 1] units. */
+	/**
+	 * Detent spacing for both sliders, in slider units. One tick event per
+	 * crossed multiple of this value -- Unity HapbeatTickEmitter /
+	 * TickAudioEmitter _tickThreshold, AbsolutePosition mode.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.01", ClampMax = "1.0"))
-	float GainStep = 0.1f;
-
-	/** Pan step applied per N/M press, in [-1, 1] units. */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.01", ClampMax = "1.0"))
-	float PanStep = 0.2f;
+	float TickThreshold = 0.1f;
 
 protected:
 	virtual void BeginPlay() override;
@@ -89,20 +91,28 @@ private:
 	/** Build the transient EventMap used when no asset is assigned. */
 	UHapbeatEventMap* BuildFallbackEventMap();
 
-	/** EnableInput on the first PlayerController found, then BindKey the 5 demo keys. Warns (no-op) if none exists. */
+	/** EnableInput on the first PlayerController found, then bind Space. Warns (no-op) if none exists. */
 	void BindInput();
 
-	void HandleToggleKey();   // T
-	void HandleGainUpKey();   // U
-	void HandleGainDownKey(); // J
-	void HandlePanLeftKey();  // N
-	void HandlePanRightKey(); // M
+	void HandleToggleKey(); // Space
 
-	/** Clamp-step GainValue, push it to GainBinding, and fire the tick one-shot. */
-	void StepGain(float Delta);
-	/** Clamp-step PanValue, push it to PanBinding, and fire the tick one-shot. */
-	void StepPan(float Delta);
-	/** Fire TickTrigger (z4_slider_tick) for the detent-click feel of a step. */
+	/** Build the two sliders and add them to the viewport; removed again in EndPlay. */
+	void CreateSliderPanel();
+	/** Take the slider panel back out of the viewport. Safe to call when it was never created. */
+	void DestroySliderPanel();
+
+	/** Slider callbacks: store the value, push it to its binding, and emit any detents crossed. */
+	void OnGainSliderChanged(float NewValue);
+	void OnPanSliderChanged(float NewValue);
+
+	/**
+	 * Emit one tick per detent between OldValue and NewValue (see TickThreshold).
+	 * Returns nothing -- the count is deliberately capped so a jump (click on the
+	 * far end of the track) cannot spray events.
+	 */
+	void EmitDetentTicks(float OldValue, float NewValue);
+
+	/** Fire TickTrigger (z4_slider_tick) + its SFX for one detent. */
 	void FireTick();
 
 	/** Fixed on-screen-message keys, offset into the 400s so they don't collide with other zones' HUD lines. */
@@ -159,6 +169,13 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> TickClip;
+
+	/** Optional imported detent SFX (S_z4_ui_tick); null = silent. */
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> TickSound;
+
+	/** The viewport-hosted slider panel, owned for this zone's lifetime. */
+	TSharedPtr<SWidget> SliderPanel;
 
 	/** Last value pushed to GainBinding (0..1); also shown on the HUD. */
 	float GainValue = 1.0f;

@@ -117,10 +117,17 @@ bool SHapbeatEntryRefGraphPin::IsEntryComboEnabled() const
 void SHapbeatEntryRefGraphPin::RefreshEntryOptions()
 {
 	HapbeatEditor::BuildEntryOptions(ResolveEventMap(), EntryOptions);
-	if (EntryCombo.IsValid())
+	if (!EntryCombo.IsValid())
 	{
-		EntryCombo->RefreshOptions();
+		return;
 	}
+	EntryCombo->RefreshOptions();
+	// Restate the selection from the value we hold. The list reconciles its
+	// selection against the (rebuilt) options source, so anything it drops in
+	// the process is put straight back instead of surfacing as an edit.
+	// A guid the map no longer has falls back to the "(none)" row WITHOUT
+	// writing -- the label still reads "(stale: xxxxxxxx)" from the stored value.
+	EntryCombo->SetSelectedItem(HapbeatEditor::FindOptionForGuid(EntryOptions, ReadValue().EntryId));
 }
 
 TSharedRef<SWidget> SHapbeatEntryRefGraphPin::OnGenerateEntryWidget(TSharedPtr<FGuid> InId) const
@@ -130,8 +137,19 @@ TSharedRef<SWidget> SHapbeatEntryRefGraphPin::OnGenerateEntryWidget(TSharedPtr<F
 		.Text(HapbeatEditor::DescribeEntryById(Id, ResolveEventMap()));
 }
 
-void SHapbeatEntryRefGraphPin::OnEntrySelected(TSharedPtr<FGuid> NewSelection, ESelectInfo::Type /*SelectInfo*/)
+void SHapbeatEntryRefGraphPin::OnEntrySelected(TSharedPtr<FGuid> NewSelection, ESelectInfo::Type SelectInfo)
 {
+	if (SelectInfo == ESelectInfo::Direct)
+	{
+		// Not the author picking anything: Direct is what the list reports for
+		// programmatic selection -- our own SetSelectedItem, and the null
+		// selection it emits when a rebuilt options list makes it drop the
+		// current item. Writing here is exactly how opening the dropdown used to
+		// wipe the pin back to "(none)". User input arrives as OnMouseClick /
+		// OnKeyPress / OnNavigation instead.
+		return;
+	}
+
 	FHapbeatEntryRef Value = ReadValue();
 	Value.EntryId = NewSelection.IsValid() ? *NewSelection : FGuid();
 	WriteValue(Value);

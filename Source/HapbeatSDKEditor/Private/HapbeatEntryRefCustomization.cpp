@@ -127,9 +127,21 @@ UHapbeatEventMap* FHapbeatEntryRefCustomization::ResolveEventMap() const
 void FHapbeatEntryRefCustomization::RefreshEntryOptions()
 {
 	HapbeatEditor::BuildEntryOptions(ResolveEventMap(), EntryOptions);
-	if (EntryCombo.IsValid())
+	if (!EntryCombo.IsValid())
 	{
-		EntryCombo->RefreshOptions();
+		return;
+	}
+	EntryCombo->RefreshOptions();
+	// Restate the selection from the stored guid: the list reconciles its
+	// selection against the rebuilt options source, and anything it drops there
+	// must not read as an author edit. A guid the map no longer has falls back
+	// to the "(none)" row WITHOUT writing, so the label keeps showing
+	// "(stale: xxxxxxxx)". Multi-valued selections have no single guid to
+	// restate, so they are left alone.
+	FGuid CurrentId;
+	if (HapbeatEditor::ReadGuidFromHandle(EntryIdHandle, CurrentId))
+	{
+		EntryCombo->SetSelectedItem(HapbeatEditor::FindOptionForGuid(EntryOptions, CurrentId));
 	}
 }
 
@@ -154,8 +166,18 @@ TSharedRef<SWidget> FHapbeatEntryRefCustomization::OnGenerateEntryWidget(TShared
 		.Font(IDetailLayoutBuilder::GetDetailFont());
 }
 
-void FHapbeatEntryRefCustomization::OnEntrySelected(TSharedPtr<FGuid> NewSelection, ESelectInfo::Type /*SelectInfo*/)
+void FHapbeatEntryRefCustomization::OnEntrySelected(TSharedPtr<FGuid> NewSelection, ESelectInfo::Type SelectInfo)
 {
+	if (SelectInfo == ESelectInfo::Direct)
+	{
+		// Programmatic selection, not an author pick: our own SetSelectedItem
+		// after a rebuild, and the null selection the list emits when rebuilt
+		// options make it drop the current item. Writing on those would clear a
+		// perfectly good entry just because the dropdown was opened. Real input
+		// arrives as OnMouseClick / OnKeyPress / OnNavigation.
+		return;
+	}
+
 	HapbeatEditor::WriteGuidToHandle(EntryIdHandle, NewSelection.IsValid() ? *NewSelection : FGuid());
 }
 

@@ -37,8 +37,26 @@ FText DescribeEntryById(const FGuid& Id, const UHapbeatEventMap* Map)
 
 void BuildEntryOptions(const UHapbeatEventMap* Map, TArray<TSharedPtr<FGuid>>& OutOptions)
 {
+	// Keep the pointer that already stands for each guid (see the header): a
+	// combo's selection IS one of these pointers, so replacing them wholesale
+	// would make the selected item disappear from the options source.
+	TMap<FGuid, TSharedPtr<FGuid>> Existing;
+	Existing.Reserve(OutOptions.Num());
+	for (const TSharedPtr<FGuid>& Option : OutOptions)
+	{
+		if (Option.IsValid())
+		{
+			Existing.Add(*Option, Option);
+		}
+	}
+	auto OptionFor = [&Existing](const FGuid& Id)
+	{
+		const TSharedPtr<FGuid>* Found = Existing.Find(Id);
+		return Found != nullptr ? *Found : MakeShared<FGuid>(Id);
+	};
+
 	OutOptions.Reset();
-	OutOptions.Add(MakeShared<FGuid>()); // index 0 = "(none)"
+	OutOptions.Add(OptionFor(FGuid())); // index 0 = "(none)"
 	if (Map == nullptr)
 	{
 		return;
@@ -50,9 +68,24 @@ void BuildEntryOptions(const UHapbeatEventMap* Map, TArray<TSharedPtr<FGuid>>& O
 		// them would only let the author store an all-zero "(none)".
 		if (Entry.Id.IsValid())
 		{
-			OutOptions.Add(MakeShared<FGuid>(Entry.Id));
+			OutOptions.Add(OptionFor(Entry.Id));
 		}
 	}
+}
+
+TSharedPtr<FGuid> FindOptionForGuid(const TArray<TSharedPtr<FGuid>>& Options, const FGuid& Id)
+{
+	for (const TSharedPtr<FGuid>& Option : Options)
+	{
+		if (Option.IsValid() && *Option == Id)
+		{
+			return Option;
+		}
+	}
+	// Index 0 is the "(none)" row. Showing it for a stale id only affects which
+	// row the list highlights; the label keeps reading "(stale: xxxxxxxx)"
+	// because it is driven by the stored value, not by the selected option.
+	return Options.Num() > 0 ? Options[0] : nullptr;
 }
 
 bool ReadGuidFromHandle(const TSharedPtr<IPropertyHandle>& Handle, FGuid& OutGuid)

@@ -31,8 +31,22 @@ namespace HapbeatEditor
 	 * Rebuild a combo's option list from a map: index 0 is always the "(none)"
 	 * invalid guid, followed by every entry with a valid Id, in map order.
 	 * A null map yields the "(none)" option alone.
+	 *
+	 * Options already in OutOptions are REUSED for guids that are still present,
+	 * rather than replaced by fresh shared pointers. SComboBox tracks its
+	 * selection by pointer identity (SListView::SelectedItems), so handing it
+	 * brand new pointers for the very same guids drops the current selection on
+	 * the next list refresh -- which is how merely opening the dropdown used to
+	 * reset a picked entry to "(none)".
 	 */
 	void BuildEntryOptions(const UHapbeatEventMap* Map, TArray<TSharedPtr<FGuid>>& OutOptions);
+
+	/**
+	 * The option holding Id, or the "(none)" option at index 0 when the list has
+	 * no such guid (a stale reference to a deleted entry). Null only for an empty
+	 * list. Used to restate a combo's selection after its options were rebuilt.
+	 */
+	TSharedPtr<FGuid> FindOptionForGuid(const TArray<TSharedPtr<FGuid>>& Options, const FGuid& Id);
 
 	/** Read an FGuid through its property handle. False when the handle is invalid or the selection is multi-valued. */
 	bool ReadGuidFromHandle(const TSharedPtr<IPropertyHandle>& Handle, FGuid& OutGuid);

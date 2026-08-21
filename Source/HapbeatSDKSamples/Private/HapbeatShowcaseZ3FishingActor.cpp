@@ -58,10 +58,14 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	// base material being available at a known path).
 	WaterMeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WaterMesh"));
 	WaterMeshComp->SetupAttachment(RootComponent);
+	// Movable: the zone is spawned at runtime (Hapbeat Showcase zone switching) and its
+	// Movable root is moved by FootprintOffset in BeginPlay. Lighting is dynamic.
+	// Mobility is set here, before SetupVisuals() assigns the mesh, so SetStaticMesh never
+	// runs on a Static component.
+	WaterMeshComp->SetMobility(EComponentMobility::Movable);
 	WaterMeshComp->SetRelativeLocation(FVector::ZeroVector);
 	WaterMeshComp->SetRelativeScale3D(FVector(14.0f, 10.0f, 0.06f)); // Cube is ~100 uu/side -> ~14m x 10m x 6cm slab
 	WaterMeshComp->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
-	WaterMeshComp->SetMobility(EComponentMobility::Static);
 
 	// Rod: a thin, leaning cylinder. Purely decorative -- not geometrically linked to RodTipMeshComp
 	// below (which is independently positioned/animated); precise visual alignment between the two
@@ -69,20 +73,22 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	// samples principle).
 	RodBaseMeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RodBaseMesh"));
 	RodBaseMeshComp->SetupAttachment(RootComponent);
+	// Movable for the same reason as WaterMeshComp above (runtime spawn + FootprintOffset move),
+	// and set before SetupVisuals() assigns the mesh.
+	RodBaseMeshComp->SetMobility(EComponentMobility::Movable);
 	RodBaseMeshComp->SetRelativeLocation(FVector(-600.0f, -350.0f, 60.0f));
 	RodBaseMeshComp->SetRelativeRotation(FRotator(-55.0f, 20.0f, 0.0f));
 	RodBaseMeshComp->SetRelativeScale3D(FVector(0.045f, 0.045f, 3.0f)); // thin, ~3m tall
 	RodBaseMeshComp->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
-	RodBaseMeshComp->SetMobility(EComponentMobility::Static);
 
 	// Rod tip marker: kinematic (never simulates physics), moved every Tick via SetRelativeLocation
 	// (UpdateRodTipSway) -- Movable mobility is required for that.
 	RodTipMeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RodTipMesh"));
 	RodTipMeshComp->SetupAttachment(RootComponent);
+	RodTipMeshComp->SetMobility(EComponentMobility::Movable);
 	RodTipMeshComp->SetRelativeLocation(RodTipBaseRelativeLocation);
 	RodTipMeshComp->SetRelativeScale3D(FVector(0.15f));
 	RodTipMeshComp->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
-	RodTipMeshComp->SetMobility(EComponentMobility::Movable);
 
 	// Default to the Showcase Event Map that ships with the plugin, so this zone
 	// runs against the same authored asset a real project would edit -- gains and

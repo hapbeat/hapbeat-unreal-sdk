@@ -25,13 +25,16 @@ AHapbeatShowcaseZ4StreamConsoleActor::AHapbeatShowcaseZ4StreamConsoleActor()
 
 	ConsoleMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ConsoleMesh"));
 	RootComponent = ConsoleMesh;
+	// Movable: the zone is spawned at runtime (Hapbeat Showcase zone switching) and this root
+	// is moved by FootprintOffset in BeginPlay. Lighting is dynamic.
+	// Mobility is set before the mesh assignment so SetStaticMesh never runs on a Static component.
+	ConsoleMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
 	{
 		ConsoleMesh->SetStaticMesh(CubeMesh);
 	}
 	// A squat pedestal rather than a plain cube -- purely cosmetic, no gameplay meaning.
 	ConsoleMesh->SetRelativeScale3D(FVector(1.0f, 0.6f, 1.2f));
-	ConsoleMesh->SetMobility(EComponentMobility::Static);
 
 	LoopTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("LoopTrigger"));
 	TickTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("TickTrigger"));

@@ -43,6 +43,7 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 
 	DoorMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorMesh"));
 	DoorMesh->SetupAttachment(RootComponent);
+	DoorMesh->SetMobility(EComponentMobility::Movable); // must stay Movable: it is rotated at runtime
 	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
 	{
 		DoorMesh->SetStaticMesh(CubeMesh);
@@ -50,7 +51,6 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 	DoorMesh->SetRelativeLocation(FVector(DoorWidth * 0.5f, 0.0f, DoorHeight * 0.5f));
 	DoorMesh->SetRelativeScale3D(FVector(DoorWidth / 100.0f, DoorThickness / 100.0f, DoorHeight / 100.0f));
 	DoorMesh->SetCollisionProfileName(TEXT("BlockAll"));
-	DoorMesh->SetMobility(EComponentMobility::Movable); // must stay Movable: it is rotated at runtime
 
 	OpenTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("OpenTrigger"));
 	CloseTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("CloseTrigger"));

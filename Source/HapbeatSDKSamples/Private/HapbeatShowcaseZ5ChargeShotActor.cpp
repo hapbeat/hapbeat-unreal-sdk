@@ -40,13 +40,16 @@ AHapbeatShowcaseZ5ChargeShotActor::AHapbeatShowcaseZ5ChargeShotActor()
 
 	StandMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StandMesh"));
 	RootComponent = StandMesh;
+	// Movable: the zone is spawned at runtime (Hapbeat Showcase zone switching) and this root
+	// is moved by FootprintOffset in BeginPlay. Lighting is dynamic.
+	// Mobility is set before the mesh assignment so SetStaticMesh never runs on a Static component.
+	StandMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
 	{
 		StandMesh->SetStaticMesh(CubeMesh);
 	}
 	// A low, wide blaster stand -- purely cosmetic, no gameplay meaning.
 	StandMesh->SetRelativeScale3D(FVector(1.2f, 0.8f, 1.0f));
-	StandMesh->SetMobility(EComponentMobility::Static);
 
 	// Default to the Showcase Event Map that ships with the plugin, so this zone
 	// runs against the same authored asset a real project would edit -- gains and
@@ -496,13 +499,16 @@ AHapbeatShowcaseZ5TargetActor::AHapbeatShowcaseZ5TargetActor()
 
 	TargetMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TargetMesh"));
 	RootComponent = TargetMesh;
+	// Movable: this actor is spawned at runtime by the zone (SpawnTargets) and placed with the
+	// zone's FootprintOffset applied. Lighting is dynamic.
+	// Mobility is set before the mesh assignment so SetStaticMesh never runs on a Static component.
+	TargetMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
 	{
 		TargetMesh->SetStaticMesh(CubeMesh);
 	}
 	// A flat board -- purely cosmetic, no gameplay meaning.
 	TargetMesh->SetRelativeScale3D(FVector(0.8f, 0.2f, 0.8f));
-	TargetMesh->SetMobility(EComponentMobility::Static);
 
 	// QueryOnly + Overlap-all + GenerateOverlapEvents: no physics simulation
 	// needed on either side (the target never moves; the projectile sweeps
@@ -530,12 +536,12 @@ AHapbeatShowcaseZ5ProjectileActor::AHapbeatShowcaseZ5ProjectileActor()
 
 	ProjectileMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ProjectileMesh"));
 	RootComponent = ProjectileMesh;
+	ProjectileMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")))
 	{
 		ProjectileMesh->SetStaticMesh(SphereMesh);
 	}
 	ProjectileMesh->SetRelativeScale3D(FVector(0.3f));
-	ProjectileMesh->SetMobility(EComponentMobility::Movable);
 
 	// QueryOnly + Overlap-all + GenerateOverlapEvents: matches the target's
 	// collision setup so a swept move (AddActorWorldOffset(.., bSweep=true) in

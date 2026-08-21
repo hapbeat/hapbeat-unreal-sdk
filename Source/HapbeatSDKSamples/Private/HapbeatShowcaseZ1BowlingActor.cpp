@@ -50,6 +50,10 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 
 	LaneMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LaneMesh"));
 	LaneMesh->SetupAttachment(RootComponent);
+	// Movable: the zone is spawned at runtime (Hapbeat Showcase zone switching) and its
+	// Movable root is moved by FootprintOffset in BeginPlay. Lighting is dynamic.
+	// Mobility is set before the mesh assignment so SetStaticMesh never runs on a Static component.
+	LaneMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
 	{
 		LaneMesh->SetStaticMesh(CubeMesh);
@@ -57,11 +61,11 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 	LaneMesh->SetRelativeLocation(FVector(LaneLength * 0.5f, 0.0f, -LaneThickness * 0.5f));
 	LaneMesh->SetRelativeScale3D(FVector(LaneLength / 100.0f, LaneWidth / 100.0f, LaneThickness / 100.0f));
 	LaneMesh->SetCollisionProfileName(TEXT("BlockAll"));
-	LaneMesh->SetMobility(EComponentMobility::Static);
 
 	BallRestRelativeLocation = FVector(0.0f, 0.0f, BallDiameter * 0.5f);
 	BallMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BallMesh"));
 	BallMesh->SetupAttachment(RootComponent);
+	BallMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")))
 	{
 		BallMesh->SetStaticMesh(SphereMesh);
@@ -69,7 +73,6 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 	BallMesh->SetRelativeLocation(BallRestRelativeLocation);
 	BallMesh->SetRelativeScale3D(FVector(BallDiameter / 100.0f));
 	BallMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
-	BallMesh->SetMobility(EComponentMobility::Movable);
 	// SetSimulatePhysics() is deferred to BeginPlay (see AHapbeatShowcaseZ1PinActor's
 	// header note) -- calling it here, before BallMesh is registered, is order-
 	// dependent and can log a spurious "no physics body" warning.
@@ -292,13 +295,13 @@ AHapbeatShowcaseZ1PinActor::AHapbeatShowcaseZ1PinActor()
 
 	PinMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PinMesh"));
 	RootComponent = PinMesh;
+	PinMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* CylinderMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")))
 	{
 		PinMesh->SetStaticMesh(CylinderMesh);
 	}
 	PinMesh->SetRelativeScale3D(FVector(PinDiameter / 100.0f, PinDiameter / 100.0f, PinHeight / 100.0f));
 	PinMesh->SetCollisionProfileName(TEXT("PhysicsActor"));
-	PinMesh->SetMobility(EComponentMobility::Movable);
 	// SetSimulatePhysics() is deferred to BeginPlay: calling it here, before
 	// PinMesh is registered, is order-dependent (it can log a spurious "no
 	// physics body" warning against a not-yet-created BodyInstance). The notify

@@ -23,8 +23,20 @@ Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
 
 ## Showcase サンプル
 
-主要な実装手法をゾーン別に確認できます。`Hapbeat Showcase` アクターを 1 つレベルに置いて ▶ Play し、
-`1`〜`5` キーでゾーンを切り替えます。表示されるのは常に 1 ゾーンだけです。
+主要な実装手法をゾーン別に確認できます。コンテンツブラウザの設定で **Show Plugin Content**
+（プラグインのコンテンツを表示）を有効にし、
+`Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Maps/Showcase` を開いて ▶ Play します。
+床・ライト・GameMode まで設定済みのレベルなので、開いて再生するだけで動きます。
+
+`W` `A` `S` `D` とマウスで移動、`1`〜`5` でゾーン切り替え、`Tab` でマウスカーソルの表示切り替えです。
+表示されるのは常に 1 ゾーンだけで、切り替えるとそのゾーンの位置へ自動で移動します。
+各ゾーンの操作キーは画面左上の一覧に表示されます。
+
+### 既存のレベルで試す
+
+`Hapbeat Showcase` アクターを 1 つ置けば、自分のレベルでも同じものが動きます。
+ただし **World Settings → GameMode Override を `Hapbeat Showcase Game Mode`** にしてください。
+設定しないと、一人称プレイヤーではなくエンジン既定の飛行ポーンで再生されます。
 
 各ゾーンのアクター（下表）を直接置くこともできます（1 ゾーンだけ単独で試したいとき）。
 

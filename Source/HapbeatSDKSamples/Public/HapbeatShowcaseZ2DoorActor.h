@@ -54,10 +54,10 @@ enum class EHapbeatZ2DoorState : uint8
  *        Open/Opening/Closing (mirrors Unity DoorController: LockToggle only
  *        ever transitions out of the Closed state).
  *
- * Reuses showcase-kit exactly as authored in ShowcaseEventMap.md: open/close/
- * rattle are StreamClip (WAVs shipped under Content/HapbeatSamples/Showcase/
- * Kit/showcase-kit/stream-clips/), slam/lock/unlock are Command (device-
- * resolved, no clip loaded client-side). Haptics-only (no SFX).
+ * Reuses showcase-kit exactly as authored in the Unity Showcase's
+ * ShowcaseEventMap.asset: all six z2_door_* events are StreamClip (WAVs shipped
+ * under Content/HapbeatSamples/Showcase/Kit/showcase-kit/stream-clips/), so no
+ * Kit deployment is needed. Haptics-only (no SFX).
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ2DoorActor : public AActor
@@ -146,7 +146,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;
 
-	// Strong refs keeping the 3 StreamClip WAVs alive when the code-built
+	// Strong refs keeping the 6 StreamClip WAVs alive when the code-built
 	// fallback map is in use (entries only hold a TSoftObjectPtr -- see
 	// FHapbeatSampleLibrary::LoadSampleClip's GC note). Left null when the
 	// EM_Showcase asset supplies the clips.
@@ -154,6 +154,12 @@ private:
 	TObjectPtr<UHapbeatClip> OpenClip;
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> CloseClip;
+	UPROPERTY(Transient)
+	TObjectPtr<UHapbeatClip> SlamClip;
+	UPROPERTY(Transient)
+	TObjectPtr<UHapbeatClip> LockClip;
+	UPROPERTY(Transient)
+	TObjectPtr<UHapbeatClip> UnlockClip;
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> RattleClip;
 

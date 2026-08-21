@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatShowcaseZ1BowlingActor.h"
 
+#include "HapbeatClip.h"
 #include "HapbeatCollisionTriggerComponent.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatSampleLibrary.h"
@@ -136,7 +137,7 @@ void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
 	// category / name / mode, so both paths go through this one resolution step
 	// instead of duplicating the wiring.
 	PinHitEntryId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::Command, TEXT("showcase-kit"), TEXT("z1_pin_hit"));
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z1_pin_hit"));
 }
 
 UHapbeatEventMap* AHapbeatShowcaseZ1BowlingActor::BuildFallbackEventMap()
@@ -144,14 +145,19 @@ UHapbeatEventMap* AHapbeatShowcaseZ1BowlingActor::BuildFallbackEventMap()
 	UHapbeatEventMap* Fallback = NewObject<UHapbeatEventMap>(this);
 	Fallback->Entries.Reset(1);
 
-	// Intensity hardcoded from Content/HapbeatSamples/Showcase/Kit/showcase-kit/
-	// showcase-kit-manifest.json (schema 2.0.0) events["showcase-kit.z1_pin_hit"]
-	// .parameters.intensity, matching Samples~/Showcase/EventMaps/ShowcaseEventMap.md
-	// verbatim: Command mode, gain 1.00 x intensity 0.25 = effective 0.25 (before
-	// each pin's own VelocityScaled multiplier is folded in on top).
+	PinHitClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z1_pin_hit.wav"));
+
+	// Mode + intensity taken from the Unity Showcase's ShowcaseEventMap.asset and
+	// Content/HapbeatSamples/Showcase/Kit/showcase-kit/showcase-kit-manifest.json
+	// (schema 2.0.0) stream_events["showcase-kit.z1_pin_hit"].parameters.intensity:
+	// StreamClip mode, gain 1.00 x intensity 0.25 = effective 0.25 (before each
+	// pin's own VelocityScaled multiplier is folded in on top). The sibling
+	// Samples~/Showcase/EventMaps/ShowcaseEventMap.md said "Command" here, but it
+	// is stale -- the .asset is the source of truth and authors every one of its
+	// 18 entries as StreamClip.
 	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::Command, TEXT("showcase-kit"), TEXT("z1_pin_hit"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, /*Clip=*/nullptr, TEXT("z1_pin_hit")));
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z1_pin_hit"),
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, PinHitClip, TEXT("z1_pin_hit")));
 	return Fallback;
 }
 

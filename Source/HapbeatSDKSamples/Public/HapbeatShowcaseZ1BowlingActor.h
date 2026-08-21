@@ -5,6 +5,7 @@
 #include "GameFramework/Actor.h"
 #include "HapbeatShowcaseZ1BowlingActor.generated.h"
 
+class UHapbeatClip;
 class UHapbeatCollisionTriggerComponent;
 class UHapbeatEventMap;
 class UStaticMeshComponent;
@@ -34,10 +35,9 @@ class AHapbeatShowcaseZ1PinActor;
  * Cylinder) assembled in the constructor; no imported meshes, no Blueprint
  * assets. Haptics-only (no SFX -- would need a USoundWave import).
  *
- * NOTE: z1_pin_hit is a COMMAND-mode event -- the device plays its own
- * installed clip, so you must deploy the showcase-kit to the device with
- * Hapbeat Studio first (Content/HapbeatSamples/Showcase/Kit/showcase-kit/)
- * or pin hits produce no haptics at all.
+ * NOTE: z1_pin_hit is a STREAM_CLIP-mode event (as is every other Showcase
+ * entry) -- the waveform is streamed from the project, so no Kit deployment is
+ * needed for this zone to produce haptics.
  *
  * Key: B -- reset the ball to the spawn point and launch it down the lane
  * (AddImpulse). There is no separate reset key in this simplified sample, so
@@ -116,8 +116,15 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;
 
-	/** Shared entry id every pin's HitTrigger references (Command mode, "showcase-kit.z1_pin_hit"). */
+	/** Shared entry id every pin's HitTrigger references (StreamClip mode, "showcase-kit.z1_pin_hit"). */
 	FGuid PinHitEntryId;
+
+	// Strong ref keeping the pin-hit StreamClip WAV alive when the code-built
+	// fallback map is in use (entries only hold a TSoftObjectPtr -- see
+	// FHapbeatSampleLibrary::LoadSampleClip's GC note). Left null when the
+	// EM_Showcase asset supplies the clip.
+	UPROPERTY(Transient)
+	TObjectPtr<UHapbeatClip> PinHitClip;
 
 	// Constructor-created default subobjects (VisibleAnywhere, not Transient --
 	// these ARE part of the CDO / serialized instance, unlike the BeginPlay-time

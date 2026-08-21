@@ -38,9 +38,10 @@ Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
 強さ・送信先・ループは、コードを触らずここで調整できます
 （各アクターの **Event Map Override** を空にすると、コード生成の EventMap で動きます）。
 
-18 エントリのうち 14 は CLIP なので Kit 無しで鳴ります。ただし Z1 のピン衝突と
-Z2 の強打・施錠・解錠の 4 つは FIRE のため、
-`Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Kit/showcase-kit/` の書き込みが必要です。
+18 エントリはすべて CLIP なので、Kit の書き込み無しで鳴ります。
+`Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Kit/showcase-kit/` には
+波形と manifest が入っており、manifest は EventMap の
+**Refresh Intensities**（強さの取り込み）が参照します。
 
 ---
 

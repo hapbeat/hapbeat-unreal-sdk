@@ -209,12 +209,12 @@ def build_basic_example():
 # (mode, event_name, loop). Order is not load-bearing here -- the Showcase actors
 # look their entries up by event name -- but it is kept zone by zone for reading.
 SHOWCASE_ENTRIES = [
-    ('COMMAND',     'z1_pin_hit',       False),
+    ('STREAM_CLIP', 'z1_pin_hit',       False),
     ('STREAM_CLIP', 'z2_door_open',     False),
     ('STREAM_CLIP', 'z2_door_close',    False),
-    ('COMMAND',     'z2_door_slam',     False),
-    ('COMMAND',     'z2_door_lock',     False),
-    ('COMMAND',     'z2_door_unlock',   False),
+    ('STREAM_CLIP', 'z2_door_slam',     False),
+    ('STREAM_CLIP', 'z2_door_lock',     False),
+    ('STREAM_CLIP', 'z2_door_unlock',   False),
     ('STREAM_CLIP', 'z2_door_rattle',   False),
     ('STREAM_CLIP', 'z3_hook_start',    False),
     ('STREAM_CLIP', 'z3_hook_loop',     True),

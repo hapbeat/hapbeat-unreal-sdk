@@ -104,11 +104,11 @@ void AHapbeatShowcaseZ2DoorActor::BuildEventMap()
 	const FGuid CloseId = FHapbeatSampleLibrary::FindEntryId(
 		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_close"));
 	const FGuid SlamId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_slam"));
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_slam"));
 	const FGuid LockId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_lock"));
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_lock"));
 	const FGuid UnlockId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_unlock"));
+		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_unlock"));
 	const FGuid RattleId = FHapbeatSampleLibrary::FindEntryId(
 		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_rattle"));
 
@@ -133,17 +133,23 @@ UHapbeatEventMap* AHapbeatShowcaseZ2DoorActor::BuildFallbackEventMap()
 
 	OpenClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z2_door_open.wav"));
 	CloseClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z2_door_close.wav"));
+	SlamClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z2_door_slam.wav"));
+	LockClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z2_door_lock.wav"));
+	UnlockClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z2_door_unlock.wav"));
 	RattleClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z2_door_rattle.wav"));
 
-	// Modes + intensities hardcoded from Samples~/Showcase/EventMaps/ShowcaseEventMap.md
-	// (which mirrors Content/HapbeatSamples/Showcase/Kit/showcase-kit/showcase-kit-manifest.json,
-	// schema 2.0.0) verbatim, all gain 1.00:
+	// Modes + intensities taken from the Unity Showcase's ShowcaseEventMap.asset
+	// and Content/HapbeatSamples/Showcase/Kit/showcase-kit/showcase-kit-manifest.json
+	// (schema 2.0.0) stream_events[...].parameters.intensity, all gain 1.00 --
+	// every entry is StreamClip, so this zone needs no Kit deployed:
 	//   z2_door_open    StreamClip  intensity 0.30 (one-shot, tracks the Opening tween)
 	//   z2_door_close   StreamClip  intensity 0.20 (one-shot, tracks the Closing tween)
-	//   z2_door_slam    Command     intensity 0.25 (one-shot)
-	//   z2_door_lock    Command     intensity 0.30 (one-shot)
-	//   z2_door_unlock  Command     intensity 0.30 (one-shot)
+	//   z2_door_slam    StreamClip  intensity 0.25 (one-shot)
+	//   z2_door_lock    StreamClip  intensity 0.30 (one-shot)
+	//   z2_door_unlock  StreamClip  intensity 0.30 (one-shot)
 	//   z2_door_rattle  StreamClip  intensity 0.25 (one-shot, tracks the rattle shake)
+	// The sibling Samples~/Showcase/EventMaps/ShowcaseEventMap.md called slam /
+	// lock / unlock "Command", but it is stale -- the .asset is the source of truth.
 	const FHapbeatEventEntry OpenEntry = FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_open"),
 		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.30f, OpenClip, TEXT("z2_door_open"));
@@ -151,14 +157,14 @@ UHapbeatEventMap* AHapbeatShowcaseZ2DoorActor::BuildFallbackEventMap()
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_close"),
 		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.20f, CloseClip, TEXT("z2_door_close"));
 	const FHapbeatEventEntry SlamEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_slam"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, /*Clip=*/nullptr, TEXT("z2_door_slam"));
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_slam"),
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, SlamClip, TEXT("z2_door_slam"));
 	const FHapbeatEventEntry LockEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_lock"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.30f, /*Clip=*/nullptr, TEXT("z2_door_lock"));
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_lock"),
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.30f, LockClip, TEXT("z2_door_lock"));
 	const FHapbeatEventEntry UnlockEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::Command, TEXT("showcase-kit"), TEXT("z2_door_unlock"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.30f, /*Clip=*/nullptr, TEXT("z2_door_unlock"));
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_unlock"),
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.30f, UnlockClip, TEXT("z2_door_unlock"));
 	const FHapbeatEventEntry RattleEntry = FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z2_door_rattle"),
 		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, RattleClip, TEXT("z2_door_rattle"));
@@ -197,9 +203,10 @@ void AHapbeatShowcaseZ2DoorActor::BindInput()
 
 void AHapbeatShowcaseZ2DoorActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	// Shared sample convention: stop any in-flight StreamClip (open/close/rattle
-	// are stream-mode) so nothing keeps buzzing past the actor's lifetime.
-	for (UHapbeatTriggerComponent* Trigger : { OpenTrigger.Get(), CloseTrigger.Get(), RattleTrigger.Get() })
+	// Shared sample convention: stop any in-flight StreamClip (every entry in this
+	// zone is stream-mode) so nothing keeps buzzing past the actor's lifetime.
+	for (UHapbeatTriggerComponent* Trigger : { OpenTrigger.Get(), CloseTrigger.Get(), SlamTrigger.Get(),
+		LockTrigger.Get(), UnlockTrigger.Get(), RattleTrigger.Get() })
 	{
 		if (Trigger != nullptr)
 		{

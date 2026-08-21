@@ -48,32 +48,28 @@ public:
 	 * @param Map            The Event Map asset holding the entry.
 	 * @param Entry          Which entry inside Map (picked by name in the editor).
 	 * @param GainMultiplier Scales the entry's authored gain for this call only.
-	 *                       Kept OFF AdvancedDisplay on purpose: it is the one pin
-	 *                       a call site routinely varies (per-object strength), so
-	 *                       it stays visible on the node rather than sitting behind
-	 *                       the collapsed arrow.
 	 * @param Pan            -1 = left / 0 = center / +1 = right, ADDED to the
 	 *                       entry's authored Pan (the sum is clamped). Works for
 	 *                       FIRE and CLIP entries alike. FIRE needs a device
 	 *                       running DEC-055 firmware (older firmware plays it
 	 *                       centered); a mono CLIP is upmixed to stereo so it can
-	 *                       be panned. Visible on the node for the same reason as
-	 *                       GainMultiplier: it is a per-call value the caller
-	 *                       varies, since only the call site knows where the event
-	 *                       happened.
+	 *                       be panned.
 	 * @param DelaySeconds   Extra delay for this call only, added on top of
 	 *                       Project Settings Haptic Delay Seconds and the entry's
 	 *                       Delay Offset (sum clamped at 0). For gameplay timing
 	 *                       prefer UE's Delay node; this exists for per-call
-	 *                       compensation -- which is why it sits behind
-	 *                       AdvancedDisplay while Gain and Pan stay on the node.
+	 *                       compensation.
+	 *
+	 * All three per-call knobs sit behind AdvancedDisplay: Map and Entry are what
+	 * the call site always says, while Gain / Pan / Delay are only touched when a
+	 * call varies them, so the node stays two pins wide until the arrow is opened.
 	 * @return The stream handle for a Stream Clip entry (for live gain / pan
 	 *         modulation, or to stop just this playback); null for Command, and
 	 *         null when the arguments do not resolve to an entry.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat",
 		meta = (WorldContext = "WorldContextObject", DisplayName = "Play Hapbeat Event",
-			AdvancedDisplay = "DelaySeconds",
+			AdvancedDisplay = "GainMultiplier, Pan, DelaySeconds",
 			Keywords = "haptic play event hapbeat pan delay"))
 	static UHapbeatStreamPlayback* PlayHapbeatEvent(const UObject* WorldContextObject,
 		UHapbeatEventMap* Map, FHapbeatEntryRef Entry, float GainMultiplier = 1.0f, float Pan = 0.0f,

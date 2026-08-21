@@ -279,8 +279,9 @@ FText FHapbeatEventMapCustomization::GetTestPlayTooltip() const
 	if (Entry.Mode == EHapticMode::StreamClip)
 	{
 		return LOCTEXT("TestPlayStreamNote",
-			"StreamClip entries can't be test-played from the editor in v1 (the device has no local "
-			"clip for them) -- enter PIE and use the runtime StreamClip API to test streams.");
+			"StreamClip entries are test-played from the Event Map window (Tools > Hapbeat Event Map), "
+			"which streams the clip in place without entering PIE and stops on its Stop button. "
+			"This Details transport covers Command entries.");
 	}
 	if (Entry.CachedManifestIntensity < 0.0f)
 	{

@@ -22,12 +22,24 @@ DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ2, Log, All);
 
 namespace
 {
-	// Door dimensions, centimeters (UE's world unit). Purely cosmetic scene
-	// layout -- no protocol/gain meaning. Engine basic shapes are 100 cm across
-	// their default axis (Cube 100^3).
-	constexpr float DoorWidth = 110.0f;
-	constexpr float DoorHeight = 220.0f;
-	constexpr float DoorThickness = 5.0f;
+	// Unity Showcase.unity, Z2_Door subtree, converted: UE (X, Y, Z) cm =
+	// (Unity z, Unity x, Unity y) x 100.
+
+	/** Unity Door: local (0, 1, 0) with scale (1.5, 2, 0.1) -- a 1.5 x 2 x 0.1 m slab. */
+	constexpr float LeafWidthCm = 150.0f;    // along UE Y
+	constexpr float LeafHeightCm = 200.0f;   // along UE Z
+	constexpr float LeafThicknessCm = 10.0f; // along UE X
+	constexpr float LeafCentreZCm = 100.0f;  // Unity y = 1 m
+
+	/** The hinge sits at the leaf's -Y edge, so the leaf centre is half a width away from it. */
+	const FVector HingeLocalCm(0.0f, -LeafWidthCm * 0.5f, 0.0f);
+	const FVector LeafCentreFromHingeCm(0.0f, LeafWidthCm * 0.5f, LeafCentreZCm);
+
+	/** Unity DoorFrame: local (0.427, 0, 0). Native size, so no fit -- only FrameScale. */
+	const FVector FrameLocalCm(0.0f, 42.7f, 0.0f);
+
+	/** Unity Z2_Door/PlayerSpawn: local (0.2, 0.2, -4). Z is the player's feet, hence 0. */
+	const FVector PlayerSpawnCm(-400.0f, 20.0f, 0.0f);
 }
 
 // =============================================================================
@@ -38,22 +50,46 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
-	// Root IS the hinge pivot: rotating it (SetDoorYaw) swings DoorMesh, which
-	// is offset by half its width so the hinge sits at one vertical edge, not
-	// the door's center. Unlike Z4/Z5 (single mesh = root), this zone needs a
-	// plain scene root distinct from its one mesh for exactly this reason.
+	// The actor root does NOT rotate -- the frame hangs off it and has to stay
+	// put. DoorHinge below is the pivot.
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
-	DoorMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorMesh"));
-	DoorMesh->SetupAttachment(RootComponent);
-	DoorMesh->SetMobility(EComponentMobility::Movable); // must stay Movable: it is rotated at runtime
+	// Fixed frame, at Unity's DoorFrame offset.
+	DoorFrameMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorFrameMesh"));
+	DoorFrameMesh->SetupAttachment(RootComponent);
+	DoorFrameMesh->SetMobility(EComponentMobility::Movable);
+	DoorFrameMesh->SetRelativeLocation(FrameLocalCm);
+	DoorFrameMesh->SetCollisionProfileName(TEXT("BlockAll"));
+	// No primitive stand-in: a frame drawn as a cube would be a wall across the
+	// doorway. It simply does not appear until SM_DoorFrame is imported.
+	DoorFrameMesh->SetVisibility(false);
+
+	// The pivot. SetDoorYaw turns this and nothing else, so the leaf swings
+	// about its hinge-side edge while the frame stays where it is.
+	DoorHinge = CreateDefaultSubobject<USceneComponent>(TEXT("DoorHinge"));
+	DoorHinge->SetupAttachment(RootComponent);
+	DoorHinge->SetMobility(EComponentMobility::Movable);
+	DoorHinge->SetRelativeLocation(HingeLocalCm);
+
+	DoorLeafMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorLeafMesh"));
+	DoorLeafMesh->SetupAttachment(DoorHinge);
+	DoorLeafMesh->SetMobility(EComponentMobility::Movable); // must stay Movable: it is rotated at runtime
 	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
 	{
-		DoorMesh->SetStaticMesh(CubeMesh);
+		DoorLeafMesh->SetStaticMesh(CubeMesh);
 	}
-	DoorMesh->SetRelativeLocation(FVector(DoorWidth * 0.5f, 0.0f, DoorHeight * 0.5f));
-	DoorMesh->SetRelativeScale3D(FVector(DoorWidth / 100.0f, DoorThickness / 100.0f, DoorHeight / 100.0f));
-	DoorMesh->SetCollisionProfileName(TEXT("BlockAll"));
+	DoorLeafMesh->SetRelativeLocation(LeafCentreFromHingeCm);
+	DoorLeafMesh->SetRelativeScale3D(
+		FVector(LeafThicknessCm, LeafWidthCm, LeafHeightCm) / 100.0f); // engine Cube is 100 cm authored
+	DoorLeafMesh->SetCollisionProfileName(TEXT("BlockAll"));
+
+	// Carried by the leaf, so it swings with it. Its own placement comes from
+	// the imported model; hidden until that model is present.
+	DoorHandleMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorHandleMesh"));
+	DoorHandleMesh->SetupAttachment(DoorLeafMesh);
+	DoorHandleMesh->SetMobility(EComponentMobility::Movable);
+	DoorHandleMesh->SetCollisionProfileName(TEXT("NoCollision"));
+	DoorHandleMesh->SetVisibility(false);
 
 	OpenTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("OpenTrigger"));
 	CloseTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("CloseTrigger"));
@@ -79,42 +115,130 @@ void AHapbeatShowcaseZ2DoorActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (RootComponent != nullptr)
-	{
-		RootComponent->SetRelativeLocation(FootprintOffset);
-	}
-
 	ApplyShowcaseAssets();
 	BuildEventMap();
 	BindInput();
 
-	SetDoorYaw(0.0f); // Closed
+	ResetDoorState();
+}
+
+float AHapbeatShowcaseZ2DoorActor::FitDoorPiece(UStaticMeshComponent* Component, UStaticMesh* Mesh,
+	const FVector& TargetSizeCm)
+{
+	if (Component == nullptr || Mesh == nullptr)
+	{
+		return 0.0f;
+	}
+
+	const FBoxSphereBounds Bounds = Mesh->GetBounds();
+	const FVector Size = Bounds.BoxExtent * 2.0f;
+
+	// Which way round the source model runs its width is a property of the FBX,
+	// not something this zone can assume: measure it. A door leaf is wide in one
+	// horizontal axis and thin in the other, so whichever of X/Y is larger IS the
+	// width -- and if that is X, the piece needs a quarter turn to face the way
+	// this zone's doorway does (width along Y).
+	const bool bWidthRunsAlongX = Size.X > Size.Y;
+	const float YawDegrees = bWidthRunsAlongX ? 90.0f : 0.0f;
+
+	// Fit in the MESH's own axes, so the target box has to be stated the same
+	// way round as the mesh is before the yaw above turns it.
+	const FVector MeshTarget = bWidthRunsAlongX
+		? FVector(TargetSizeCm.Y, TargetSizeCm.X, TargetSizeCm.Z)
+		: TargetSizeCm;
+	const FVector Scale(
+		MeshTarget.X / FMath::Max(Size.X, KINDA_SMALL_NUMBER),
+		MeshTarget.Y / FMath::Max(Size.Y, KINDA_SMALL_NUMBER),
+		MeshTarget.Z / FMath::Max(Size.Z, KINDA_SMALL_NUMBER));
+
+	Component->SetStaticMesh(Mesh);
+	Component->SetRelativeScale3D(Scale);
+	Component->SetRelativeRotation(FRotator(0.0f, YawDegrees, 0.0f));
+	Component->SetVisibility(true);
+	return YawDegrees;
 }
 
 void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 {
-	if (UStaticMesh* ImportedDoor =
+	UMaterialInterface* DoorMaterial =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial"));
+
+	// Three separate meshes out of Door.fbx (imported with Combine Meshes OFF).
+	// The leaf has to be its own asset for any of this to work: a leaf welded to
+	// its frame cannot swing.
+	if (UStaticMesh* LeafMesh =
 		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Door")))
 	{
-		if (DoorMesh != nullptr)
+		const float LeafYaw = FitDoorPiece(DoorLeafMesh, LeafMesh,
+			FVector(LeafThicknessCm, LeafWidthCm, LeafHeightCm));
+		if (DoorLeafMesh != nullptr)
 		{
-			// SM_Door is one combined mesh (frame + leaf) whose pivot is wherever
-			// the source model put it, so the hinge line is recovered from bounds:
-			// park the mesh's -X edge on the hinge (Root, the component that is
-			// rotated), centre it on Y, and sit its bottom on the floor. Scale
-			// stays 1 -- the import is already ~175 x 33 x 314 cm, a real door.
-			const FBoxSphereBounds Bounds = ImportedDoor->GetBounds();
-			DoorMesh->SetStaticMesh(ImportedDoor);
-			DoorMesh->SetRelativeScale3D(FVector::OneVector);
-			DoorMesh->SetRelativeLocation(FVector(
-				-(Bounds.Origin.X - Bounds.BoxExtent.X),
-				-Bounds.Origin.Y,
-				-(Bounds.Origin.Z - Bounds.BoxExtent.Z)));
-
-			if (UMaterialInterface* DoorMaterial =
-				FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")))
+			// Sit the fitted leaf's centre exactly on the component's origin (which
+			// the constructor already placed half a width from the hinge), so an
+			// off-centre pivot in the source model does not push the leaf out of
+			// its frame.
+			DoorLeafMesh->SetRelativeLocation(LeafCentreFromHingeCm
+				- FHapbeatSampleLibrary::ComputeFittedBoundsCentre(
+					LeafMesh, DoorLeafMesh->GetRelativeScale3D(), FRotator(0.0f, LeafYaw, 0.0f)));
+			if (DoorMaterial != nullptr)
 			{
-				DoorMesh->SetMaterial(0, DoorMaterial);
+				DoorLeafMesh->SetMaterial(0, DoorMaterial);
+			}
+		}
+	}
+
+	if (UStaticMesh* FrameMesh =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_DoorFrame")))
+	{
+		if (DoorFrameMesh != nullptr)
+		{
+			// The frame is used at its authored size (only FrameScale adjusts it),
+			// so it is placed rather than fitted: same yaw rule as the leaf, and its
+			// bottom sat on the floor.
+			const FVector Size = FrameMesh->GetBounds().BoxExtent * 2.0f;
+			const float YawDegrees = Size.X > Size.Y ? 90.0f : 0.0f;
+			const FRotator Rotation(0.0f, YawDegrees, 0.0f);
+			const FVector Scale(FrameScale);
+
+			DoorFrameMesh->SetStaticMesh(FrameMesh);
+			DoorFrameMesh->SetRelativeScale3D(Scale);
+			DoorFrameMesh->SetRelativeRotation(Rotation);
+			const FVector Centre = FHapbeatSampleLibrary::ComputeFittedBoundsCentre(FrameMesh, Scale, Rotation);
+			const float HalfHeight = FrameMesh->GetBounds().BoxExtent.Z * Scale.Z;
+			DoorFrameMesh->SetRelativeLocation(FVector(
+				FrameLocalCm.X - Centre.X,
+				FrameLocalCm.Y - Centre.Y,
+				FrameLocalCm.Z - Centre.Z + HalfHeight)); // bottom on the floor
+			DoorFrameMesh->SetVisibility(true);
+			if (DoorMaterial != nullptr)
+			{
+				DoorFrameMesh->SetMaterial(0, DoorMaterial);
+			}
+		}
+	}
+
+	if (UStaticMesh* HandleMesh =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_DoorHandle")))
+	{
+		if (DoorHandleMesh != nullptr)
+		{
+			// Left at its authored transform relative to the leaf -- the handle's
+			// position on the door is the model's own business, and it rides the
+			// leaf's swing through the attachment -- but with the leaf's
+			// non-uniform fit scale divided back out, so a leaf squashed to 10 cm
+			// thick does not take the handle with it.
+			const FVector LeafScale = DoorLeafMesh != nullptr
+				? DoorLeafMesh->GetRelativeScale3D()
+				: FVector::OneVector;
+			DoorHandleMesh->SetRelativeScale3D(FVector(
+				1.0f / FMath::Max(FMath::Abs(LeafScale.X), KINDA_SMALL_NUMBER),
+				1.0f / FMath::Max(FMath::Abs(LeafScale.Y), KINDA_SMALL_NUMBER),
+				1.0f / FMath::Max(FMath::Abs(LeafScale.Z), KINDA_SMALL_NUMBER)));
+			DoorHandleMesh->SetStaticMesh(HandleMesh);
+			DoorHandleMesh->SetVisibility(true);
+			if (DoorMaterial != nullptr)
+			{
+				DoorHandleMesh->SetMaterial(0, DoorMaterial);
 			}
 		}
 	}
@@ -253,14 +377,8 @@ void AHapbeatShowcaseZ2DoorActor::EndPlay(const EEndPlayReason::Type EndPlayReas
 {
 	// Shared sample convention: stop any in-flight StreamClip (every entry in this
 	// zone is stream-mode) so nothing keeps buzzing past the actor's lifetime.
-	for (UHapbeatTriggerComponent* Trigger : { OpenTrigger.Get(), CloseTrigger.Get(), SlamTrigger.Get(),
-		LockTrigger.Get(), UnlockTrigger.Get(), RattleTrigger.Get() })
-	{
-		if (Trigger != nullptr)
-		{
-			Trigger->Stop();
-		}
-	}
+	// Same teardown the switcher asks for on the way out of the zone.
+	OnZoneDeactivated();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -281,6 +399,7 @@ void AHapbeatShowcaseZ2DoorActor::HandleToggleKey()
 	case EHapbeatZ2DoorState::Open:
 		State = EHapbeatZ2DoorState::Closing;
 		StateElapsedSeconds = 0.0f;
+		ActiveCloseDurationSeconds = CloseDurationSeconds;
 		if (CloseTrigger != nullptr)
 		{
 			CloseTrigger->Fire();
@@ -307,16 +426,32 @@ void AHapbeatShowcaseZ2DoorActor::HandleToggleKey()
 	}
 }
 
+void AHapbeatShowcaseZ2DoorActor::DebugSetDoorOpen(bool bOpen)
+{
+	// Deliberately routed through HandleToggleKey rather than setting State
+	// directly: a capture must show the door the player would see, tween, sound,
+	// haptics and all.
+	const bool bWantsToggle = bOpen
+		? State == EHapbeatZ2DoorState::Closed
+		: State == EHapbeatZ2DoorState::Open;
+	if (bWantsToggle)
+	{
+		HandleToggleKey();
+	}
+}
+
 void AHapbeatShowcaseZ2DoorActor::HandleActionKey()
 {
 	switch (State)
 	{
 	case EHapbeatZ2DoorState::Open:
-		// Slam: abrupt by definition -- snap straight to Closed, skipping the
-		// graceful Closing tween entirely (no StateElapsedSeconds ramp).
-		State = EHapbeatZ2DoorState::Closed;
+		// Slam: the same swing as a close, taken at Unity's slam speed
+		// (SlamDurationSeconds, ~0.12 s). Snapping straight to Closed -- which is
+		// what the previous version did -- meant the haptic fired against a door
+		// that had already teleported shut, with nothing on screen to match it.
+		State = EHapbeatZ2DoorState::Closing;
 		StateElapsedSeconds = 0.0f;
-		SetDoorYaw(0.0f);
+		ActiveCloseDurationSeconds = SlamDurationSeconds;
 		if (SlamTrigger != nullptr)
 		{
 			SlamTrigger->Fire();
@@ -372,9 +507,43 @@ void AHapbeatShowcaseZ2DoorActor::HandleLockKey()
 
 void AHapbeatShowcaseZ2DoorActor::SetDoorYaw(float Degrees)
 {
-	if (RootComponent != nullptr)
+	// The HINGE, not the actor root: turning the root would swing the frame (and
+	// the whole zone) with the leaf.
+	if (DoorHinge != nullptr)
 	{
-		RootComponent->SetRelativeRotation(FRotator(0.0f, Degrees, 0.0f));
+		DoorHinge->SetRelativeRotation(FRotator(0.0f, Degrees, 0.0f));
+	}
+}
+
+void AHapbeatShowcaseZ2DoorActor::ResetDoorState()
+{
+	State = EHapbeatZ2DoorState::Closed;
+	StateElapsedSeconds = 0.0f;
+	ActiveCloseDurationSeconds = CloseDurationSeconds;
+	bRattling = false;
+	RattleElapsedSeconds = 0.0f;
+	SetDoorYaw(0.0f);
+}
+
+void AHapbeatShowcaseZ2DoorActor::OnZoneActivated()
+{
+	// A door left half open (or locked) when you last left the zone would be a
+	// confusing thing to come back to, so entering resets it -- the counterpart
+	// of Z1 re-racking its pins.
+	ResetDoorState();
+}
+
+void AHapbeatShowcaseZ2DoorActor::OnZoneDeactivated()
+{
+	// Every entry here is stream-mode, so a transition fired just before the
+	// switch would otherwise keep streaming into the next zone.
+	for (UHapbeatTriggerComponent* Trigger : { OpenTrigger.Get(), CloseTrigger.Get(), SlamTrigger.Get(),
+		LockTrigger.Get(), UnlockTrigger.Get(), RattleTrigger.Get() })
+	{
+		if (Trigger != nullptr)
+		{
+			Trigger->Stop();
+		}
 	}
 }
 
@@ -399,7 +568,8 @@ void AHapbeatShowcaseZ2DoorActor::Tick(float DeltaSeconds)
 	case EHapbeatZ2DoorState::Closing:
 	{
 		StateElapsedSeconds += DeltaSeconds;
-		const float Alpha = FMath::Clamp(StateElapsedSeconds / CloseDurationSeconds, 0.0f, 1.0f);
+		const float Alpha = FMath::Clamp(
+			StateElapsedSeconds / FMath::Max(ActiveCloseDurationSeconds, KINDA_SMALL_NUMBER), 0.0f, 1.0f);
 		SetDoorYaw(FMath::Lerp(OpenYawDegrees, 0.0f, Alpha));
 		if (Alpha >= 1.0f)
 		{
@@ -412,19 +582,30 @@ void AHapbeatShowcaseZ2DoorActor::Tick(float DeltaSeconds)
 	{
 		if (bRattling)
 		{
+			// Three straight legs of RattleLegSeconds each: 0 -> +A -> -A -> 0.
+			// A locked door being pushed does not oscillate like a spring, it
+			// takes up its slack in one direction, then the other, then stops --
+			// and a rattle this short (0.3 s in all) reads as one jolt anyway.
+			const float Leg = FMath::Max(RattleLegSeconds, KINDA_SMALL_NUMBER);
 			RattleElapsedSeconds += DeltaSeconds;
-			if (RattleElapsedSeconds >= RattleDurationSeconds)
+			if (RattleElapsedSeconds >= Leg * 3.0f)
 			{
 				bRattling = false;
 				SetDoorYaw(0.0f);
 			}
+			else if (RattleElapsedSeconds < Leg)
+			{
+				SetDoorYaw(FMath::Lerp(0.0f, RattleAmplitudeDegrees, RattleElapsedSeconds / Leg));
+			}
+			else if (RattleElapsedSeconds < Leg * 2.0f)
+			{
+				SetDoorYaw(FMath::Lerp(RattleAmplitudeDegrees, -RattleAmplitudeDegrees,
+					(RattleElapsedSeconds - Leg) / Leg));
+			}
 			else
 			{
-				// Damped sine shake, settling back to 0 by RattleDurationSeconds.
-				const float Damping = 1.0f - (RattleElapsedSeconds / RattleDurationSeconds);
-				const float Shake = FMath::Sin(RattleElapsedSeconds * 2.0f * PI * RattleFrequencyHz)
-					* RattleAmplitudeDegrees * Damping;
-				SetDoorYaw(Shake);
+				SetDoorYaw(FMath::Lerp(-RattleAmplitudeDegrees, 0.0f,
+					(RattleElapsedSeconds - Leg * 2.0f) / Leg));
 			}
 		}
 		break;
@@ -434,6 +615,16 @@ void AHapbeatShowcaseZ2DoorActor::Tick(float DeltaSeconds)
 		break; // Closed, Open -- static, nothing to tween.
 	}
 
+	// The Showcase switcher draws a shared Slate HUD covering the key guide, the
+	// zone's own state and the device footer, so a zone under it prints none of
+	// this. ONE EARLY RETURN, not a guard around each line: the state line below
+	// used to sit outside the per-line guard and showed on top of the shared HUD.
+	// Everything below here is HUD-only.
+	if (IsOwnedByShowcaseSwitcher(this))
+	{
+		return;
+	}
+
 	HudRefreshTimer -= DeltaSeconds;
 	if (HudRefreshTimer > 0.0f)
 	{
@@ -441,14 +632,9 @@ void AHapbeatShowcaseZ2DoorActor::Tick(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	// The Showcase switcher draws a shared Slate key guide covering this, so
-	// only print the line when this zone is running on its own.
-	if (!IsOwnedByShowcaseSwitcher(this))
-	{
-		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-			TEXT("Z2 Door -- F: open/close (rattles when locked)  G: slam (open)  L: lock/unlock"),
-			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
-	}
+	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+		TEXT("Z2 Door -- F: open/close (rattles when locked)  G: slam (open)  L: lock/unlock"),
+		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
 
 	FString StateName;
 	switch (State)
@@ -462,11 +648,7 @@ void AHapbeatShowcaseZ2DoorActor::Tick(float DeltaSeconds)
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
 		FString::Printf(TEXT("Z2 state: %s"), *StateName),
 		FColor::Silver, HudRefreshIntervalSeconds * 2.0f);
-	// Same reason: the shared HUD has a device / ping footer.
-	if (!IsOwnedByShowcaseSwitcher(this))
-	{
-		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
-	}
+	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
 }
 
 FText AHapbeatShowcaseZ2DoorActor::GetZoneLabel() const
@@ -485,7 +667,5 @@ TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ2DoorActor::GetHudCommands()
 
 FTransform AHapbeatShowcaseZ2DoorActor::GetPlayerSpawnRelative() const
 {
-	// Unity Showcase.unity: Z2_Door/PlayerSpawn at (0.2, 0.2, -4) m. Unity
-	// (x, y, z) m -> UE (z, x, y) cm, so 4 m back, 20 cm right, 20 cm up.
-	return FTransform(FRotator::ZeroRotator, FVector(-400.0f, 20.0f, 20.0f));
+	return FTransform(FRotator::ZeroRotator, PlayerSpawnCm);
 }

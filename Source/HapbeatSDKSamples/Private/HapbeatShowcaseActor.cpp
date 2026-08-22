@@ -20,6 +20,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
+#include "EngineUtils.h" // TActorIterator (finding the zones placed in the level)
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::*
 #include "Kismet/GameplayStatics.h"
@@ -101,6 +102,7 @@ void AHapbeatShowcaseActor::BeginPlay()
 	Super::BeginPlay();
 
 	BuildManualFireEventMap();
+	CollectPlacedZones();
 	BindInput();
 	CreateHud();
 
@@ -112,7 +114,10 @@ void AHapbeatShowcaseActor::BeginPlay()
 		bPongSubscribed = true;
 	}
 
-	ShowZone(InitialZone);
+	// NOT ShowZone(InitialZone) here: the placed zones' BeginPlay is not ordered
+	// against ours, and a zone that begins play after us would push its input
+	// component back onto the player's stack, undoing the deactivation. Tick
+	// applies it instead -- by then every actor's BeginPlay has run.
 }
 
 void AHapbeatShowcaseActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -139,8 +144,10 @@ void AHapbeatShowcaseActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 
 	ClearActiveZone();
+	PlacedZones.Reset();
 	CurrentZone = 0;
 	PlayerStateAppliedZone = 0;
+	bInitialZoneApplied = false;
 
 	Super::EndPlay(EndPlayReason);
 }
@@ -165,7 +172,7 @@ void AHapbeatShowcaseActor::BindInput()
 
 	// Bind only as many digits as there are zones, so an unused key stays free
 	// for whatever else the level does with it.
-	const int32 BindCount = FMath::Min(Zones.Num(), MaxSwitchableZones);
+	const int32 BindCount = FMath::Min(GetZoneCount(), MaxSwitchableZones);
 	if (BindCount >= 1) { InputComponent->BindKey(EKeys::One, IE_Pressed, this, &AHapbeatShowcaseActor::HandleZone1Key); }
 	if (BindCount >= 2) { InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &AHapbeatShowcaseActor::HandleZone2Key); }
 	if (BindCount >= 3) { InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &AHapbeatShowcaseActor::HandleZone3Key); }
@@ -183,39 +190,130 @@ void AHapbeatShowcaseActor::BindInput()
 	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &AHapbeatShowcaseActor::HandlePingKey);
 }
 
-void AHapbeatShowcaseActor::ShowZone(int32 OneBasedIndex)
+void AHapbeatShowcaseActor::CollectPlacedZones()
 {
-	if (Zones.Num() == 0)
+	PlacedZones.Reset();
+
+	UWorld* World = GetWorld();
+	if (World == nullptr)
 	{
-		UE_LOG(LogHapbeatShowcase, Warning, TEXT("Showcase: no zones configured; nothing to show."));
+		return;
+	}
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		AActor* Actor = *It;
+		if (IsValid(Actor) && Actor->Implements<UHapbeatShowcaseZone>())
+		{
+			PlacedZones.Add(Actor);
+		}
+	}
+	if (PlacedZones.Num() == 0)
+	{
+		// Nothing placed -- the spawn fallback takes over. Not a warning: a bare
+		// level with just this actor in it is a supported way to run the Showcase.
 		return;
 	}
 
-	const int32 Index = FMath::Clamp(OneBasedIndex, 1, FMath::Min(Zones.Num(), MaxSwitchableZones));
-	if (Index == CurrentZone && IsValid(ActiveZoneActor))
+	// Sorted by the zone's own number, so the keys mean Z1..Z5 regardless of the
+	// order the actors happen to come out of the iterator in. An unnumbered zone
+	// (GetZoneIndex() == 0) sorts last rather than stealing key 1.
+	PlacedZones.Sort([](const TObjectPtr<AActor>& A, const TObjectPtr<AActor>& B)
+	{
+		const IHapbeatShowcaseZone* ZoneA = Cast<IHapbeatShowcaseZone>(A.Get());
+		const IHapbeatShowcaseZone* ZoneB = Cast<IHapbeatShowcaseZone>(B.Get());
+		const int32 IndexA = ZoneA != nullptr && ZoneA->GetZoneIndex() > 0 ? ZoneA->GetZoneIndex() : MAX_int32;
+		const int32 IndexB = ZoneB != nullptr && ZoneB->GetZoneIndex() > 0 ? ZoneB->GetZoneIndex() : MAX_int32;
+		return IndexA < IndexB;
+	});
+
+	UE_LOG(LogHapbeatShowcase, Log, TEXT("Showcase: driving %d zone actor(s) placed in the level."),
+		PlacedZones.Num());
+}
+
+int32 AHapbeatShowcaseActor::GetZoneCount() const
+{
+	return PlacedZones.Num() > 0 ? PlacedZones.Num() : Zones.Num();
+}
+
+AActor* AHapbeatShowcaseActor::GetActiveZoneActor() const
+{
+	if (PlacedZones.Num() > 0)
+	{
+		return PlacedZones.IsValidIndex(CurrentZone - 1) ? PlacedZones[CurrentZone - 1].Get() : nullptr;
+	}
+	return SpawnedZoneActor.Get();
+}
+
+void AHapbeatShowcaseActor::ShowZone(int32 OneBasedIndex)
+{
+	const int32 ZoneCount = GetZoneCount();
+	if (ZoneCount == 0)
+	{
+		UE_LOG(LogHapbeatShowcase, Warning, TEXT("Showcase: no zones placed or configured; nothing to show."));
+		return;
+	}
+
+	// CurrentZone is 0 until the first call, and Index is always >= 1, so the
+	// first call always goes through -- which is what deactivates the other four
+	// placed zones.
+	const int32 Index = FMath::Clamp(OneBasedIndex, 1, FMath::Min(ZoneCount, MaxSwitchableZones));
+	if (Index == CurrentZone && IsValid(GetActiveZoneActor()))
 	{
 		return;
 	}
 
 	ClearActiveZone();
 	CurrentZone = Index;
-	SpawnActiveZone();
 
-	// After the spawn: the zone actor is what answers where the player stands
-	// and whether it wants the cursor, and what its key rows are.
+	if (PlacedZones.Num() > 0)
+	{
+		// Every zone off, then the chosen one on. Doing the whole set (rather
+		// than just the outgoing one) makes the first call correct too, and
+		// costs nothing at five zones.
+		for (int32 ZoneIndex = 0; ZoneIndex < PlacedZones.Num(); ++ZoneIndex)
+		{
+			AActor* ZoneActor = PlacedZones[ZoneIndex].Get();
+			if (!IsValid(ZoneActor) || ZoneIndex == CurrentZone - 1)
+			{
+				continue;
+			}
+			IHapbeatShowcaseZone::SetZoneSceneActive(ZoneActor, false);
+			if (IHapbeatShowcaseZone* Zone = Cast<IHapbeatShowcaseZone>(ZoneActor))
+			{
+				Zone->OnZoneDeactivated();
+			}
+		}
+
+		if (AActor* ActiveActor = GetActiveZoneActor())
+		{
+			IHapbeatShowcaseZone::SetZoneSceneActive(ActiveActor, true);
+			if (IHapbeatShowcaseZone* Zone = Cast<IHapbeatShowcaseZone>(ActiveActor))
+			{
+				Zone->OnZoneActivated();
+			}
+		}
+	}
+	else
+	{
+		SpawnActiveZone();
+	}
+
+	// After the switch: the zone actor is what answers where the player stands,
+	// whether it wants the cursor, and what its key rows are.
 	ApplyZonePlayerState();
 	RefreshHudContent();
 }
 
 void AHapbeatShowcaseActor::ClearActiveZone()
 {
-	// The zone's own EndPlay stops its stream / loop and tears down the actors
-	// it spawned (pins, shark, targets), so destroying it is the switch.
-	if (IsValid(ActiveZoneActor))
+	// Fallback path: the zone was spawned, so destroying it is the teardown (its
+	// own EndPlay stops that zone's haptics). Placed zones are hidden instead --
+	// ShowZone does that for the whole set right after this call.
+	if (PlacedZones.Num() == 0 && IsValid(SpawnedZoneActor))
 	{
-		ActiveZoneActor->Destroy();
+		SpawnedZoneActor->Destroy();
 	}
-	ActiveZoneActor = nullptr;
+	SpawnedZoneActor = nullptr;
 
 	// Belt and braces: anything a zone left playing (or a device left ringing
 	// mid-clip) stops here, before the next zone starts sending. Same pair
@@ -248,8 +346,8 @@ void AHapbeatShowcaseActor::SpawnActiveZone()
 
 	// Spawned at THIS actor's pose, so every zone appears where the switcher was
 	// placed (each zone lays its own geometry out relative to its transform).
-	ActiveZoneActor = World->SpawnActor<AActor>(Entry.ZoneClass, GetActorLocation(), GetActorRotation(), Params);
-	if (ActiveZoneActor == nullptr)
+	SpawnedZoneActor = World->SpawnActor<AActor>(Entry.ZoneClass, GetActorLocation(), GetActorRotation(), Params);
+	if (SpawnedZoneActor == nullptr)
 	{
 		UE_LOG(LogHapbeatShowcase, Warning, TEXT("Showcase: failed to spawn zone %d (%s)."),
 			CurrentZone, *Entry.ZoneClass->GetName());
@@ -279,10 +377,21 @@ void AHapbeatShowcaseActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	// The player pawn may not exist yet when the initial zone is shown from
-	// BeginPlay (spawning / possession is not ordered against actor BeginPlay),
-	// so keep trying until it does -- otherwise the player would never leave
-	// the PlayerStart. Costs one pawn lookup per frame and stops as soon as it
+	// The initial zone lands here rather than in BeginPlay: see
+	// bInitialZoneApplied's comment (a placed zone that begins play after us
+	// would otherwise re-enable its own input).
+	if (!bInitialZoneApplied)
+	{
+		// Set first: a level with no zones at all makes ShowZone a warning-only
+		// no-op, and this must not repeat that warning every frame.
+		bInitialZoneApplied = true;
+		ShowZone(InitialZone);
+	}
+
+	// The player pawn may not exist yet when the initial zone is shown
+	// (spawning / possession is not ordered against actor BeginPlay), so keep
+	// trying until it does -- otherwise the player would never leave the
+	// PlayerStart. Costs one pawn lookup per frame and stops as soon as it
 	// succeeds; with a non-Showcase pawn it simply never succeeds, which is the
 	// same no-op as before.
 	if (CurrentZone != 0 && PlayerStateAppliedZone != CurrentZone)
@@ -330,7 +439,7 @@ void AHapbeatShowcaseActor::RefreshHudContent()
 		return;
 	}
 
-	const IHapbeatShowcaseZone* Zone = Cast<IHapbeatShowcaseZone>(ActiveZoneActor.Get());
+	const IHapbeatShowcaseZone* Zone = Cast<IHapbeatShowcaseZone>(GetActiveZoneActor());
 
 	// "[2] Door" -- Unity HudGuide builds the same "[Zone N] Label" title. The
 	// zone's own label wins over the switcher's entry, so a zone dropped in by
@@ -343,14 +452,28 @@ void AHapbeatShowcaseActor::RefreshHudContent()
 	const FText Title = FText::FromString(FString::Printf(TEXT("[%d] %s"),
 		CurrentZone, Label.IsEmpty() ? TEXT("Zone") : *Label.ToString()));
 
-	// One line listing every zone, the active one wrapped in asterisks.
+	// One line listing every zone, the active one wrapped in asterisks. Each
+	// label comes from the placed zone itself when there is one, so the list
+	// describes what is actually in the level rather than the fallback table.
 	FString ZoneList;
-	const int32 ShownCount = FMath::Min(Zones.Num(), MaxSwitchableZones);
+	const int32 ShownCount = FMath::Min(GetZoneCount(), MaxSwitchableZones);
 	for (int32 i = 0; i < ShownCount; ++i)
 	{
-		const FString ZoneLabel = Zones[i].Label.IsEmpty()
+		FText EntryLabel = FText::GetEmpty();
+		if (PlacedZones.IsValidIndex(i))
+		{
+			if (const IHapbeatShowcaseZone* PlacedZone = Cast<IHapbeatShowcaseZone>(PlacedZones[i].Get()))
+			{
+				EntryLabel = PlacedZone->GetZoneLabel();
+			}
+		}
+		if (EntryLabel.IsEmpty() && Zones.IsValidIndex(i))
+		{
+			EntryLabel = Zones[i].Label;
+		}
+		const FString ZoneLabel = EntryLabel.IsEmpty()
 			? FString::Printf(TEXT("Zone %d"), i + 1)
-			: Zones[i].Label.ToString();
+			: EntryLabel.ToString();
 		ZoneList += (i + 1 == CurrentZone)
 			? FString::Printf(TEXT("*[%d] %s*  "), i + 1, *ZoneLabel)
 			: FString::Printf(TEXT("[%d] %s  "), i + 1, *ZoneLabel);
@@ -376,15 +499,19 @@ void AHapbeatShowcaseActor::ApplyZonePlayerState()
 		return;
 	}
 
-	const IHapbeatShowcaseZone* Zone = Cast<IHapbeatShowcaseZone>(ActiveZoneActor.Get());
+	AActor* ZoneActor = GetActiveZoneActor();
+	const IHapbeatShowcaseZone* Zone = Cast<IHapbeatShowcaseZone>(ZoneActor);
 	if (Zone == nullptr)
 	{
 		return;
 	}
 
-	// Zone-relative -> world. Zones spawn at this actor's transform, so this
-	// actor's transform is the zone origin the spawn pose is relative to.
-	FTransform Spawn = Zone->GetPlayerSpawnRelative() * GetActorTransform();
+	// Zone-relative -> world, against the ZONE ACTOR's own transform: a placed
+	// zone stands in its own room somewhere else in the map, so composing
+	// against the switcher's transform (which is what the spawn-only version
+	// did) would drop the player in the wrong room. The fallback path spawns the
+	// zone at the switcher's transform, so the two agree there.
+	FTransform Spawn = Zone->GetPlayerSpawnRelative() * ZoneActor->GetActorTransform();
 
 	// The interface's Z is the player's FEET; a capsule is positioned by its
 	// centre, so lift it by the half-height (see GetPlayerSpawnRelative).

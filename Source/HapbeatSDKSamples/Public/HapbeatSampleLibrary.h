@@ -97,20 +97,86 @@ public:
 	static UObject* LoadShowcaseObject(UClass* Class, const TCHAR* Folder, const TCHAR* AssetName);
 
 	/**
-	 * Uniform component scale that makes Mesh's LONGEST axis measure
-	 * DesiredLongestAxisCm. The Showcase's Unity scene sizes its props by instance
-	 * scale on top of assets whose authored size varies per model, so the UE side
-	 * states the finished size it wants and derives the factor -- re-importing a
-	 * model at a different scale then cannot silently resize the scene.
+	 * Per-axis component scale that resizes Mesh to a stated finished size.
 	 *
-	 * WHY LONGEST-AXIS AND NOT A PER-AXIS BOX FIT: which local axis a model's
-	 * length runs along differs per source file (the OBJ props and the FBX props
-	 * disagree), so a per-axis fit would squash a mesh whose axes are not the ones
-	 * the caller assumed. Fitting the longest axis and keeping the proportions is
-	 * correct whichever way the model was authored. Returns 1 for a null mesh or a
-	 * non-positive target.
+	 * SortedTargetSizeCm is given LARGEST-FIRST and is matched against the
+	 * mesh's own axes sorted the same way: the mesh's longest local axis takes
+	 * SortedTargetSizeCm.X, its middle axis takes .Y and its shortest takes .Z.
+	 * A zero or negative entry means "keep the proportion", i.e. that axis gets
+	 * the factor the longest axis got.
+	 *
+	 * WHY SORTED AND NOT LITERAL XYZ: which local axis a model's length runs
+	 * along differs per source file (the OBJ props and the FBX props disagree),
+	 * so a literal XYZ fit would squash a mesh whose axes are not the ones the
+	 * caller assumed. Ranking both sides by size is correct whichever way the
+	 * model was authored, and pairs with ComputeLongestAxisTo*Rotation() below,
+	 * which turns the fitted mesh the right way up afterwards.
+	 *
+	 * Example: a bowling pin wanted 78 cm tall and 19 cm across is
+	 * ComputeAxisFitScale(Mesh, FVector(78, 19, 19)); a fishing rod wanted
+	 * 389 cm long with its proportions kept is FVector(389, 0, 0).
+	 *
+	 * Returns FVector::OneVector for a null mesh or a degenerate bounds.
 	 */
-	static float ComputeUniformScaleForLength(const UStaticMesh* Mesh, float DesiredLongestAxisCm);
+	static FVector ComputeAxisFitScale(const UStaticMesh* Mesh, const FVector& SortedTargetSizeCm);
+
+	/**
+	 * Rotation that turns Mesh's LONGEST local axis onto UE's +X (forward).
+	 * The positive end of that axis is taken to be the tip, so a rod / blaster /
+	 * projectile points away from the holder. Identity for a null mesh.
+	 */
+	static FRotator ComputeLongestAxisToForwardRotation(const UStaticMesh* Mesh);
+
+	/** As above, onto +Z (up) -- for a prop that should stand upright (a bowling pin). */
+	static FRotator ComputeLongestAxisToUpRotation(const UStaticMesh* Mesh);
+
+	/**
+	 * Rotation that turns Mesh's SHORTEST local axis onto WorldDirection -- i.e.
+	 * points a flat thing's face somewhere. Used for the Z5 target board, whose
+	 * face has to look at the player whichever way the imported model happens to
+	 * lie. Identity for a null mesh or a zero direction.
+	 */
+	static FRotator ComputeShortestAxisToDirectionRotation(const UStaticMesh* Mesh, const FVector& WorldDirection);
+
+	/**
+	 * The tip of Mesh's longest axis (its positive end), expressed in the space
+	 * of a component carrying Scale and Rotation -- i.e. where a fishing line
+	 * hangs from once the rod has been fitted and turned. Zero for a null mesh.
+	 */
+	static FVector ComputeFittedTipOffset(const UStaticMesh* Mesh, const FVector& Scale, const FRotator& Rotation);
+
+	/**
+	 * Where Mesh's bounds centre lands once Scale and Rotation are applied.
+	 * Negate it to sit the mesh's centre on its component's origin (a physics
+	 * body's collider centre, for instance). Zero for a null mesh.
+	 */
+	static FVector ComputeFittedBoundsCentre(const UStaticMesh* Mesh, const FVector& Scale, const FRotator& Rotation);
+
+	/**
+	 * A Unity position (metres) as a UE one (centimetres).
+	 * UE(X, Y, Z) = (Unity z, Unity x, Unity y) x 100 -- Unity is X right /
+	 * Y up / Z forward, UE is X forward / Y right / Z up, and both are
+	 * left-handed, so the two bases differ by a pure axis permutation.
+	 */
+	static FVector UnityPositionToUE(const FVector& UnityMetres)
+	{
+		return FVector(UnityMetres.Z, UnityMetres.X, UnityMetres.Y) * 100.0f;
+	}
+
+	/**
+	 * A Unity euler triple (degrees, Unity's ZXY application order) as an
+	 * FRotator.
+	 *
+	 * Built by composing the rotation MATRIX rather than by copying euler
+	 * components across, because the two engines disagree about more than axis
+	 * names: Unity's three eulers are right-handed about their own axes, while
+	 * UE's Yaw is right-handed about Z but Pitch and Roll are LEFT-handed about
+	 * Y and X. Composing the matrix and re-deriving the FRotator from it cannot
+	 * get that wrong, and it is what the automation test in
+	 * HapbeatSampleLibraryTests.cpp pins down: (0,90,0) -> Yaw +90,
+	 * (90,0,0) -> Pitch -90, (0,0,90) -> Roll -90, plus a composite case.
+	 */
+	static FRotator UnityEulerToUERotator(const FVector& UnityEulerDeg);
 
 	/**
 	 * Assign a Showcase material to one slot of a mesh component, preferring the

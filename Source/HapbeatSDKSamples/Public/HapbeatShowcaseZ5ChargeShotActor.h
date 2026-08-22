@@ -12,6 +12,7 @@ class UHapbeatStreamPlayback;
 class UHapbeatSubsystem;
 class UHapbeatCollisionTriggerComponent;
 class UAudioComponent;
+class UChildActorComponent;
 class UMaterialInterface;
 class USoundBase;
 class UStaticMesh;
@@ -22,8 +23,8 @@ class AHapbeatShowcaseZ5TargetActor;
 class AHapbeatShowcaseZ5ProjectileActor;
 
 /**
- * Z5 Target Range -- a blaster stand + 2 targets (light / heavy), driven
- * entirely IMPERATIVELY (no HapbeatTriggerComponent on the stand itself),
+ * Z5 Target Range -- a blaster and ONE target board, driven
+ * entirely IMPERATIVELY (no HapbeatTriggerComponent on the zone actor itself),
  * matching Unity's ChargeShooter.cs design intent exactly: "other zones wire
  * declarative HapbeatXxxTrigger components; Z5 deliberately calls the SDK API
  * straight from script so both patterns are shown side by side." Reuses
@@ -32,9 +33,15 @@ class AHapbeatShowcaseZ5ProjectileActor;
  * gain/intensity table).
  *
  * When the possessed pawn is an AHapbeatShowcaseCharacter the blaster is put in
- * its hand mount and shots leave along the view direction (Unity
- * CameraFollowMount + ChargeShooter._muzzle); without such a pawn the zone fires
- * from its own stand, so it still works dropped into a bare level.
+ * its hand mount at Unity's CameraFollowMount offset and shots leave from the
+ * blaster's muzzle; without such a pawn the zone fires from its own origin, so
+ * it still works dropped into a bare level. There is no stand model -- Unity has
+ * none, the blaster is camera-mounted there too.
+ *
+ * ONE BOARD, NOT TWO: Unity's Z5 has a single TargetBoard, and light / heavy is
+ * a property of the PROJECTILE that hits it, not of two separate targets. The
+ * board therefore carries TWO collision triggers, one filtered on each
+ * projectile tag, and flashes the colour of whichever landed.
  *
  * HOLD THE LEFT MOUSE BUTTON to charge (Unity ChargeShooter's LMB hold):
  *   - press:   starts the z5_charge_loop StreamClip loop (baseline =
@@ -74,23 +81,30 @@ public:
 	virtual FText GetZoneLabel() const override;
 	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override;
 	virtual FTransform GetPlayerSpawnRelative() const override;
+	virtual int32 GetZoneIndex() const override { return 5; }
+	virtual void OnZoneActivated() override;
+	virtual void OnZoneDeactivated() override;
 
 	/**
-	 * Local offset applied to this zone's own root (mesh + spawned targets +
-	 * projectile muzzle point) at BeginPlay, so a future master/layout actor
-	 * can nudge each zone into a row slot without altering the zone actor's
-	 * own placed transform.
+	 * CAPTURE AID, not gameplay: put one projectile in front of the muzzle and
+	 * leave it there, so its size and which way its nose points can be checked in
+	 * a screenshot. A real shot crosses the frame in a few frames, which is why
+	 * this exists at all. The spawned actor does not move, has collision off (it
+	 * therefore fires no target haptics) and removes itself after 10 seconds.
+	 *
+	 * Placed 120 cm along the muzzle's forward axis, with the heavy one another
+	 * 60 cm to the right so both can be posed side by side in one shot.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
-	FVector FootprintOffset = FVector::ZeroVector;
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void SpawnProjectilePreview(bool bHeavy);
 
 	/** Charge fraction (0..1) at/above which a shot / hit counts as "heavy". Mirrors Unity's _heavyThreshold (default 0.7). */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HeavyThreshold = 0.7f;
 
-	/** Seconds of holding V to reach full charge (chargeT = 1). Mirrors Unity's _maxChargeSeconds (default 1.5). */
+	/** Seconds of holding LMB to reach full charge (chargeT = 1). Unity Showcase.unity's _maxChargeSeconds = 2. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.1"))
-	float MaxChargeSeconds = 1.5f;
+	float MaxChargeSeconds = 2.0f;
 
 	/** Projectile launch speed (cm/s) at full charge. Mirrors Unity's _maxLaunchSpeed (18 m/s = 1800 cm/s, UE uses centimeters). */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.0"))
@@ -109,13 +123,46 @@ public:
 	float ShotDelayAfterLoop = 0.05f;
 
 	/**
-	 * Extra rotation on top of the default hand-mount pose, correcting for
-	 * whichever way SM_BlasterG's authored axes point. Exposed rather than
-	 * hardcoded for the same reason as Z3's rod: it is a property of the
-	 * imported asset and wants dialling in from the details panel.
+	 * Where the blaster sits in the camera's space, from the Unity Showcase's
+	 * CameraFollowMount on Blaster: _localPosition (0.3, -0.15, 0.8) m converted
+	 * to UE centimetres. Its _localEulerAngles are all zero, which is why there
+	 * is no converted-euler field here to match Z3's.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
+	FVector BlasterMountCameraOffsetCm = FVector(80.0f, 30.0f, -15.0f);
+
+	/**
+	 * Muzzle position relative to the blaster's mount point, in the AIM frame
+	 * (forward, right, up), i.e. measured along the view axes rather than along
+	 * the mount component's own -- the latter carries the mesh-correction
+	 * rotation and points backwards for SM_BlasterG. See GetMuzzleTransform.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
+	FVector MuzzleLocalOffsetCm = FVector(32.6f, 0.0f, 7.6f);
+
+	/**
+	 * Extra rotation on top of the mount pose, correcting for whichever way
+	 * SM_BlasterG's authored axes point. Left at zero: the mesh's longest axis is
+	 * aligned forward automatically, so this is only here for a model that needs
+	 * hand-correcting.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
 	FRotator BlasterMountExtraRotation = FRotator::ZeroRotator;
+
+	/**
+	 * Turn the aligned blaster 180 degrees about its up axis before the mount
+	 * pose is applied. ComputeLongestAxisToForwardRotation only guarantees that
+	 * the mesh's LONGEST axis lies along +X -- not which END of it points that
+	 * way -- and SM_BlasterG's muzzle sits on the negative side of that axis, so
+	 * without this the blaster is held back-to-front. Default true for that
+	 * mesh; clear it for a model whose nose already points +X after alignment.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
+	bool bFlipBlasterForward = true;
+
+	/** Finished target-board size, largest dimension first: 180 x 180 face, 53 deep. Unity's instance size. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
+	FVector TargetSizeCm = FVector(180.0f, 180.0f, 53.0f);
 
 protected:
 	virtual void BeginPlay() override;
@@ -134,6 +181,9 @@ private:
 
 	/** Put SM_BlasterG in the player's hand mount; no-op without an AHapbeatShowcaseCharacter or the mesh. */
 	void MountBlasterOnCharacter();
+
+	/** Take the blaster back out of the player's hand (the character outlives this zone). */
+	void UnmountBlaster();
 
 	/**
 	 * One deferred attempt at MountBlasterOnCharacter(), made on the first Tick
@@ -155,8 +205,8 @@ private:
 	/** Where a shot starts and which way it goes: the player's view, or this actor's stand. */
 	FTransform GetMuzzleTransform() const;
 
-	/** Spawn TargetLight / TargetHeavy in front of the stand and wire each one's HitTrigger to the matching EventMap entry + ActorTag filter. */
-	void SpawnTargets();
+	/** Hand the child target board its size, materials, SFX and the two EventMap entries (light / heavy). */
+	void SetUpTarget();
 
 	void HandleChargeBegin();   // left mouse down
 	void HandleChargeRelease(); // left mouse up
@@ -178,9 +228,15 @@ private:
 	static constexpr int32 StatusHudLineKey = 501;
 	static constexpr float HudRefreshIntervalSeconds = 0.1f;
 
-	// Constructor-created default subobject (VisibleAnywhere, not Transient).
+	// ---- Constructor-created default subobjects: the editable scene ----
+
+	/**
+	 * The target board, as a child actor so it owns its own collision triggers
+	 * (which bind to their owner's root primitive) while keeping an editable,
+	 * saved relative transform. Unity TargetBoard/target-large.
+	 */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
-	TObjectPtr<UStaticMeshComponent> StandMesh;
+	TObjectPtr<UChildActorComponent> TargetSlot;
 
 	// BeginPlay-time transient data (built fresh each Play session; not serialized).
 
@@ -210,11 +266,9 @@ private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UHapbeatClip>> LoadedClips;
 
+	/** Cached TargetSlot->GetChildActor(). */
 	UPROPERTY(Transient)
-	TObjectPtr<AHapbeatShowcaseZ5TargetActor> TargetLight;
-
-	UPROPERTY(Transient)
-	TObjectPtr<AHapbeatShowcaseZ5TargetActor> TargetHeavy;
+	TObjectPtr<AHapbeatShowcaseZ5TargetActor> Target;
 
 	// Optional imported art / SFX; null = keep the primitive or stay silent.
 
@@ -269,13 +323,15 @@ private:
 };
 
 /**
- * One target board for Z5 -- a small static cube with a
- * UHapbeatCollisionTriggerComponent (BeginOverlap + Fixed gain). The owning
- * AHapbeatShowcaseZ5ChargeShotActor spawns 2 instances (light / heavy) and
- * assigns each one's EventMap/EntryId/TagFilter after spawn (TagFilter =
- * "ProjectileLight" or "ProjectileHeavy", matching the tag
- * AHapbeatShowcaseZ5ProjectileActor::Configure adds to itself) -- see
- * AHapbeatShowcaseZ5ChargeShotActor::SpawnTargets.
+ * THE target board for Z5 -- Unity's single TargetBoard, not one board per
+ * projectile type. It carries TWO UHapbeatCollisionTriggerComponents (both
+ * BeginOverlap + Fixed gain), one filtered on each projectile tag, so a light
+ * bullet and a heavy missile landing on the same board fire different entries.
+ * EventMap / EntryIds / materials / SFX are handed over by
+ * AHapbeatShowcaseZ5ChargeShotActor::SetUpTarget.
+ *
+ * Kinematic: no physics simulation, query-only collision. Nothing pushes it, and
+ * the projectiles sweep THROUGH it to generate the overlap.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ5TargetActor : public AActor
@@ -285,37 +341,42 @@ class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ5TargetActor : public AActor
 public:
 	AHapbeatShowcaseZ5TargetActor();
 
-	/**
-	 * The collision trigger that fires this target's z5_tar_hit_* entry.
-	 * Public (not just VisibleAnywhere) so the owning zone actor can assign
-	 * EventMap / EntryId / TagFilter right after SpawnActor.
-	 */
+	/** Fires z5_tar_hit_light; TagFilter "ProjectileLight". Wired by the zone. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
-	TObjectPtr<UHapbeatCollisionTriggerComponent> HitTrigger;
+	TObjectPtr<UHapbeatCollisionTriggerComponent> LightHitTrigger;
+
+	/** Fires z5_tar_hit_heavy; TagFilter "ProjectileHeavy". Wired by the zone. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
+	TObjectPtr<UHapbeatCollisionTriggerComponent> HeavyHitTrigger;
 
 	/**
-	 * Give this board the Showcase's imported look and sound, and tell it which
-	 * projectile tag counts as a hit. Called by the zone right after SpawnActor;
-	 * every argument is optional (null keeps the primitive / stays silent), which
-	 * is what makes the zone survive a checkout without the generated art.
+	 * Give the board its finished size, its look and its sounds. Every asset
+	 * argument is optional (null keeps the primitive / stays silent), which is
+	 * what makes the zone survive a checkout without the generated art.
 	 *
-	 * @param Mesh           SM_TargetLarge, or null to keep the cube.
+	 * @param SizeCm         Finished size, largest dimension first: 180 x 180 x 53.
+	 * @param FaceDirection  World direction the board's face should look along
+	 *                       (towards the player).
 	 * @param InBaseMaterial The resting look.
-	 * @param InFlashMaterial Shown for FlashSeconds after a hit (Unity TargetReceiver's material swap).
-	 * @param InHitSound     One-shot played on a hit.
-	 * @param InAcceptTag    Projectile actor tag this board reacts to; matches HitTrigger.TagFilter.
-	 * @param DesiredLongestAxisCm Finished size of the board's longest axis.
+	 * @param InLightFlash   Shown for FlashSeconds after a light hit (Unity TargetReceiver's material swap).
+	 * @param InHeavyFlash   The same for a heavy hit.
+	 * @param InLightSound   One-shot played on a light hit.
+	 * @param InHeavySound   One-shot played on a heavy hit.
 	 */
-	void ApplyShowcaseAssets(UStaticMesh* Mesh, UMaterialInterface* InBaseMaterial, UMaterialInterface* InFlashMaterial,
-		USoundBase* InHitSound, FName InAcceptTag, float DesiredLongestAxisCm);
+	void ApplyShowcaseAssets(const FVector& SizeCm, const FVector& FaceDirection,
+		UMaterialInterface* InBaseMaterial, UMaterialInterface* InLightFlash, UMaterialInterface* InHeavyFlash,
+		USoundBase* InLightSound, USoundBase* InHeavySound);
+
+	/** Cancel a flash in progress and put the base material back (leaving the zone). */
+	void ResetLook();
 
 protected:
 	virtual void BeginPlay() override;
 
 private:
 	/**
-	 * Visual + audio half of a hit. The haptic half is HitTrigger's own, so this
-	 * repeats HitTrigger's tag test rather than depending on it -- the two are
+	 * Visual + audio half of a hit. The haptic half is the two triggers' own, so
+	 * this repeats their tag test rather than depending on it -- they are
 	 * independent subscribers to the same overlap, exactly as Unity splits
 	 * TargetReceiver (flash + SFX) from the haptic trigger.
 	 */
@@ -332,12 +393,13 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> BaseMaterial;
 	UPROPERTY(Transient)
-	TObjectPtr<UMaterialInterface> FlashMaterial;
+	TObjectPtr<UMaterialInterface> LightFlashMaterial;
 	UPROPERTY(Transient)
-	TObjectPtr<USoundBase> HitSound;
-
-	/** Projectile tag that counts as a hit on this board. */
-	FName AcceptTag;
+	TObjectPtr<UMaterialInterface> HeavyFlashMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> LightHitSound;
+	UPROPERTY(Transient)
+	TObjectPtr<USoundBase> HeavyHitSound;
 
 	FTimerHandle FlashTimer;
 
@@ -374,9 +436,22 @@ public:
 	 * @param InScale    Charge-driven scale multiplier (visual only; no gameplay effect).
 	 * @param InMesh     SM_BulletFoam / SM_Missile, or null to keep the sphere.
 	 * @param InBaseLengthCm  Finished length of the mesh's longest axis at scale 1.
+	 *
+	 * The mesh is also turned so its longest axis points along InVelocity, so a
+	 * missile flies nose-first instead of sideways.
 	 */
 	void Configure(const FVector& InVelocity, bool bInHeavy, float InScale,
 		UStaticMesh* InMesh = nullptr, float InBaseLengthCm = 0.0f);
+
+	/**
+	 * Turn the aligned mesh 180 degrees about its up axis, for a projectile
+	 * model whose nose ends up pointing backwards. Same limitation as the
+	 * blaster's flip: alignment only picks the AXIS, not which end leads. Left
+	 * false -- SM_BulletFoam and SM_Missile both read nose-first as imported --
+	 * and kept editable so that can be checked rather than assumed.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	bool bFlipForward = false;
 
 protected:
 	virtual void BeginPlay() override;

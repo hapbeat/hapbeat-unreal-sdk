@@ -10,17 +10,17 @@
 #include "HapbeatTriggerComponent.h"
 
 #include "Components/InputComponent.h"
-#include "Components/StaticMeshComponent.h"
-#include "Engine/StaticMesh.h"
+#include "Components/SceneComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/GameViewportClient.h"
 #include "InputCoreTypes.h" // EKeys::*
 #include "Kismet/GameplayStatics.h" // PlaySound2D
-#include "Materials/MaterialInterface.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Styling/CoreStyle.h" // FCoreStyle::Get().GetBrush("WhiteBrush")
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SViewport.h" // SViewport (focus target after a slider drag)
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -32,18 +32,10 @@ AHapbeatShowcaseZ4StreamConsoleActor::AHapbeatShowcaseZ4StreamConsoleActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
-	ConsoleMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ConsoleMesh"));
-	RootComponent = ConsoleMesh;
-	// Movable: the zone is spawned at runtime (Hapbeat Showcase zone switching) and this root
-	// is moved by FootprintOffset in BeginPlay. Lighting is dynamic.
-	// Mobility is set before the mesh assignment so SetStaticMesh never runs on a Static component.
-	ConsoleMesh->SetMobility(EComponentMobility::Movable);
-	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
-	{
-		ConsoleMesh->SetStaticMesh(CubeMesh);
-	}
-	// A squat pedestal rather than a plain cube -- purely cosmetic, no gameplay meaning.
-	ConsoleMesh->SetRelativeScale3D(FVector(1.0f, 0.6f, 1.2f));
+	// Nothing to look at in the world: this zone's whole interface is the Slate
+	// panel it puts on screen, exactly as Unity's Z4 is UI and nothing else. The
+	// root is just the transform the switcher spawns / places the zone at.
+	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
 	LoopTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("LoopTrigger"));
 	TickTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("TickTrigger"));
@@ -87,19 +79,6 @@ void AHapbeatShowcaseZ4StreamConsoleActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (RootComponent != nullptr)
-	{
-		RootComponent->SetRelativeLocation(FootprintOffset);
-	}
-
-	if (UMaterialInterface* ConsoleMaterial =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Floor")))
-	{
-		if (ConsoleMesh != nullptr)
-		{
-			ConsoleMesh->SetMaterial(0, ConsoleMaterial);
-		}
-	}
 	TickSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z4_ui_tick"));
 
 	BuildEventMap();
@@ -120,12 +99,24 @@ void AHapbeatShowcaseZ4StreamConsoleActor::BeginPlay()
 
 void AHapbeatShowcaseZ4StreamConsoleActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	OnZoneDeactivated();
+	Super::EndPlay(EndPlayReason);
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::OnZoneActivated()
+{
+	// The panel belongs to the visible zone only: a hidden Z4's sliders would
+	// otherwise sit over whatever zone you switched to.
+	CreateSliderPanel();
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::OnZoneDeactivated()
+{
 	if (LoopTrigger != nullptr)
 	{
 		LoopTrigger->Stop();
 	}
 	DestroySliderPanel();
-	Super::EndPlay(EndPlayReason);
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::BuildEventMap()
@@ -212,6 +203,17 @@ void AHapbeatShowcaseZ4StreamConsoleActor::CreateSliderPanel()
 		return;
 	}
 
+	if (SliderPanel.IsValid())
+	{
+		return; // already up (re-entering the zone)
+	}
+
+	// An OPAQUE panel: SBorder's default brush is a rounded, mostly transparent
+	// grey, so white-on-white text over a bright zone was unreadable. WhiteBrush
+	// tinted near-black is a flat backing that works over anything.
+	const FSlateBrush* PanelBrush = FCoreStyle::Get().GetBrush("WhiteBrush");
+	const FLinearColor PanelColor(0.0f, 0.0f, 0.0f, 0.75f);
+
 	// Value_Lambda reads the actor's field every frame so a slider stays right
 	// even when something else moves the value; OnValueChanged_Lambda is the only
 	// writer. The lambdas capture `this`, and the panel is removed in EndPlay, so
@@ -223,12 +225,16 @@ void AHapbeatShowcaseZ4StreamConsoleActor::CreateSliderPanel()
 		.Padding(FMargin(0.0f, 0.0f, 0.0f, 48.0f))
 		[
 			SNew(SBorder)
+			.BorderImage(PanelBrush)
+			.BorderBackgroundColor(PanelColor)
 			.Padding(FMargin(16.0f, 12.0f))
 			[
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 				[
-					SNew(STextBlock).Text_Lambda([this]()
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor(FLinearColor::White))
+					.Text_Lambda([this]()
 					{
 						return FText::FromString(FString::Printf(TEXT("Gain  %.2f"), GainValue));
 					})
@@ -240,11 +246,16 @@ void AHapbeatShowcaseZ4StreamConsoleActor::CreateSliderPanel()
 						SNew(SSlider)
 						.Value_Lambda([this]() { return GainValue; })
 						.OnValueChanged_Lambda([this](float NewValue) { OnGainSliderChanged(NewValue); })
+						// Without this the slider keeps keyboard focus after the
+						// drag and Slate navigation eats the space bar.
+						.OnMouseCaptureEnd_Lambda([this]() { ReturnFocusToGameViewport(); })
 					]
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 2.0f)
 				[
-					SNew(STextBlock).Text_Lambda([this]()
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor(FLinearColor::White))
+					.Text_Lambda([this]()
 					{
 						return FText::FromString(FString::Printf(TEXT("Pan  %+.2f"), PanValue));
 					})
@@ -261,6 +272,7 @@ void AHapbeatShowcaseZ4StreamConsoleActor::CreateSliderPanel()
 						{
 							OnPanSliderChanged(NewValue * 2.0f - 1.0f);
 						})
+						.OnMouseCaptureEnd_Lambda([this]() { ReturnFocusToGameViewport(); })
 					]
 				]
 			]
@@ -283,6 +295,29 @@ void AHapbeatShowcaseZ4StreamConsoleActor::DestroySliderPanel()
 	SliderPanel.Reset();
 }
 
+void AHapbeatShowcaseZ4StreamConsoleActor::ReturnFocusToGameViewport()
+{
+	const UWorld* World = GetWorld();
+	UGameViewportClient* Viewport = World != nullptr ? World->GetGameViewport() : nullptr;
+	APlayerController* PC = World != nullptr ? World->GetFirstPlayerController() : nullptr;
+	if (Viewport == nullptr || PC == nullptr)
+	{
+		return;
+	}
+
+	// Still GameAndUI (this zone keeps the cursor free -- WantsCursorUnlocked),
+	// but with the VIEWPORT nominated as the focus widget, so key presses go to
+	// the game's input stack instead of to the slider that was just released.
+	FInputModeGameAndUI Mode;
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	Mode.SetHideCursorDuringCapture(false);
+	if (const TSharedPtr<SViewport> ViewportWidget = Viewport->GetGameViewportWidget())
+	{
+		Mode.SetWidgetToFocus(ViewportWidget);
+	}
+	PC->SetInputMode(Mode);
+}
+
 void AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey()
 {
 	if (LoopTrigger == nullptr)
@@ -299,6 +334,13 @@ void AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey()
 	{
 		LoopTrigger->Fire();
 	}
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::DebugToggleStream()
+{
+	// Deliberately the key handler itself, not a copy of it: a capture that went
+	// around it could pass while the space bar was broken.
+	HandleToggleKey();
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::OnGainSliderChanged(float NewValue)
@@ -378,6 +420,16 @@ void AHapbeatShowcaseZ4StreamConsoleActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// The Showcase switcher draws a shared Slate HUD covering the key guide, the
+	// zone's own state and the device footer, so a zone under it prints none of
+	// this. ONE EARLY RETURN, not a guard around each line: the Gain / Pan line
+	// below used to sit outside the per-line guard and showed on top of the
+	// shared HUD. Everything below here is HUD-only.
+	if (IsOwnedByShowcaseSwitcher(this))
+	{
+		return;
+	}
+
 	HudRefreshTimer -= DeltaSeconds;
 	if (HudRefreshTimer > 0.0f)
 	{
@@ -385,14 +437,9 @@ void AHapbeatShowcaseZ4StreamConsoleActor::Tick(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	// The Showcase switcher draws a shared Slate key guide covering this, so
-	// only print the line when this zone is running on its own.
-	if (!IsOwnedByShowcaseSwitcher(this))
-	{
-		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-			TEXT("Z4 Stream Console -- Space: toggle loop | drag the on-screen Gain / Pan sliders"),
-			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
-	}
+	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+		TEXT("Z4 Stream Console -- Space: toggle loop | drag the on-screen Gain / Pan sliders"),
+		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
 
 	bool bStreaming = false;
 	if (LoopTrigger != nullptr)
@@ -404,11 +451,7 @@ void AHapbeatShowcaseZ4StreamConsoleActor::Tick(float DeltaSeconds)
 		FString::Printf(TEXT("Gain=%.2f Pan=%.2f Streaming=%s"),
 			GainValue, PanValue, bStreaming ? TEXT("Yes") : TEXT("No")),
 		bStreaming ? FColor::Green : FColor::Silver, HudRefreshIntervalSeconds * 2.0f);
-	// Same reason: the shared HUD has a device / ping footer.
-	if (!IsOwnedByShowcaseSwitcher(this))
-	{
-		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
-	}
+	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
 }
 
 FText AHapbeatShowcaseZ4StreamConsoleActor::GetZoneLabel() const
@@ -427,10 +470,9 @@ TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ4StreamConsoleActor::GetHudC
 
 FTransform AHapbeatShowcaseZ4StreamConsoleActor::GetPlayerSpawnRelative() const
 {
-	// Unity puts this spawn at the zone origin because its console stands
-	// elsewhere in the zone; the UE console IS at the zone origin, so back off
-	// far enough to see it.
-	return FTransform(FRotator::ZeroRotator, FVector(-250.0f, 0.0f, 0.0f));
+	// Unity Z4_Stream/PlayerSpawn is at the zone origin, and there is nothing in
+	// the world to stand back from -- the whole zone is the on-screen panel.
+	return FTransform::Identity;
 }
 
 bool AHapbeatShowcaseZ4StreamConsoleActor::WantsCursorUnlocked() const

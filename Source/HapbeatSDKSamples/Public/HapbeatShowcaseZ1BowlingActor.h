@@ -6,6 +6,8 @@
 #include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ1BowlingActor.generated.h"
 
+class UCapsuleComponent;
+class UChildActorComponent;
 class UHapbeatClip;
 class UHapbeatCollisionTriggerComponent;
 class UHapbeatEventMap;
@@ -25,20 +27,21 @@ class AHapbeatShowcaseZ1PinActor;
  * haptics-inert by design for the identical reason: "haptic = Trigger 任せ"
  * pattern demo).
  *
- * IMPORTANT UE-specific note: UHapbeatCollisionTriggerComponent resolves the
- * primitive it binds to via its OWNING ACTOR's root component (or the first
- * UPrimitiveComponent found on that actor -- see
- * UHapbeatCollisionTriggerComponent::ResolveOwnerPrimitive). Six sibling mesh
- * components living on ONE actor could not each carry their own independently
- * bound trigger under that resolution rule, so every pin is spawned as its OWN
- * AHapbeatShowcaseZ1PinActor (mesh as root + its own trigger), not as a child
- * component of this zone actor. The lane and the ball, which need no trigger,
- * stay as ordinary components on this actor.
+ * WHY THE PINS ARE CHILD ACTORS: UHapbeatCollisionTriggerComponent binds to its
+ * OWNING ACTOR's root primitive (UHapbeatCollisionTriggerComponent::
+ * ResolveOwnerPrimitive), so six sibling mesh components on one actor could not
+ * each carry their own independently bound trigger. A UChildActorComponent gives
+ * each pin its own actor -- satisfying that rule -- while keeping its transform
+ * an ordinary, editable, SAVED relative transform in this actor's Details panel.
+ * (Phase 2 spawned the pins from code instead, which meant their layout could
+ * not be adjusted in the editor at all.) The lane and the ball, which need no
+ * trigger, stay as ordinary components.
  *
- * Geometry is engine primitives (/Engine/BasicShapes/Cube + Sphere + Cylinder)
- * assembled in the constructor, upgraded at BeginPlay to the Showcase's
- * imported art (SM_BowlingPin + MI_BowlingLane / MI_BowlingBall) when that
- * optional content is present -- see ApplyShowcaseAssets().
+ * LAYOUT: every number below is the Unity Showcase's own, converted -- Unity
+ * (x, y, z) metres become UE (z, x, y) centimetres. The lane, the ball's mark
+ * and the six pin positions all come straight from Showcase.unity's Z1_Bowling
+ * subtree, so the rack sits where it does in Unity rather than at an
+ * approximation of it.
  *
  * NOTE: z1_pin_hit is a STREAM_CLIP-mode event (as is every other Showcase
  * entry) -- the waveform is streamed from the project, so no Kit deployment is
@@ -57,29 +60,27 @@ public:
 	AHapbeatShowcaseZ1BowlingActor();
 
 	// ---- IHapbeatShowcaseZone ----
+	virtual int32 GetZoneIndex() const override { return 1; }
 	virtual FText GetZoneLabel() const override;
 	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override;
 	virtual FTransform GetPlayerSpawnRelative() const override;
-
-	/**
-	 * Local offset applied to this zone's own root (lane + ball + pin rack) at
-	 * BeginPlay, so a future master/layout actor can nudge each zone into a row
-	 * slot without altering the zone actor's own placed transform.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
-	FVector FootprintOffset = FVector::ZeroVector;
+	virtual void OnZoneActivated() override;
+	virtual void OnZoneDeactivated() override;
 
 	/** Ball launch speed, cm/s. 800 = Unity BallLauncher._launchSpeed 8 m/s. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling", meta = (ClampMin = "0.0"))
 	float LaunchSpeed = 800.0f;
 
-	/** Pin height the imported SM_BowlingPin is scaled to, cm (Unity's rack reads ~78 cm tall). */
+	/** Finished pin height, cm. Unity's rack reads 78 cm tall (bowling_pin.obj at instance scale 0.51/0.68/0.51). */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling", meta = (ClampMin = "1.0"))
-	float PinMeshHeight = 78.0f;
+	float PinHeightCm = 78.0f;
+
+	/** Finished pin diameter, cm. Same source as PinHeightCm. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling", meta = (ClampMin = "1.0"))
+	float PinDiameterCm = 19.0f;
 
 protected:
 	virtual void BeginPlay() override;
-	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
@@ -89,8 +90,8 @@ private:
 	/** Build the transient EventMap used when no asset is assigned. */
 	UHapbeatEventMap* BuildFallbackEventMap();
 
-	/** Spawn the 6 AHapbeatShowcaseZ1PinActor instances in a 1-2-3 triangle rack and wire each one's HitTrigger. */
-	void SpawnPinRack();
+	/** Hand each child pin actor its EventMap / entry / SFX and remember the pose Space returns it to. */
+	void SetUpPins();
 
 	/** Swap in the imported lane / ball materials when that optional content is present; no-op otherwise. */
 	void ApplyShowcaseAssets();
@@ -106,6 +107,14 @@ private:
 
 	/** Return every pin to the pose it was racked at, physics state cleared. Unity BallLauncher.ResetPose(). */
 	void ResetPinsToRack();
+
+	/**
+	 * Ball + pins simulate only while this zone is the visible one. A hidden
+	 * zone's pins would otherwise keep falling under gravity with their
+	 * collision switched off and be somewhere under the floor by the time you
+	 * came back to them.
+	 */
+	void SetPhysicsRunning(bool bRunning);
 
 	/**
 	 * Horizontal launch direction: the player's view forward flattened onto the
@@ -146,40 +155,51 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> PinHitClip;
 
-	// Constructor-created default subobjects (VisibleAnywhere, not Transient --
-	// these ARE part of the CDO / serialized instance, unlike the BeginPlay-time
-	// EventMap/pin-actor data below).
+	// ---- Constructor-created default subobjects: the editable scene ----
 
+	/** Unity Z1_Bowling/Lane: centre (367.2, 0, 85) cm, 939.4 x 226.5 x 10 cm, so its top face is Z = 90. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Bowling")
 	TObjectPtr<UStaticMeshComponent> LaneMesh;
 
+	/** Unity Z1_Bowling/Ball: 40 cm sphere on its mark at (-100, 0, 129.5) cm, 4 kg. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Bowling")
 	TObjectPtr<UStaticMeshComponent> BallMesh;
 
-	// BeginPlay-time transient data (built fresh each Play session; not serialized).
+	/**
+	 * The 6 pins of the rack, each a child actor so it can own its own collision
+	 * trigger (see the class comment) while keeping an editable relative
+	 * transform. Positions are Unity's Pin_1..Pin_6.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Bowling")
+	TArray<TObjectPtr<UChildActorComponent>> PinSlots;
 
-	/** The 6 dynamically-spawned pin actors (see the class comment for why they can't be sibling components). */
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<AHapbeatShowcaseZ1PinActor>> PinActors;
-
-	/** World poses the pins were racked at, parallel to PinActors; Space restores them. */
-	TArray<FTransform> PinRestTransforms;
+	/** Actor-relative poses the pins were racked at, parallel to PinSlots; Space restores them. */
+	TArray<FTransform> PinRestRelativeTransforms;
 
 	/** Root-relative resting location the ball is returned to on launch / respawn. */
 	FVector BallRestRelativeLocation = FVector::ZeroVector;
 };
 
 /**
- * One bowling pin -- a root cylinder mesh (simulating physics, notifying rigid
- * body collisions) plus its own UHapbeatCollisionTriggerComponent (Hit,
- * VelocityScaled). EventMap / EntryId are assigned by the owning zone actor
- * right after SpawnActor (see AHapbeatShowcaseZ1BowlingActor::SpawnPinRack) --
- * mirrors the Z5 Showcase zone's AHapbeatShowcaseZ5TargetActor pattern.
+ * One bowling pin -- a capsule root that carries the physics body and this
+ * pin's own UHapbeatCollisionTriggerComponent (Hit, VelocityScaled), plus a
+ * non-colliding mesh child for the look.
  *
- * VelocityThreshold / MaxVelocity are seeded in the constructor from the Unity
- * Showcase's BowlingPin.prefab HapbeatCollisionTrigger values (_velocityThreshold
- * = 0.01, _maxVelocity = 1, both in Unity meters/s), converted x100 to UE's
- * native cm/s physics units (1 cm/s / 100 cm/s).
+ * WHY A CAPSULE ROOT AND NOT THE MESH: the imported pin's own axes and pivot
+ * are whatever the source model happened to use, so a mesh root would make both
+ * the collider shape and the "where is the floor" question depend on the asset.
+ * A capsule states the collider in the zone's own terms (9.6 cm radius, 40 cm
+ * half height -- an 80 cm capsule around a 78 cm pin) and lets the mesh be
+ * turned upright and centred inside it as a plain child transform.
+ *
+ * EventMap / EntryId / HitSound are assigned by the owning zone actor in its
+ * BeginPlay (AHapbeatShowcaseZ1BowlingActor::SetUpPins); the collision trigger
+ * reads them at fire time, so their arrival is not ordered against this actor's
+ * own BeginPlay.
+ *
+ * The trigger's numbers come from the Unity Showcase's BowlingPin.prefab
+ * (_maxVelocity = 1 Unity m/s -> 100 cm/s), except VelocityThreshold, which is
+ * deliberately NOT Unity's 0.01 m/s -- see the .cpp.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ1PinActor : public AActor
@@ -192,35 +212,32 @@ public:
 	/**
 	 * The collision trigger that fires this pin's z1_pin_hit entry. Public (not
 	 * just VisibleAnywhere) so the owning zone actor can assign EventMap /
-	 * EntryId right after SpawnActor.
+	 * EntryId to it.
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UHapbeatCollisionTriggerComponent> HitTrigger;
 
 	/**
-	 * Impact SFX, assigned by the zone right after SpawnActor (S_z1_pin_hit when
-	 * that optional content is present, null otherwise = silent). Played with the
-	 * same velocity-to-volume curve as Unity's CollisionAudio on BowlingPin.
+	 * Impact SFX, assigned by the zone (S_z1_pin_hit when that optional content
+	 * is present, null otherwise = silent). Played with the same
+	 * velocity-to-volume curve as Unity's CollisionAudio on BowlingPin.
 	 */
 	UPROPERTY(Transient)
 	TObjectPtr<USoundBase> HitSound;
 
-	/**
-	 * Swap the cylinder for the imported pin mesh, scaled so the pin stands
-	 * DesiredHeight cm tall (Mesh null = keep the cylinder). Returns the actor Z
-	 * at which the pin's lowest point rests exactly on the floor -- the caller
-	 * cannot compute it itself because an imported pivot may sit anywhere inside
-	 * the mesh, and the mesh IS this actor's root so it cannot be offset locally.
-	 */
-	float ApplyPinMesh(UStaticMesh* Mesh, UMaterialInterface* Material, float DesiredHeight);
+	/** Fit the mesh child to DesiredHeight x DesiredDiameter cm, stood upright and centred in the capsule. */
+	void ApplyPinSize(float DesiredHeightCm, float DesiredDiameterCm);
 
 	/** Rack pose restore: teleport back and clear the physics body's momentum. */
 	void ResetToTransform(const FTransform& RestTransform);
 
+	/** Start / stop simulating -- the zone stops its pins while it is hidden. */
+	void SetPhysicsRunning(bool bRunning);
+
 protected:
 	/**
 	 * Enables physics simulation + rigid-body hit notifications. Deferred from
-	 * the constructor to BeginPlay so PinMesh is fully registered first
+	 * the constructor to BeginPlay so the capsule is fully registered first
 	 * (SetSimulatePhysics on an unregistered component is order-dependent /
 	 * can log a spurious "no physics body" warning -- see the .cpp).
 	 */
@@ -247,6 +264,11 @@ private:
 	/** World seconds of the last impact sound, for the cooldown above. */
 	float LastHitSoundTime = -1000.0f;
 
+	/** Root: the physics body and the primitive HitTrigger binds to. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
+	TObjectPtr<UCapsuleComponent> PinBody;
+
+	/** Look only -- no collision, so it never competes with the capsule. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UStaticMeshComponent> PinMesh;
 };

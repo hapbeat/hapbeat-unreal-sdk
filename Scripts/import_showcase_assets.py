@@ -38,6 +38,10 @@ WHITE = '/Engine/EngineResources/WhiteSquareTexture'
 
 # (asset name, file under Source/Models, import scale, Unity instance scale)
 #
+# ONE ENTRY PER SOURCE FILE, and the asset name is the name of the mesh the file
+# produces -- EXCEPT Door.fbx, which is deliberately imported with Combine
+# Meshes OFF (see SPLIT_MESHES below) and therefore produces three.
+#
 # IMPORT SCALE is a units conversion only -- no per-mesh fudge is baked in, so
 # the .uasset keeps the model at its authored size and a zone actor sets its own
 # component scale. .obj carries no unit declaration: Unity reads a raw unit as
@@ -59,6 +63,30 @@ MESHES = [
     ('SM_TargetLarge', 'target-large.fbx',             1.0, (5.2921, 5.2921, 5.2921)),
     ('SM_Missile',     'Missile.obj',                100.0, (0.1, 0.1, 0.1)),
 ]
+
+# Source files that must NOT be combined into one Static Mesh, mapped to the FBX
+# node names they hold.
+#
+# Door.fbx holds three nodes -- Door (the leaf), DoorFrame and DoorHandle -- and
+# Z2 has to SWING THE LEAF while the frame stays put. Welded into one mesh
+# (which is what combine_meshes does, and what this script used to do) that is
+# impossible: rotating the asset takes the frame round with it. Imported split,
+# the three nodes have to end up as SM_Door / SM_DoorFrame / SM_DoorHandle --
+# the names AHapbeatShowcaseZ2DoorActor loads them by.
+#
+# MEASURED on UE 5.4: with Combine Meshes off the importer names each mesh
+# <file stem>_<node name>, so Door.fbx lands as Door_Door / Door_DoorFrame /
+# Door_DoorHandle. destination_name is left unset for these (setting it would
+# give SM_Door, SM_Door_1, SM_Door_2, in whatever order the importer walked the
+# nodes) and each asset is renamed to SM_<node> afterwards, which is
+# deterministic. The rename also accepts a bare <node> or an already SM_-
+# prefixed name, so a UE version that names the nodes differently still lands on
+# the same three assets.
+#
+# Every name the import or a previous run's rename can occupy is deleted first
+# (see purge_split_targets): a stale SM_Door from the old combined import would
+# otherwise survive as the whole door and Z2 would swing frame and all.
+SPLIT_MESHES = {'Door.fbx': ('Door', 'DoorFrame', 'DoorHandle')}
 
 # (asset name, file under Source/Textures)
 TEXTURES = [
@@ -114,7 +142,7 @@ def source_dir(kind):
         + 'HapbeatSDK/Content/HapbeatSamples/Showcase/Source/' + kind + '/')
 
 
-def run_import(filename, package_path, asset_name, factory, options=None):
+def run_import(filename, package_path, asset_name, factory, options=None, expect_multiple=False):
     """
     One AssetImportTask through AssetTools, with the factory pinned.
 
@@ -127,7 +155,9 @@ def run_import(filename, package_path, asset_name, factory, options=None):
     task = unreal.AssetImportTask()
     task.set_editor_property('filename', filename)
     task.set_editor_property('destination_path', package_path)
-    task.set_editor_property('destination_name', asset_name)
+    # Unset for a split import: see SPLIT_MESHES.
+    if asset_name:
+        task.set_editor_property('destination_name', asset_name)
     task.set_editor_property('factory', factory)
     task.set_editor_property('replace_existing', True)
     task.set_editor_property('automated', True)
@@ -140,10 +170,10 @@ def run_import(filename, package_path, asset_name, factory, options=None):
     paths = list(task.get_editor_property('imported_object_paths') or [])
     if not paths:
         raise RuntimeError('import produced nothing: ' + filename)
-    if len(paths) > 1:
+    if len(paths) > 1 and not expect_multiple:
         unreal.log_warning('[Hapbeat] {} produced {} objects: {}'.format(
             asset_name, len(paths), ', '.join(paths)))
-    return unreal.EditorAssetLibrary.load_asset(paths[0])
+    return [unreal.EditorAssetLibrary.load_asset(path) for path in paths]
 
 
 def load_or_create(package_path, asset_name, asset_class, factory):
@@ -161,15 +191,16 @@ def load_or_create(package_path, asset_name, asset_class, factory):
 
 # ---------------------------------------------------------------------- meshes
 
-def fbx_static_mesh_options(uniform_scale):
+def fbx_static_mesh_options(uniform_scale, combine_meshes=True):
     """
     Static-mesh-only import: no materials, no textures, collision generated.
 
     Materials are skipped deliberately -- the Showcase drives its look from the
     MI_* instances below, and letting the importer mint its own would leave two
-    competing sets on the same meshes. bCombineMeshes folds a multi-part file
-    into one Static Mesh, which is what the naming table asks for (one SM_Door,
-    not SM_Door_1..3).
+    competing sets on the same meshes.
+
+    combine_meshes folds a multi-part file into ONE Static Mesh, which is what
+    every source file here wants except Door.fbx -- see SPLIT_MESHES.
     """
     options = unreal.FbxImportUI()
     options.set_editor_property('import_mesh', True)
@@ -180,13 +211,64 @@ def fbx_static_mesh_options(uniform_scale):
     options.set_editor_property('mesh_type_to_import', unreal.FBXImportType.FBXIT_STATIC_MESH)
 
     mesh_data = options.get_editor_property('static_mesh_import_data')
-    mesh_data.set_editor_property('combine_meshes', True)
+    mesh_data.set_editor_property('combine_meshes', combine_meshes)
     mesh_data.set_editor_property('auto_generate_collision', True)
     mesh_data.set_editor_property('generate_lightmap_u_vs', True)
     # ImportUniformScale lives on UFbxAssetImportData, the shared base
     # (FbxAssetImportData.h:27), not on FbxImportUI itself.
     mesh_data.set_editor_property('import_uniform_scale', uniform_scale)
     return options
+
+
+def purge_split_targets(stem, nodes):
+    """
+    Delete every asset a split import (or a previous run's rename) can occupy.
+
+    replace_existing cannot refresh these in place -- the import lands under a
+    name the task never asked for -- so the old packages have to go before the
+    new ones arrive. They are generated assets, rebuilt in full by this run, and
+    nothing holds an asset reference to them (the zone actors resolve them by
+    path string at runtime), so deleting is a safe swap rather than a broken
+    link.
+    """
+    for node in nodes:
+        for name in ('SM_{}'.format(node),                # this run's target
+                     '{}_{}'.format(stem, node),          # what the importer produces
+                     'SM_{}_{}'.format(stem, node)):      # a prior run's rename of that
+            path = '{}/{}'.format(MESH_PKG, name)
+            if unreal.EditorAssetLibrary.does_asset_exist(path):
+                unreal.EditorAssetLibrary.delete_asset(path)
+                unreal.log('[Hapbeat] removed stale {}'.format(path))
+
+
+def prefix_asset(mesh, stem):
+    """
+    Rename an imported node mesh to SM_<node>, which is the name the zone actors
+    load it by.
+
+    The importer names split meshes <stem>_<node> (UE 5.4), so the stem is
+    stripped before the prefix goes on: Door_DoorFrame -> SM_DoorFrame. A bare
+    <node> and an already SM_-prefixed name are both accepted, and a name that
+    is already the target is a no-op.
+    """
+    if mesh is None:
+        return None
+    node = mesh.get_name()
+    if node.startswith('SM_'):
+        node = node[len('SM_'):]
+    if node.startswith(stem + '_'):
+        node = node[len(stem) + 1:]
+
+    source = '{}/{}'.format(MESH_PKG, mesh.get_name())
+    target = '{}/SM_{}'.format(MESH_PKG, node)
+    if source == target:
+        return mesh
+    if unreal.EditorAssetLibrary.does_asset_exist(target):
+        unreal.EditorAssetLibrary.delete_asset(target)
+    if not unreal.EditorAssetLibrary.rename_asset(source, target):
+        unreal.log_warning('[Hapbeat] could not rename {} to {}'.format(source, target))
+        return mesh
+    return unreal.EditorAssetLibrary.load_asset(target)
 
 
 def import_meshes():
@@ -196,20 +278,48 @@ def import_meshes():
         if not os.path.isfile(path):
             raise RuntimeError('missing source mesh ' + path)
 
-        mesh = run_import(path, MESH_PKG, asset_name, unreal.FbxFactory(),
-                          fbx_static_mesh_options(uniform_scale))
+        nodes = SPLIT_MESHES.get(filename)
+        split = nodes is not None
+        stem = os.path.splitext(filename)[0]
+        if split:
+            purge_split_targets(stem, nodes)
 
-        # get_bounding_box() is the imported extent in cm (StaticMesh.h:1822).
-        # Multiplying by the recorded Unity instance scale predicts the
-        # on-screen size a Phase 2 actor gets, which is the number to eyeball
-        # against the Unity Showcase.
-        box = mesh.get_bounding_box()
-        size = (box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z)
-        world = tuple(size[i] * unity_scale[i] for i in range(3))
-        unreal.log('[Hapbeat] {:<15} scale x{:g}  mesh {:.1f} x {:.1f} x {:.1f} cm'
-                   '  -> at Unity scale {:.1f} x {:.1f} x {:.1f} cm'.format(
-                       asset_name, uniform_scale, size[0], size[1], size[2],
-                       world[0], world[1], world[2]))
+        meshes = run_import(path, MESH_PKG, None if split else asset_name, unreal.FbxFactory(),
+                            fbx_static_mesh_options(uniform_scale, combine_meshes=not split),
+                            expect_multiple=split)
+        if split:
+            meshes = [prefix_asset(mesh, stem) for mesh in meshes]
+
+        for mesh in meshes:
+            if mesh is None:
+                continue
+            # get_bounding_box() is the imported extent in cm (StaticMesh.h:1822).
+            # Multiplying by the recorded Unity instance scale predicts the
+            # on-screen size the zone actor gets, which is the number to eyeball
+            # against the Unity Showcase. (The zone actors fit their props to a
+            # stated finished size rather than trusting this, but a wildly
+            # different number here means the source file changed.)
+            box = mesh.get_bounding_box()
+            size = (box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z)
+            world = tuple(size[i] * unity_scale[i] for i in range(3))
+            unreal.log('[Hapbeat] {:<15} scale x{:g}  mesh {:.1f} x {:.1f} x {:.1f} cm'
+                       '  -> at Unity scale {:.1f} x {:.1f} x {:.1f} cm'.format(
+                           mesh.get_name(), uniform_scale, size[0], size[1], size[2],
+                           world[0], world[1], world[2]))
+
+        if split:
+            # Z2 loads these three by name, so a rename upstream has to fail here
+            # rather than leave the door invisible at runtime.
+            produced = {mesh.get_name() for mesh in meshes if mesh is not None}
+            missing = {'SM_{}'.format(node) for node in nodes} - produced
+            if missing:
+                unreal.log_warning(
+                    '[Hapbeat] {} did not produce {} -- it produced {}. Z2 loads the '
+                    'three by FBX node name ({}); if the source file renamed them, '
+                    'update SPLIT_MESHES here and ApplyShowcaseAssets in '
+                    'HapbeatShowcaseZ2DoorActor.cpp to match.'.format(
+                        filename, ', '.join(sorted(missing)), ', '.join(sorted(produced)),
+                        ' / '.join(nodes)))
 
 
 # -------------------------------------------------------------------- textures
@@ -221,7 +331,7 @@ def import_textures():
         if not os.path.isfile(path):
             raise RuntimeError('missing source texture ' + path)
 
-        texture = run_import(path, TEX_PKG, asset_name, unreal.TextureFactory())
+        texture = run_import(path, TEX_PKG, asset_name, unreal.TextureFactory())[0]
         # All five are colour maps, so sRGB regardless of what the importer
         # guessed from the file's channel layout.
         texture.set_editor_property('srgb', True)
@@ -328,7 +438,7 @@ def import_sounds():
     for filename in names:
         stem = os.path.splitext(filename)[0]
         sound = run_import(os.path.join(base, filename), SND_PKG, 'S_' + stem,
-                           unreal.SoundFactory())
+                           unreal.SoundFactory())[0]
         unreal.log('[Hapbeat] {:<28} {} Hz, {} ch, {:.2f} s'.format(
             'S_' + stem,
             sound.get_editor_property('imported_sample_rate'),

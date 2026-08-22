@@ -58,6 +58,14 @@ class HAPBEATSDKSAMPLES_API IHapbeatShowcaseZone
 	GENERATED_BODY()
 
 public:
+	/**
+	 * This zone's slot in the Showcase, 1-based (Z1 = 1 ... Z5 = 5). The
+	 * switcher sorts the zones it finds in the level by this, so the number
+	 * keys mean the same thing no matter what order the actors were placed in.
+	 * 0 = "unnumbered", which sorts last.
+	 */
+	virtual int32 GetZoneIndex() const { return 0; }
+
 	/** Short HUD label, e.g. "Bowling". */
 	virtual FText GetZoneLabel() const { return FText::GetEmpty(); }
 
@@ -92,11 +100,48 @@ public:
 	virtual bool WantsCursorUnlocked() const { return false; }
 
 	/**
-	 * True when this zone actor was spawned by the Showcase switcher (which is
-	 * then its Owner). The switcher draws one shared Slate HUD covering the key
-	 * guide and the device status, so a zone inside it skips its own
-	 * ShowHudLine key-guide / device lines instead of printing them twice. A
-	 * zone placed in a level by itself has no such owner and keeps drawing them.
+	 * Called when the switcher makes this zone the visible one. The switcher has
+	 * already un-hidden it, re-enabled its collision and ticking, and pushed its
+	 * input component back onto the player's stack (see SetZoneSceneActive), so
+	 * an override is only for state a zone wants reset -- a ball back on its
+	 * mark, a door back to closed.
+	 */
+	virtual void OnZoneActivated() {}
+
+	/**
+	 * Called when the switcher hides this zone. The switcher does the generic
+	 * teardown around it, so an override is only for what a zone must stop
+	 * itself: an in-flight stream, an audio voice, a pending timer.
+	 */
+	virtual void OnZoneDeactivated() {}
+
+	/**
+	 * The generic half of a zone switch: show / hide, collision on / off, tick
+	 * on / off, applied to the zone actor and everything under it (child actors
+	 * included, which is where the pins, the shark and the target board live),
+	 * plus push / pop of its input component so only the visible zone's keys are
+	 * live. Called by the switcher on both sides of a change; a zone's own
+	 * OnZoneActivated / OnZoneDeactivated runs around it.
+	 *
+	 * WHY THIS AND NOT SPAWN / DESTROY (which is what Phase 2 did): the zones are
+	 * now PLACED in the map, so their component transforms are editable and
+	 * saved. Destroying one would throw that away and rebuild it from code, which
+	 * is exactly what made the layout un-authorable.
+	 */
+	static void SetZoneSceneActive(AActor* ZoneActor, bool bActive);
+
+	/**
+	 * True when this zone actor is being driven by a Showcase switcher in the
+	 * same level. The switcher draws one shared Slate HUD covering the key guide
+	 * and the device status, so a zone under it skips ITS WHOLE on-screen debug
+	 * HUD -- key guide, its own state line and the device footer alike -- instead
+	 * of printing over the shared one. A zone placed in a level on its own has no
+	 * switcher and keeps drawing them.
+	 *
+	 * Each zone tests this ONCE, as an early return at the top of its HUD block.
+	 * Guarding line by line is what let the state lines ("Gain=... Pan=...",
+	 * "Charge=...", "Z2 state: ...") be written outside the guard and show on top
+	 * of the shared HUD.
 	 */
 	static bool IsOwnedByShowcaseSwitcher(const AActor* ZoneActor);
 };

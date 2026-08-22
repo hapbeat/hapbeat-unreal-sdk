@@ -12,17 +12,25 @@ class UHapbeatEventMap;
 class UHapbeatSubsystem;
 struct FHapbeatShowcaseHudCommand;
 
-/** One switchable Showcase zone: the actor class to spawn plus its HUD label. */
+/**
+ * One switchable Showcase zone: the actor class used by the fallback path when
+ * the level holds no zone actors, plus its HUD label.
+ */
 USTRUCT(BlueprintType)
 struct FHapbeatShowcaseZoneEntry
 {
 	GENERATED_BODY()
 
-	/** Zone actor class spawned at the switcher's own transform while this zone is active. */
+	/**
+	 * Zone actor class. Only used by the FALLBACK path (a level with no placed
+	 * zones), where it is spawned at the switcher's own transform. When the
+	 * level holds zone actors -- which the shipped Showcase map does -- those
+	 * are used where they stand and this is ignored.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
 	TSubclassOf<AActor> ZoneClass;
 
-	/** Short HUD label, e.g. "Bowling". */
+	/** Short HUD label, e.g. "Bowling". A placed zone's own label wins over this. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
 	FText Label;
 };
@@ -38,15 +46,26 @@ struct FHapbeatShowcaseZoneEntry
  * study one in isolation -- this switcher just saves you from placing five of
  * them and spacing them apart by hand.
  *
- * WHY SPAWN/DESTROY INSTEAD OF HIDE: UE has no direct equivalent of Unity's
- * GameObject.SetActive(false). Merely hiding a zone actor would leave it
- * ticking and still bound to the player's input stack, so Z1's B key would keep
- * launching bowling balls (and firing haptics) while zone 2 is on screen. Every
- * zone already builds its scene in BeginPlay and tears it down + stops its
- * haptics in EndPlay, so destroying the outgoing zone and spawning the incoming
- * one is both the simplest and the only fully correct switch. As a belt-and-
- * braces measure the switcher also calls StopStream() + StopAll() between the
- * two, so nothing a zone failed to stop can outlive it.
+ * HOW A SWITCH WORKS: the five zones are PLACED IN THE MAP, each in its own
+ * room, and switching hides / shows them. IHapbeatShowcaseZone::
+ * SetZoneSceneActive turns visibility, collision, ticking and the zone's
+ * input-component push on or off for the zone actor and everything under it,
+ * then the zone's own OnZoneActivated / OnZoneDeactivated resets or stops what
+ * only it knows about. As a belt-and-braces measure the switcher also calls
+ * StopStream() + StopAll() between the two, so nothing a zone failed to stop can
+ * outlive it. The input pop is the part that must not be skipped: a merely
+ * hidden zone would keep answering the left mouse button, so one click would
+ * launch a bowling ball, hook the shark AND charge the blaster.
+ *
+ * WHY NOT SPAWN / DESTROY: a spawned zone builds its whole scene from code, so
+ * nothing about its layout can be nudged in the editor or saved. Placed zones
+ * put every prop's transform in the Details panel and in the .umap, which is the
+ * point of this arrangement.
+ *
+ * FALLBACK: a level with a switcher but NO placed zones -- drop this one actor
+ * into an empty level and press Play -- still works. The switcher then spawns
+ * Zones[k].ZoneClass at its own transform, one at a time, and destroys it on the
+ * way out, as it used to.
  *
  * PLAYER: when the possessed pawn is an AHapbeatShowcaseCharacter (which the
  * Showcase game mode spawns), switching zones also teleports it to that zone's
@@ -71,9 +90,12 @@ public:
 	AHapbeatShowcaseActor();
 
 	/**
-	 * The switchable zones, in key order (element 1 = key "1"). Seeded in the
-	 * constructor with the five shipped Showcase zones; reorder / swap / trim
-	 * freely. At most 9 entries are reachable (keys 1-9).
+	 * The fallback zone list, in key order (element 1 = key "1"). Seeded in the
+	 * constructor with the five shipped Showcase zones. Used only when the level
+	 * holds no zone actors of its own; otherwise the placed zones -- sorted by
+	 * IHapbeatShowcaseZone::GetZoneIndex() -- are what the keys address, and only
+	 * the Label column is read from here (and even that loses to a zone's own
+	 * label). At most 9 zones are reachable (keys 1-9).
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
 	TArray<FHapbeatShowcaseZoneEntry> Zones;
@@ -83,11 +105,22 @@ public:
 	int32 InitialZone = 1;
 
 	/**
-	 * Destroy the current zone and spawn the given one (1-based, clamped).
-	 * No-op when it is already the active zone.
+	 * Show the given zone and hide the others (1-based, clamped). No-op when it
+	 * is already the active zone.
+	 *
+	 * BlueprintCallable so Scripts/capture_showcase_views.py can step the
+	 * Showcase through its zones from Python while PIE runs.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
 	void ShowZone(int32 OneBasedIndex);
+
+	/** Alias of ShowZone, under the name the capture script and the docs use. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void SetActiveZone(int32 OneBasedIndex) { ShowZone(OneBasedIndex); }
+
+	/** How many zones are reachable: the placed ones, or the configured fallback list. */
+	UFUNCTION(BlueprintPure, Category = "Hapbeat|Showcase")
+	int32 GetZoneCount() const;
 
 	/** Currently displayed zone, 1-based; 0 before BeginPlay. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat|Showcase")
@@ -110,11 +143,22 @@ private:
 	/** EnableInput on the first PlayerController found, then BindKey(1..9). Warns (no-op) if none exists. */
 	void BindInput();
 
-	/** Spawn Zones[CurrentZone - 1] at this actor's transform (Owner = this). */
+	/**
+	 * Find every IHapbeatShowcaseZone actor in the level and sort them by
+	 * GetZoneIndex(), so the number keys address Z1..Z5 whatever order the
+	 * actors were placed in. Leaves PlacedZones empty when the level has none,
+	 * which is what selects the spawn fallback.
+	 */
+	void CollectPlacedZones();
+
+	/** Fallback path only: spawn Zones[CurrentZone - 1] at this actor's transform (Owner = this). */
 	void SpawnActiveZone();
 
-	/** Destroy the active zone actor (its EndPlay stops that zone's haptics), then StopStream + StopAll. */
+	/** Hide + stop the outgoing zone (destroy it on the fallback path), then StopStream + StopAll. */
 	void ClearActiveZone();
+
+	/** The zone actor on screen right now: the placed one, or the spawned fallback. */
+	AActor* GetActiveZoneActor() const;
 
 	UHapbeatSubsystem* ResolveSubsystem() const;
 
@@ -169,8 +213,26 @@ private:
 	 */
 	int32 PlayerStateAppliedZone = 0;
 
+	/**
+	 * The zone actors found in the level, sorted by
+	 * IHapbeatShowcaseZone::GetZoneIndex(). Empty in a level that has none,
+	 * which is what selects the spawn fallback below.
+	 */
 	UPROPERTY(Transient)
-	TObjectPtr<AActor> ActiveZoneActor;
+	TArray<TObjectPtr<AActor>> PlacedZones;
+
+	/** Fallback path only: the one zone actor this switcher spawned. */
+	UPROPERTY(Transient)
+	TObjectPtr<AActor> SpawnedZoneActor;
+
+	/**
+	 * The initial zone is applied on the first Tick, not in BeginPlay: a placed
+	 * zone's own BeginPlay (where it binds its input) is not ordered against
+	 * this actor's, so a deactivation issued from BeginPlay could be undone by a
+	 * zone that begins play afterwards. Every actor's BeginPlay has run by the
+	 * time the first Tick arrives.
+	 */
+	bool bInitialZoneApplied = false;
 
 	/** Resolved manual-fire map (the override asset, or the built fallback). */
 	UPROPERTY(Transient)

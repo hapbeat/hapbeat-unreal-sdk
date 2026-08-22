@@ -64,13 +64,15 @@ public:
 	// ---- hand mount (Unity CameraFollowMount) ----
 
 	/**
-	 * Park a mesh in front of the camera (fishing rod, blaster). Pass an
-	 * identity RelativeToCamera to accept the default pose, which is Unity's
-	 * CameraFollowMount default converted to UE axes -- see
-	 * GetDefaultHandMountRelativeTransform().
+	 * Park a mesh in front of the camera (fishing rod, blaster).
+	 *
+	 * The pose is the CALLER's business, in full -- position, rotation AND
+	 * scale. Each zone converts its own Unity CameraFollowMount offset and fits
+	 * its own mesh, so there is no shared "default held-item pose" here to get
+	 * out of step with them.
 	 *
 	 * @param InMesh            What to show; null hides the mount (same as UnmountItem).
-	 * @param RelativeToCamera  Camera-local pose; identity = the default pose.
+	 * @param RelativeToCamera  Camera-local pose, scale included.
 	 * @param OptionalMaterial  Applied to element 0 when non-null; the mesh's own material otherwise.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
@@ -83,19 +85,6 @@ public:
 	/** The mount component itself, for a zone that wants to drive it directly (rod tip wobble etc.). */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat|Showcase")
 	UStaticMeshComponent* GetHandMount() const { return HandMount; }
-
-	/**
-	 * Unity CameraFollowMount's defaults, converted to UE.
-	 * Position: Unity (0.3, -0.15, 0.5) m in camera space (X right, Y up,
-	 *   Z forward) -> UE (X forward, Y right, Z up) in cm = (50, 30, -15).
-	 * Rotation: Unity euler (-15, 0, 0); Unity pitches nose-DOWN for a positive
-	 *   angle about its right axis, so -15 is 15 degrees nose-up, which in UE
-	 *   (positive pitch = up) is Pitch = +15.
-	 */
-	static FTransform GetDefaultHandMountRelativeTransform()
-	{
-		return FTransform(FRotator(15.0f, 0.0f, 0.0f), FVector(50.0f, 30.0f, -15.0f));
-	}
 
 	// ---- view / cursor ----
 
@@ -122,6 +111,15 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
 	void TeleportToSpawn(const FTransform& WorldSpawn);
+
+	/**
+	 * Point the view at a fixed pitch, degrees (negative looks down). Exists for
+	 * Scripts/capture_showcase_views.py, which tips the camera down a little in
+	 * Z3 and Z5 so the held rod / blaster is in frame; nothing in the sample
+	 * calls it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void SetViewPitchForCapture(float PitchDegrees);
 
 protected:
 	virtual void BeginPlay() override;

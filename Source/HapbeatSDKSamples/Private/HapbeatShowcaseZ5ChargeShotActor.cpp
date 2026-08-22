@@ -10,7 +10,9 @@
 #include "HapbeatSubsystem.h"
 
 #include "Components/AudioComponent.h"
+#include "Components/ChildActorComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
@@ -23,7 +25,10 @@
 #include "Sound/SoundBase.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
+#include "Styling/CoreStyle.h" // FCoreStyle::Get().GetBrush("WhiteBrush")
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SOverlay.h"
+#include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Notifications/SProgressBar.h"
@@ -33,21 +38,38 @@ DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ5, Log, All);
 
 namespace
 {
-	// Muzzle / target layout constants (centimeters, UE's world unit). Purely
-	// cosmetic scene layout -- no protocol/gain meaning.
-	constexpr float MuzzleForwardOffset = 120.0f;
-	constexpr float MuzzleUpOffset = 40.0f;
-	constexpr float TargetForwardDistance = 500.0f;
-	constexpr float TargetSideSpacing = 150.0f;
+	// Unity Showcase.unity, Z5_ChargeShot subtree, converted: UE (X, Y, Z) cm =
+	// (Unity z, Unity x, Unity y) x 100.
 
-	/** Finished sizes of the imported props, longest axis, cm (see the Showcase asset ledger). */
+	/**
+	 * The board: Unity TargetBoard (4, 3, -3.82) with target-large parented at
+	 * (-3.83, 0, 9.21), i.e. (0.17, 3, 5.39) from the zone origin.
+	 */
+	const FVector TargetLocalCm(539.0f, 17.0f, 300.0f);
+
+	/** Unity Z5_ChargeShot/PlayerSpawn: the zone origin. */
+	const FVector PlayerSpawnCm(0.0f, 0.0f, 0.0f);
+
+	/** Muzzle fallback with no player holding the blaster. */
+	constexpr float FallbackMuzzleForwardCm = 120.0f;
+	constexpr float FallbackMuzzleUpCm = 40.0f;
+
+	/** Finished sizes of the imported projectiles, longest axis, cm (see the Showcase asset ledger). */
 	constexpr float BulletLengthCm = 25.0f;   // SM_BulletFoam, 15 x 15 x 25
 	constexpr float MissileLengthCm = 129.0f; // SM_Missile, 129 x 53 x 47
-	constexpr float TargetBoardSizeCm = 180.0f; // SM_TargetLarge, 53 x 180 x 180
 
 	/** Unity ChargeShooter._chargeBarColorLow / _chargeBarColorHigh. */
 	const FLinearColor ChargeBarLowColor(0.3f, 0.6f, 1.0f, 1.0f);
 	const FLinearColor ChargeBarHighColor(1.0f, 0.3f, 0.2f, 1.0f);
+
+	/** SpawnProjectilePreview() placement / lifetime (capture aid only). */
+	constexpr float PreviewForwardCm = 120.0f;
+	constexpr float PreviewHeavyRightCm = 60.0f;
+	constexpr float PreviewLifeSeconds = 10.0f;
+
+	/** Charge bar geometry, shared by the bar and its threshold marker. */
+	constexpr float ChargeBarWidthPx = 320.0f;
+	constexpr float ChargeBarHeightPx = 16.0f;
 }
 
 // =============================================================================
@@ -58,18 +80,17 @@ AHapbeatShowcaseZ5ChargeShotActor::AHapbeatShowcaseZ5ChargeShotActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
-	StandMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StandMesh"));
-	RootComponent = StandMesh;
-	// Movable: the zone is spawned at runtime (Hapbeat Showcase zone switching) and this root
-	// is moved by FootprintOffset in BeginPlay. Lighting is dynamic.
-	// Mobility is set before the mesh assignment so SetStaticMesh never runs on a Static component.
-	StandMesh->SetMobility(EComponentMobility::Movable);
-	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
-	{
-		StandMesh->SetStaticMesh(CubeMesh);
-	}
-	// A low, wide blaster stand -- purely cosmetic, no gameplay meaning.
-	StandMesh->SetRelativeScale3D(FVector(1.2f, 0.8f, 1.0f));
+	// No stand model: Unity's blaster is camera-mounted and there is nothing else
+	// in its Z5 but the board, so the root is just the zone's transform.
+	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+
+	// The board as a child actor: an editable relative transform here, and an
+	// actor of its own for the two collision triggers to bind to.
+	TargetSlot = CreateDefaultSubobject<UChildActorComponent>(TEXT("Target"));
+	TargetSlot->SetupAttachment(RootComponent);
+	TargetSlot->SetMobility(EComponentMobility::Movable);
+	TargetSlot->SetChildActorClass(AHapbeatShowcaseZ5TargetActor::StaticClass());
+	TargetSlot->SetRelativeLocation(TargetLocalCm);
 
 	// Default to the Showcase Event Map that ships with the plugin, so this zone
 	// runs against the same authored asset a real project would edit -- gains and
@@ -88,14 +109,9 @@ void AHapbeatShowcaseZ5ChargeShotActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (RootComponent != nullptr)
-	{
-		RootComponent->SetRelativeLocation(FootprintOffset);
-	}
-
 	LoadShowcaseAssets();
 	BuildEventMap();
-	SpawnTargets();
+	SetUpTarget();
 	BindInput();
 	CreateChargeBar();
 }
@@ -131,32 +147,74 @@ void AHapbeatShowcaseZ5ChargeShotActor::MountBlasterOnCharacter()
 		TEXT("Meshes"), TEXT("SM_BlasterG"));
 	if (Character == nullptr || BlasterMesh == nullptr)
 	{
-		return; // bare level or no imported art: shots come from the stand instead
+		return; // bare level or no imported art: shots come from the zone origin instead
 	}
 
-	FTransform MountPose = AHapbeatShowcaseCharacter::GetDefaultHandMountRelativeTransform();
-	MountPose.SetRotation((MountPose.Rotator() + BlasterMountExtraRotation).Quaternion());
+	// Unity's CameraFollowMount on Blaster carries a zero euler offset, so the
+	// only rotation the blaster needs is the automatic one that points its
+	// longest axis forward. (The Phase 2 version applied a +15 degree pitch from
+	// a shared "default held-item pose"; that pose was Unity's ROD value, and it
+	// is why the blaster sat nose-up.)
+	const FRotator AlignRotation = FHapbeatSampleLibrary::ComputeLongestAxisToForwardRotation(BlasterMesh);
+	// Applied BETWEEN the alignment and the mount rotation, i.e. in the aligned
+	// mesh's own space: alignment decides which axis runs forward, this decides
+	// which end of it leads (see bFlipBlasterForward).
+	const FQuat FlipRotation = bFlipBlasterForward
+		? FQuat(FRotator(0.0f, 180.0f, 0.0f))
+		: FQuat::Identity;
+
+	FTransform MountPose;
+	MountPose.SetLocation(BlasterMountCameraOffsetCm);
+	MountPose.SetRotation(BlasterMountExtraRotation.Quaternion() * FlipRotation * AlignRotation.Quaternion());
 	// SM_BlasterG is imported at its authored size (x1 in the asset ledger), so
 	// unlike Z3's rod there is no scale correction to apply here.
+	MountPose.SetScale3D(FVector::OneVector);
+
 	Character->MountItem(BlasterMesh, MountPose,
 		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")));
 	MountedCharacter = Character;
+}
+
+void AHapbeatShowcaseZ5ChargeShotActor::UnmountBlaster()
+{
+	// The character outlives this zone, so a blaster left mounted would follow
+	// the player into the next one.
+	if (AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
+	{
+		Character->UnmountItem();
+	}
+	MountedCharacter.Reset();
+	bMountAttempted = false;
 }
 
 FTransform AHapbeatShowcaseZ5ChargeShotActor::GetMuzzleTransform() const
 {
 	if (const AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
 	{
-		// Unity ChargeShooter falls back to Camera.main when no muzzle transform
-		// is wired, and its muzzle sits on the camera-mounted blaster anyway --
-		// so the view transform is the honest UE equivalent, pushed clear of the
-		// near plane so the projectile is visible as it leaves.
-		FTransform View = Character->GetViewTransform();
-		View.SetLocation(View.GetLocation() + View.GetRotation().GetForwardVector() * 60.0f);
-		return View;
+		if (const UStaticMeshComponent* Mount = Character->GetHandMount())
+		{
+			// The muzzle is a point ON THE BLASTER, not on the camera: shots leave
+			// the barrel, which is where the player is looking anyway because the
+			// blaster is aligned with the view.
+			//
+			// THE AIM COMES FROM THE VIEW, NOT FROM THE MOUNT'S ROTATION. What the
+			// mount carries is a MESH CORRECTION -- the longest-axis alignment plus
+			// the 180-degree bFlipBlasterForward turn applied in
+			// MountBlasterOnCharacter -- so for SM_BlasterG its forward vector
+			// points back at the player. Taking it for a shot direction sent every
+			// projectile, and every SpawnProjectilePreview(), out behind the
+			// camera. The blaster is camera-aligned by construction, which is why
+			// the view rotation IS the barrel's direction and why
+			// MuzzleLocalOffsetCm is measured in that same (forward, right, up)
+			// frame.
+			const FQuat Rotation = Character->GetViewTransform().GetRotation();
+			return FTransform(Rotation,
+				Mount->GetComponentLocation() + Rotation.RotateVector(MuzzleLocalOffsetCm));
+		}
 	}
 	return FTransform(GetActorRotation(),
-		GetActorLocation() + GetActorForwardVector() * MuzzleForwardOffset + FVector(0.0f, 0.0f, MuzzleUpOffset));
+		GetActorLocation() + GetActorForwardVector() * FallbackMuzzleForwardCm
+		+ FVector(0.0f, 0.0f, FallbackMuzzleUpCm));
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::CreateChargeBar()
@@ -169,6 +227,17 @@ void AHapbeatShowcaseZ5ChargeShotActor::CreateChargeBar()
 		return;
 	}
 
+	if (ChargeBarWidget.IsValid())
+	{
+		return; // already up (re-entering the zone)
+	}
+
+	// Same opaque backing as Z4's slider panel, for the same reason: SBorder's
+	// default brush is nearly transparent, so white text on it was unreadable
+	// over a bright zone.
+	const FSlateBrush* WhiteBrush = FCoreStyle::Get().GetBrush("WhiteBrush");
+	const FLinearColor PanelColor(0.0f, 0.0f, 0.0f, 0.75f);
+
 	// Unity ChargeShooter drives a UI Slider + its Fill image colour from
 	// chargeT; the same two facts (fraction, and which side of the heavy
 	// threshold it is on) drive this bar. Lambdas capture `this` and the widget
@@ -180,26 +249,56 @@ void AHapbeatShowcaseZ5ChargeShotActor::CreateChargeBar()
 		.Padding(FMargin(0.0f, 0.0f, 0.0f, 64.0f))
 		[
 			SNew(SBorder)
+			.BorderImage(WhiteBrush)
+			.BorderBackgroundColor(PanelColor)
 			.Padding(FMargin(12.0f, 8.0f))
 			[
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 				[
-					SNew(STextBlock).Text_Lambda([this]()
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor(FLinearColor::White))
+					.Text_Lambda([this]()
 					{
 						return FText::FromString(FString::Printf(TEXT("Charge  %.0f%%"), LastChargeT * 100.0f));
 					})
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 				[
-					SNew(SBox).WidthOverride(320.0f).HeightOverride(16.0f)
+					SNew(SBox).WidthOverride(ChargeBarWidthPx).HeightOverride(ChargeBarHeightPx)
 					[
-						SNew(SProgressBar)
-						.Percent_Lambda([this]() { return LastChargeT; })
-						.FillColorAndOpacity_Lambda([this]()
-						{
-							return FSlateColor(LastChargeT >= HeavyThreshold ? ChargeBarHighColor : ChargeBarLowColor);
-						})
+						SNew(SOverlay)
+						+ SOverlay::Slot()
+						[
+							SNew(SProgressBar)
+							.Percent_Lambda([this]() { return LastChargeT; })
+							.FillColorAndOpacity_Lambda([this]()
+							{
+								return FSlateColor(LastChargeT >= HeavyThreshold ? ChargeBarHighColor : ChargeBarLowColor);
+							})
+						]
+						+ SOverlay::Slot()
+						[
+							// A thin marker at the heavy threshold. NOT a Unity
+							// feature -- Unity only changes the fill colour when the
+							// bar crosses it -- but without it there is no way to see
+							// where "heavy" starts until you have already passed it.
+							SNew(SBox)
+							.HAlign(HAlign_Left)
+							.Padding_Lambda([this]()
+							{
+								return FMargin(ChargeBarWidthPx * FMath::Clamp(HeavyThreshold, 0.0f, 1.0f),
+									0.0f, 0.0f, 0.0f);
+							})
+							[
+								SNew(SBox).WidthOverride(2.0f).HeightOverride(ChargeBarHeightPx)
+								[
+									SNew(SImage)
+									.Image(WhiteBrush)
+									.ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 1.0f, 1.0f, 0.7f)))
+								]
+							]
+						]
 					]
 				]
 			]
@@ -224,6 +323,30 @@ void AHapbeatShowcaseZ5ChargeShotActor::DestroyChargeBar()
 
 void AHapbeatShowcaseZ5ChargeShotActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	OnZoneDeactivated();
+	DestroyChargeBar();
+	Super::EndPlay(EndPlayReason);
+}
+
+void AHapbeatShowcaseZ5ChargeShotActor::OnZoneActivated()
+{
+	// The blaster goes back into the player's hand (it was handed back on the way
+	// out), the board goes back to its resting colour, and the bar starts empty.
+	bMountAttempted = false;
+	LastChargeT = 0.0f;
+	bCharging = false;
+	bThresholdReached = false;
+	if (Target != nullptr)
+	{
+		Target->ResetLook();
+	}
+	CreateChargeBar();
+}
+
+void AHapbeatShowcaseZ5ChargeShotActor::OnZoneDeactivated()
+{
+	// A charge in progress must not survive the switch: the loop would keep
+	// streaming and the delayed shot would fire into the next zone.
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(ShotDelayTimer);
@@ -236,21 +359,8 @@ void AHapbeatShowcaseZ5ChargeShotActor::EndPlay(const EEndPlayReason::Type EndPl
 		}
 	}
 	LoopPlayback.Reset();
-
-	// Tear down the target boards this zone spawned, same as Z1 does with its
-	// pins and Z3 with its shark: SpawnActor's Owner link does not cascade
-	// destruction, so without this they would outlive the zone (visible, and
-	// still hit-reactive) when the Showcase switcher destroys it to change zones.
-	// In-flight projectiles need no handling -- they carry a 4 s SetLifeSpan.
-	for (AHapbeatShowcaseZ5TargetActor* Target : { TargetLight.Get(), TargetHeavy.Get() })
-	{
-		if (IsValid(Target))
-		{
-			Target->Destroy();
-		}
-	}
-	TargetLight = nullptr;
-	TargetHeavy = nullptr;
+	bCharging = false;
+	LastChargeT = 0.0f;
 
 	if (ChargeAudio != nullptr)
 	{
@@ -258,16 +368,8 @@ void AHapbeatShowcaseZ5ChargeShotActor::EndPlay(const EEndPlayReason::Type EndPl
 		ChargeAudio = nullptr;
 	}
 	DestroyChargeBar();
-
-	// The character outlives this zone, so a blaster left mounted would follow
-	// the player into the next one.
-	if (AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
-	{
-		Character->UnmountItem();
-	}
-	MountedCharacter.Reset();
-
-	Super::EndPlay(EndPlayReason);
+	UnmountBlaster();
+	// In-flight projectiles need no handling -- they carry a 4 s SetLifeSpan.
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap()
@@ -349,61 +451,47 @@ UHapbeatEventMap* AHapbeatShowcaseZ5ChargeShotActor::BuildFallbackEventMap()
 	return Fallback;
 }
 
-void AHapbeatShowcaseZ5ChargeShotActor::SpawnTargets()
+void AHapbeatShowcaseZ5ChargeShotActor::SetUpTarget()
 {
-	UWorld* World = GetWorld();
-	if (World == nullptr)
+	Target = TargetSlot != nullptr
+		? Cast<AHapbeatShowcaseZ5TargetActor>(TargetSlot->GetChildActor())
+		: nullptr;
+	if (Target == nullptr)
 	{
+		UE_LOG(LogHapbeatShowcaseZ5, Warning,
+			TEXT("Z5: the Target child actor is missing; hits will not register."));
 		return;
 	}
 
-	const FVector Forward = GetActorForwardVector();
-	const FVector Right = GetActorRightVector();
-	const FVector Base = GetActorLocation() + Forward * TargetForwardDistance;
-	const FRotator SpawnRotation = GetActorRotation();
-
-	FActorSpawnParameters Params;
-	Params.Owner = this;
-	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	TargetLight = World->SpawnActor<AHapbeatShowcaseZ5TargetActor>(
-		Base - Right * TargetSideSpacing, SpawnRotation, Params);
-	TargetHeavy = World->SpawnActor<AHapbeatShowcaseZ5TargetActor>(
-		Base + Right * TargetSideSpacing, SpawnRotation, Params);
-
-	// Resolved once for both boards; any of these may legitimately be null.
-	UStaticMesh* BoardMesh = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_TargetLarge"));
-	UMaterialInterface* BoardBase = FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetBase"));
-	UMaterialInterface* BoardLight = FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetLight"));
-	UMaterialInterface* BoardHeavy = FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetHeavy"));
-	USoundBase* HitLightSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_target_hit_light"));
-	USoundBase* HitHeavySound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_target_hit_heavy"));
-
-	if (TargetLight != nullptr && TargetLight->HitTrigger != nullptr)
+	// One board, two triggers: light and heavy are a property of what hit it, not
+	// of which board was hit (Unity has a single TargetBoard for the same reason).
+	if (Target->LightHitTrigger != nullptr)
 	{
-		TargetLight->HitTrigger->EventMap = EventMap;
-		TargetLight->HitTrigger->EntryId = TarHitLightEntryId;
-		TargetLight->HitTrigger->TagFilter = FName(TEXT("ProjectileLight"));
-		TargetLight->ApplyShowcaseAssets(BoardMesh, BoardBase, BoardLight, HitLightSound,
-			FName(TEXT("ProjectileLight")), TargetBoardSizeCm);
+		Target->LightHitTrigger->EventMap = EventMap;
+		Target->LightHitTrigger->EntryId = TarHitLightEntryId;
+		Target->LightHitTrigger->TagFilter = FName(TEXT("ProjectileLight"));
 	}
-	else
+	if (Target->HeavyHitTrigger != nullptr)
 	{
-		UE_LOG(LogHapbeatShowcaseZ5, Warning, TEXT("Z5: failed to spawn/wire TargetLight."));
+		Target->HeavyHitTrigger->EventMap = EventMap;
+		Target->HeavyHitTrigger->EntryId = TarHitHeavyEntryId;
+		Target->HeavyHitTrigger->TagFilter = FName(TEXT("ProjectileHeavy"));
 	}
 
-	if (TargetHeavy != nullptr && TargetHeavy->HitTrigger != nullptr)
-	{
-		TargetHeavy->HitTrigger->EventMap = EventMap;
-		TargetHeavy->HitTrigger->EntryId = TarHitHeavyEntryId;
-		TargetHeavy->HitTrigger->TagFilter = FName(TEXT("ProjectileHeavy"));
-		TargetHeavy->ApplyShowcaseAssets(BoardMesh, BoardBase, BoardHeavy, HitHeavySound,
-			FName(TEXT("ProjectileHeavy")), TargetBoardSizeCm);
-	}
-	else
-	{
-		UE_LOG(LogHapbeatShowcaseZ5, Warning, TEXT("Z5: failed to spawn/wire TargetHeavy."));
-	}
+	// The face looks back at the player, who stands at the zone origin -- so the
+	// direction is from the board towards that origin, whichever way the imported
+	// model's own axes happen to run.
+	const FVector BoardLocal = TargetSlot != nullptr ? TargetSlot->GetRelativeLocation() : FVector::ZeroVector;
+	const FVector FaceDirection = (-BoardLocal).GetSafeNormal();
+
+	// Any of these may legitimately be null (the art is script-generated and optional).
+	Target->ApplyShowcaseAssets(TargetSizeCm,
+		FaceDirection.IsNearlyZero() ? -FVector::ForwardVector : FaceDirection,
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetBase")),
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetLight")),
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetHeavy")),
+		FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_target_hit_light")),
+		FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_target_hit_heavy")));
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::BindInput()
@@ -526,6 +614,11 @@ void AHapbeatShowcaseZ5ChargeShotActor::HandleChargeRelease()
 
 	const bool bHeavy = ChargeT >= HeavyThreshold;
 	bPendingHeavyShot = bHeavy;
+	// The bar empties the moment the shot leaves, as Unity's does when the slider
+	// is driven from a chargeT that is no longer accumulating. Without this it sat
+	// at whatever it reached and looked stuck.
+	LastChargeT = 0.0f;
+	bThresholdReached = false;
 
 	// Unity ChargeShooter scales the release one-shot by chargeT
 	// (_scaleReleaseVolumeByCharge = true), and picks the heavy variant on the
@@ -624,6 +717,71 @@ void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectile(float ChargeT, bool bHea
 	}
 }
 
+void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectilePreview(bool bHeavy)
+{
+	UWorld* World = GetWorld();
+	if (World == nullptr)
+	{
+		return;
+	}
+
+	const FTransform Muzzle = GetMuzzleTransform();
+	const FQuat Rotation = Muzzle.GetRotation();
+	FVector Location = Muzzle.GetLocation() + Rotation.GetForwardVector() * PreviewForwardCm;
+	if (bHeavy)
+	{
+		// Offset sideways so a light and a heavy preview posed together do not
+		// occupy the same spot.
+		Location += Rotation.GetRightVector() * PreviewHeavyRightCm;
+	}
+
+	FActorSpawnParameters Params;
+	Params.Owner = this;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	AHapbeatShowcaseZ5ProjectileActor* Projectile = World->SpawnActor<AHapbeatShowcaseZ5ProjectileActor>(
+		Location, Rotation.Rotator(), Params);
+	if (Projectile == nullptr)
+	{
+		return;
+	}
+
+	// Zero velocity plus no tick: the mesh/scale/alignment work of Configure()
+	// happens, the flight does not.
+	UStaticMesh* Mesh = bHeavy ? ToRawPtr(ProjectileMeshHeavy) : ToRawPtr(ProjectileMeshLight);
+	const float BaseLength = bHeavy ? MissileLengthCm : BulletLengthCm;
+	Projectile->Configure(FVector::ZeroVector, bHeavy, /*InScale=*/1.0f, Mesh, BaseLength);
+	Projectile->SetActorTickEnabled(false);
+	// Collision off so a preview parked in front of the board cannot fire the
+	// target's hit entries; it is scenery for one screenshot.
+	Projectile->SetActorEnableCollision(false);
+	// Longer than Configure()'s BeginPlay lifespan (4 s), which would otherwise
+	// take the preview away mid-capture.
+	Projectile->SetLifeSpan(PreviewLifeSeconds);
+
+	// The finished WORLD bounds, read after Configure() has swapped in the mesh
+	// and applied its fit + nose-first alignment. This is the part that says
+	// which way the projectile ended up pointing without anyone having to look at
+	// the screenshot: the extent is longest along the axis the model's length
+	// runs along, so a projectile aimed down a yaw-0 shot reads X-longest, and a
+	// Y-longest one is lying across the shot instead of along it.
+	FVector BoundsOrigin = FVector::ZeroVector;
+	FVector BoundsExtent = FVector::ZeroVector;
+	Projectile->GetActorBounds(/*bOnlyCollidingComponents=*/false, BoundsOrigin, BoundsExtent);
+
+	// Kept, not temporary debugging: the preview exists to be photographed, and
+	// this line is what says whether an empty-looking shot means "not spawned",
+	// "spawned off-camera" or "spawned at zero size".
+	UE_LOG(LogHapbeatShowcaseZ5, Log,
+		TEXT("Z5 preview (%s) spawned at %s facing %s; mesh=%s scale=%s worldExtent=%s"),
+		bHeavy ? TEXT("heavy") : TEXT("light"),
+		*Location.ToCompactString(),
+		*Rotation.Rotator().ToCompactString(),
+		Mesh != nullptr ? *Mesh->GetName() : TEXT("<none: sphere fallback>"),
+		*Projectile->GetActorScale3D().ToCompactString(),
+		*BoundsExtent.ToCompactString());
+}
+
 void AHapbeatShowcaseZ5ChargeShotActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -673,6 +831,17 @@ void AHapbeatShowcaseZ5ChargeShotActor::Tick(float DeltaSeconds)
 		}
 	}
 
+	// The Showcase switcher draws a shared Slate HUD covering the key guide, the
+	// zone's own state and the device footer -- and this zone's own charge bar
+	// widget already shows the charge -- so a zone under it prints none of the
+	// on-screen debug lines. ONE EARLY RETURN, not a guard around each line: the
+	// Charge line below used to sit outside the per-line guard and showed on top
+	// of the shared HUD. Everything below here is HUD-only.
+	if (IsOwnedByShowcaseSwitcher(this))
+	{
+		return;
+	}
+
 	HudRefreshTimer -= DeltaSeconds;
 	if (HudRefreshTimer > 0.0f)
 	{
@@ -680,14 +849,9 @@ void AHapbeatShowcaseZ5ChargeShotActor::Tick(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	// The Showcase switcher draws a shared Slate key guide covering this, so
-	// only print the line when this zone is running on its own.
-	if (!IsOwnedByShowcaseSwitcher(this))
-	{
-		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-			TEXT("Z5 Target Range -- hold LMB to charge, release to fire"),
-			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
-	}
+	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+		TEXT("Z5 Target Range -- hold LMB to charge, release to fire"),
+		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
 
 	FString StatusSuffix = TEXT("");
 	FColor StatusColor = FColor::Silver;
@@ -700,11 +864,7 @@ void AHapbeatShowcaseZ5ChargeShotActor::Tick(float DeltaSeconds)
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
 		FString::Printf(TEXT("Charge=%.2f%s"), LastChargeT, *StatusSuffix),
 		StatusColor, HudRefreshIntervalSeconds * 2.0f);
-	// Same reason: the shared HUD has a device / ping footer.
-	if (!IsOwnedByShowcaseSwitcher(this))
-	{
-		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
-	}
+	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
 }
 
 FText AHapbeatShowcaseZ5ChargeShotActor::GetZoneLabel() const
@@ -722,9 +882,10 @@ TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ5ChargeShotActor::GetHudComm
 
 FTransform AHapbeatShowcaseZ5ChargeShotActor::GetPlayerSpawnRelative() const
 {
-	// As with Z4, Unity's spawn sits at the zone origin because its blaster is
-	// elsewhere in the zone; here the stand is at the origin, so stand back.
-	return FTransform(FRotator::ZeroRotator, FVector(-250.0f, 0.0f, 0.0f));
+	// Unity Z5_ChargeShot/PlayerSpawn is the zone origin, and the board is placed
+	// relative to that -- so standing anywhere else would put the board somewhere
+	// other than where Unity has it relative to the player.
+	return FTransform(FRotator::ZeroRotator, PlayerSpawnCm);
 }
 
 // =============================================================================
@@ -737,31 +898,39 @@ AHapbeatShowcaseZ5TargetActor::AHapbeatShowcaseZ5TargetActor()
 
 	TargetMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TargetMesh"));
 	RootComponent = TargetMesh;
-	// Movable: this actor is spawned at runtime by the zone (SpawnTargets) and placed with the
-	// zone's FootprintOffset applied. Lighting is dynamic.
-	// Mobility is set before the mesh assignment so SetStaticMesh never runs on a Static component.
+	// Movable: the switcher hides and shows the zone this board belongs to, so
+	// its lighting is dynamic. Mobility is set before the mesh assignment so
+	// SetStaticMesh never runs on a Static component.
 	TargetMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
 	{
 		TargetMesh->SetStaticMesh(CubeMesh);
 	}
-	// A flat board -- purely cosmetic, no gameplay meaning.
-	TargetMesh->SetRelativeScale3D(FVector(0.8f, 0.2f, 0.8f));
 
-	// QueryOnly + Overlap-all + GenerateOverlapEvents: no physics simulation
-	// needed on either side (the target never moves; the projectile sweeps
-	// through it via a swept AddActorWorldOffset). Mirrors the design doc's
-	// Z1 "BeginOverlap + query-only" faithfulness-ledger choice.
+	// Kinematic: QueryOnly + Overlap-all + GenerateOverlapEvents, no physics
+	// simulation on either side (the board never moves; the projectile sweeps
+	// through it).
 	TargetMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	TargetMesh->SetCollisionObjectType(ECC_WorldStatic);
 	TargetMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
 	TargetMesh->SetGenerateOverlapEvents(true);
 
-	HitTrigger = CreateDefaultSubobject<UHapbeatCollisionTriggerComponent>(TEXT("HitTrigger"));
-	HitTrigger->TriggerEvent = EHapbeatCollisionEvent::BeginOverlap;
-	HitTrigger->GainMode = EHapbeatGainMode::Fixed;
-	// TagFilter / EventMap / EntryId are assigned by the owning zone actor right
-	// after SpawnActor (see AHapbeatShowcaseZ5ChargeShotActor::SpawnTargets).
+	// TWO triggers on one board: which entry fires is decided by the TAG of the
+	// projectile that arrives, not by which of two boards it hit. Both bind to
+	// this actor's root primitive (the mesh) and filter independently.
+	LightHitTrigger = CreateDefaultSubobject<UHapbeatCollisionTriggerComponent>(TEXT("LightHitTrigger"));
+	LightHitTrigger->TriggerEvent = EHapbeatCollisionEvent::BeginOverlap;
+	LightHitTrigger->GainMode = EHapbeatGainMode::Fixed;
+	// A missile sweeping through a 53 cm deep board can report more than one
+	// overlap in a frame; the v1 runtime has no mixer to absorb the repeat.
+	LightHitTrigger->Cooldown = 0.1f;
+
+	HeavyHitTrigger = CreateDefaultSubobject<UHapbeatCollisionTriggerComponent>(TEXT("HeavyHitTrigger"));
+	HeavyHitTrigger->TriggerEvent = EHapbeatCollisionEvent::BeginOverlap;
+	HeavyHitTrigger->GainMode = EHapbeatGainMode::Fixed;
+	HeavyHitTrigger->Cooldown = 0.1f;
+	// TagFilter / EventMap / EntryId are assigned by the owning zone actor (see
+	// AHapbeatShowcaseZ5ChargeShotActor::SetUpTarget).
 }
 
 void AHapbeatShowcaseZ5TargetActor::BeginPlay()
@@ -774,24 +943,38 @@ void AHapbeatShowcaseZ5TargetActor::BeginPlay()
 	}
 }
 
-void AHapbeatShowcaseZ5TargetActor::ApplyShowcaseAssets(UStaticMesh* Mesh, UMaterialInterface* InBaseMaterial,
-	UMaterialInterface* InFlashMaterial, USoundBase* InHitSound, FName InAcceptTag, float DesiredLongestAxisCm)
+void AHapbeatShowcaseZ5TargetActor::ApplyShowcaseAssets(const FVector& SizeCm, const FVector& FaceDirection,
+	UMaterialInterface* InBaseMaterial, UMaterialInterface* InLightFlash, UMaterialInterface* InHeavyFlash,
+	USoundBase* InLightSound, USoundBase* InHeavySound)
 {
-	AcceptTag = InAcceptTag;
 	BaseMaterial = InBaseMaterial;
-	FlashMaterial = InFlashMaterial;
-	HitSound = InHitSound;
+	LightFlashMaterial = InLightFlash;
+	HeavyFlashMaterial = InHeavyFlash;
+	LightHitSound = InLightSound;
+	HeavyHitSound = InHeavySound;
 
 	if (TargetMesh == nullptr)
 	{
 		return;
 	}
+	if (UStaticMesh* BoardMesh =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_TargetLarge")))
+	{
+		TargetMesh->SetStaticMesh(BoardMesh);
+	}
+
+	const UStaticMesh* Mesh = TargetMesh->GetStaticMesh();
 	if (Mesh != nullptr)
 	{
-		TargetMesh->SetStaticMesh(Mesh);
-		TargetMesh->SetRelativeScale3D(FVector(
-			FHapbeatSampleLibrary::ComputeUniformScaleForLength(Mesh, DesiredLongestAxisCm)));
+		// Fitted by rank (largest -> 180, then 180, then the 53 cm depth), then
+		// turned so the SHORTEST axis -- the depth -- points at the player, which
+		// is what puts the printed face towards them whichever way the source
+		// model lies.
+		TargetMesh->SetRelativeScale3D(FHapbeatSampleLibrary::ComputeAxisFitScale(Mesh, SizeCm));
+		TargetMesh->SetRelativeRotation(
+			FHapbeatSampleLibrary::ComputeShortestAxisToDirectionRotation(Mesh, FaceDirection));
 	}
+
 	if (BaseMaterial != nullptr)
 	{
 		// Slot 0 only: the board reads as one surface, and Unity's TargetReceiver
@@ -800,22 +983,39 @@ void AHapbeatShowcaseZ5TargetActor::ApplyShowcaseAssets(UStaticMesh* Mesh, UMate
 	}
 }
 
+void AHapbeatShowcaseZ5TargetActor::ResetLook()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(FlashTimer);
+	}
+	EndFlash();
+}
+
 void AHapbeatShowcaseZ5TargetActor::HandleTargetOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor,
 	UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
 {
-	if (OtherActor == nullptr || AcceptTag.IsNone() || !OtherActor->ActorHasTag(AcceptTag))
+	if (OtherActor == nullptr)
 	{
 		return;
 	}
+	const bool bHeavy = OtherActor->ActorHasTag(FName(TEXT("ProjectileHeavy")));
+	const bool bLight = OtherActor->ActorHasTag(FName(TEXT("ProjectileLight")));
+	if (!bHeavy && !bLight)
+	{
+		return; // something else drifted through the board
+	}
 
-	if (HitSound != nullptr)
+	if (USoundBase* HitSound = bHeavy ? ToRawPtr(HeavyHitSound) : ToRawPtr(LightHitSound))
 	{
 		UGameplayStatics::PlaySoundAtLocation(this, HitSound, GetActorLocation());
 	}
 
-	// Material swap for FlashSeconds, then back -- Unity TargetReceiver's flash.
-	// A repeat hit inside the window just restarts the timer, which is what its
-	// `_flashEnd = Time.time + _flashSeconds` does too.
+	// Flash the colour of the shot that landed -- the Phase 2 version had one
+	// fixed colour per board, so with a single board the board never changed
+	// colour at all. A repeat hit inside the window just restarts the timer,
+	// which is what Unity's `_flashEnd = Time.time + _flashSeconds` does too.
+	UMaterialInterface* FlashMaterial = bHeavy ? ToRawPtr(HeavyFlashMaterial) : ToRawPtr(LightFlashMaterial);
 	if (FlashMaterial != nullptr && TargetMesh != nullptr)
 	{
 		TargetMesh->SetMaterial(0, FlashMaterial);
@@ -884,17 +1084,26 @@ void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, boo
 
 	// The charge multiplier rides on top of the mesh's own finished size, so a
 	// half-charged missile is half of a missile, not half of a unit sphere.
-	float BaseScale = 1.0f;
 	if (InMesh != nullptr)
 	{
 		ProjectileMesh->SetStaticMesh(InMesh);
-		BaseScale = FHapbeatSampleLibrary::ComputeUniformScaleForLength(InMesh, InBaseLengthCm);
+		// Proportional fit (only the length is stated), then the charge multiplier.
+		const FVector BaseScale =
+			FHapbeatSampleLibrary::ComputeAxisFitScale(InMesh, FVector(InBaseLengthCm, 0.0f, 0.0f));
+		ProjectileMesh->SetRelativeScale3D(BaseScale * InScale);
+		// Nose-first: turn the longest axis onto the actor's +X, which the spawner
+		// has already pointed along the shot direction. Without this a missile flew
+		// sideways, since which local axis its length runs along is a property of
+		// the source model.
+		const FQuat AlignRotation =
+			FHapbeatSampleLibrary::ComputeLongestAxisToForwardRotation(InMesh).Quaternion();
+		const FQuat FlipRotation = bFlipForward ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) : FQuat::Identity;
+		ProjectileMesh->SetRelativeRotation(FlipRotation * AlignRotation);
 	}
 	else
 	{
-		BaseScale = 0.3f; // the primitive sphere's stand-in size
+		ProjectileMesh->SetRelativeScale3D(FVector(0.3f * InScale)); // the primitive sphere's stand-in size
 	}
-	ProjectileMesh->SetWorldScale3D(FVector(BaseScale * InScale));
 }
 
 void AHapbeatShowcaseZ5ProjectileActor::Tick(float DeltaSeconds)

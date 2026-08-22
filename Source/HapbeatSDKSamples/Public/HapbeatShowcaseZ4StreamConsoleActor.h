@@ -35,10 +35,20 @@ class SWidget;
  * TickThreshold and fire only when the quantised index changes. Without that a
  * drag would emit hundreds of events a second.
  *
+ * NO 3D GEOMETRY: Unity's Z4 is a UI zone and nothing else -- there is no
+ * console model in the scene -- so there is none here either. (The Phase 2
+ * version drew a cube pedestal that had no counterpart and nothing to do.)
+ *
  * The sliders are Slate built in code (SSlider), added straight to the viewport
  * -- same reasoning as the shared Showcase HUD: no UI .uasset to author, and it
  * still draws in a packaged build. The zone reports WantsCursorUnlocked() so the
  * switcher frees the mouse on entry.
+ *
+ * SPACE AFTER A DRAG: releasing a slider leaves Slate keyboard focus on the
+ * slider, and Slate's own navigation then eats the space bar before the game
+ * ever sees it -- so the loop toggle silently stopped working once you had
+ * touched a slider. Each slider therefore hands focus back to the game viewport
+ * on OnMouseCaptureEnd (see CreateSliderPanel).
  *
  * IMPORTANT v1 caveat: the runtime supports a SINGLE active stream session with
  * REPLACE semantics (see unreal-sdk-v1-design.md Sec 3.5); Unity's mixer instead
@@ -61,15 +71,19 @@ public:
 	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override;
 	virtual FTransform GetPlayerSpawnRelative() const override;
 	virtual bool WantsCursorUnlocked() const override;
+	virtual int32 GetZoneIndex() const override { return 4; }
+	virtual void OnZoneActivated() override;
+	virtual void OnZoneDeactivated() override;
 
 	/**
-	 * Local offset applied to this zone's own root (mesh + everything else in
-	 * the zone) at BeginPlay, so a future master/layout actor can nudge each
-	 * zone into a row slot without altering the zone actor's own placed
-	 * transform.
+	 * CAPTURE AID: start / stop the z4_stream_loop without a keypress, by taking
+	 * exactly the same path the space bar does (so the log line, the HUD state
+	 * and the stream itself are all the real ones). Used by
+	 * Scripts/capture_showcase_views.py, which cannot press a key, to photograph
+	 * the panel with the loop running.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
-	FVector FootprintOffset = FVector::ZeroVector;
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void DebugToggleStream();
 
 	/**
 	 * Detent spacing for both sliders, in slider units. One tick event per
@@ -115,6 +129,13 @@ private:
 	/** Fire TickTrigger (z4_slider_tick) + its SFX for one detent. */
 	void FireTick();
 
+	/**
+	 * Hand keyboard focus back to the game viewport after a slider drag, so the
+	 * space bar reaches this zone's loop toggle instead of being swallowed by
+	 * Slate navigation on the slider that still had focus.
+	 */
+	void ReturnFocusToGameViewport();
+
 	/** Fixed on-screen-message keys, offset into the 400s so they don't collide with other zones' HUD lines. */
 	static constexpr int32 KeyGuideHudLineKey = 400;
 	static constexpr int32 StatusHudLineKey = 401;
@@ -123,9 +144,6 @@ private:
 	// Constructor-created default subobjects (VisibleAnywhere, not Transient --
 	// these ARE part of the CDO / serialized instance, unlike the BeginPlay-time
 	// EventMap/Clip data below).
-
-	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
-	TObjectPtr<UStaticMeshComponent> ConsoleMesh;
 
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UHapbeatTriggerComponent> LoopTrigger;
@@ -177,8 +195,8 @@ private:
 	/** The viewport-hosted slider panel, owned for this zone's lifetime. */
 	TSharedPtr<SWidget> SliderPanel;
 
-	/** Last value pushed to GainBinding (0..1); also shown on the HUD. */
-	float GainValue = 1.0f;
+	/** Last value pushed to GainBinding (0..1); also shown on the HUD. Unity's slider starts centred. */
+	float GainValue = 0.5f;
 	/** Last value pushed to PanBinding (-1..1); also shown on the HUD. */
 	float PanValue = 0.0f;
 

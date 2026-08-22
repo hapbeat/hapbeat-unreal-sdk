@@ -8,8 +8,11 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Engine/GameViewportClient.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::*
+#include "Widgets/SViewport.h" // SViewport (focus target for GameAndUI input mode)
 
 AHapbeatShowcaseCharacter::AHapbeatShowcaseCharacter()
 {
@@ -34,7 +37,6 @@ AHapbeatShowcaseCharacter::AHapbeatShowcaseCharacter()
 	// (CameraFollowMount) is not needed -- attachment does it for free.
 	HandMount = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("HandMount"));
 	HandMount->SetupAttachment(Camera);
-	HandMount->SetRelativeTransform(GetDefaultHandMountRelativeTransform());
 	// Cosmetic only: it must never block the player's own capsule or a zone's
 	// projectiles, and it starts empty until a zone mounts something.
 	HandMount->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -216,6 +218,19 @@ void AHapbeatShowcaseCharacter::SetCursorUnlocked(bool bUnlocked)
 		FInputModeGameAndUI Mode;
 		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		Mode.SetHideCursorDuringCapture(false);
+		// Nominate the viewport as the focus widget, or Slate hands keyboard focus
+		// to whichever widget is on screen and the game stops seeing key presses
+		// (Z4's space bar, once a slider had been touched).
+		if (const UWorld* World = GetWorld())
+		{
+			if (const UGameViewportClient* Viewport = World->GetGameViewport())
+			{
+				if (const TSharedPtr<SViewport> ViewportWidget = Viewport->GetGameViewportWidget())
+				{
+					Mode.SetWidgetToFocus(ViewportWidget);
+				}
+			}
+		}
 		PC->SetInputMode(Mode);
 	}
 	else
@@ -277,11 +292,9 @@ void AHapbeatShowcaseCharacter::MountItem(UStaticMesh* InMesh, const FTransform&
 	{
 		HandMount->SetMaterial(0, OptionalMaterial);
 	}
-	// Identity means "no opinion" -- the caller wants the standard held-item
-	// pose rather than a mesh sitting inside the camera.
-	HandMount->SetRelativeTransform(RelativeToCamera.Equals(FTransform::Identity)
-		? GetDefaultHandMountRelativeTransform()
-		: RelativeToCamera);
+	// The whole pose comes from the caller, scale included: each zone fits its
+	// own mesh to a stated size and converts its own Unity mount offset.
+	HandMount->SetRelativeTransform(RelativeToCamera);
 	HandMount->SetHiddenInGame(false);
 }
 
@@ -293,6 +306,21 @@ void AHapbeatShowcaseCharacter::UnmountItem()
 	}
 	HandMount->SetHiddenInGame(true);
 	HandMount->SetStaticMesh(nullptr);
+	// Scale as well as the mesh: the next zone sets its own pose, but leaving a
+	// stale fit scale on the component would size anything that forgot to.
+	HandMount->SetRelativeTransform(FTransform::Identity);
+}
+
+void AHapbeatShowcaseCharacter::SetViewPitchForCapture(float PitchDegrees)
+{
+	APlayerController* PC = GetOwningPlayerController();
+	if (PC == nullptr)
+	{
+		return;
+	}
+	FRotator ViewRotation = PC->GetControlRotation();
+	ViewRotation.Pitch = FMath::Clamp(PitchDegrees, -ViewPitchLimitDegrees, ViewPitchLimitDegrees);
+	PC->SetControlRotation(ViewRotation);
 }
 
 APlayerController* AHapbeatShowcaseCharacter::GetOwningPlayerController() const

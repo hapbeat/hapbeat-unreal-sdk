@@ -2,13 +2,20 @@
 """
 Generates the Showcase map: /HapbeatSDK/HapbeatSamples/Showcase/Maps/Showcase.
 
+INITIAL GENERATION ONLY. The five zones are actors PLACED in this map, and the
+whole point of placing them is that their props can then be nudged in the editor
+and saved into the .umap. Re-running this script deletes and re-spawns every
+actor it owns, so any such adjustment is LOST. Adjust, save the map, commit the
+.umap -- and only re-run this when you want the layout back to its generated
+state.
+
 Run it in a full editor and commit the .umap file it writes:
 
     UnrealEditor.exe <YourProject>.uproject ^
         -ExecCmds="py <this file>" -unattended -nosplash
 
-NOT `-run=pythonscript`, which is how the other two scripts in this folder are
-run. A commandlet brings up no editor selection set and no viewport, and
+NOT `-run=pythonscript`, which is how the other scripts in this folder are run.
+A commandlet brings up no editor selection set and no viewport, and
 EditorActorSubsystem.spawn_actor_from_class dies inside EditorFramework with an
 access violation the moment it tries to select what it just spawned. The
 -ExecCmds route runs the same script from UEngine::TickDeferredCommands, i.e.
@@ -22,23 +29,20 @@ call would be a booby trap: this file is also runnable from the editor's own
 Python console, and there it would shut the editor down under a user who only
 meant to regenerate a map.
 
-Run it after import_showcase_assets.py (the floor takes its material from
+Run it after import_showcase_assets.py (the rooms take their materials from
 there) and after generate_sample_assets.py (the zones take their Event Map from
 there). It touches only the map package, so those two never have to re-run
 because of this one.
 
-What the map is for: opening it and pressing Play is the whole setup. It holds
-a floor to stand on, one directional light + sky, a PlayerStart, the single
-AHapbeatShowcaseActor that owns the five zones, and -- the part that cannot be
-done from an actor -- World Settings' GameMode Override pointing at
-AHapbeatShowcaseGameMode, without which Play hands you the engine's flying
-DefaultPawn instead of the first-person character. UE counterpart of Unity's
-Samples~/Showcase/Scenes/Showcase.unity.
+LAYOUT: each zone gets its own 20 x 20 m room, and the rooms are spaced 30 m
+apart along +Y. Unity keeps all five zones inside ONE room and hides four of
+them; here they are separate so that each zone's walls are its own and nothing
+has to move when you switch. The switcher shows one zone at a time and teleports
+the player into its room -- see AHapbeatShowcaseActor.
 
-Re-running is the normal case. Every actor this script spawns is tagged
-HapbeatShowcaseGenerated and a re-run deletes exactly those before spawning
-again, so the map package (and any reference to it) survives while its contents
-are rebuilt -- and anything you added to the map by hand is left alone.
+World Settings' GameMode Override is set to AHapbeatShowcaseGameMode, without
+which Play hands you the engine's flying DefaultPawn instead of the first-person
+character. UE counterpart of Unity's Samples~/Showcase/Showcase.unity.
 """
 
 import unreal
@@ -49,34 +53,36 @@ MAP_PKG = SHOWCASE + '/Maps'
 MAP_NAME = 'Showcase'
 MAP_PATH = MAP_PKG + '/' + MAP_NAME
 
-FLOOR_MATERIAL = SHOWCASE + '/Materials/MI_Floor'
-CUBE_MESH = '/Engine/BasicShapes/Cube'
-
 SHOWCASE_ACTOR_CLASS = '/Script/HapbeatSDKSamples.HapbeatShowcaseActor'
 SHOWCASE_GAME_MODE_CLASS = '/Script/HapbeatSDKSamples.HapbeatShowcaseGameMode'
+ROOM_CLASS = '/Script/HapbeatSDKSamples.HapbeatShowcaseRoomActor'
+
+# (label, zone actor class) in key order. Element 0 is key "1".
+ZONE_CLASSES = [
+    ('Z1_Bowling',      '/Script/HapbeatSDKSamples.HapbeatShowcaseZ1BowlingActor'),
+    ('Z2_Door',         '/Script/HapbeatSDKSamples.HapbeatShowcaseZ2DoorActor'),
+    ('Z3_Fishing',      '/Script/HapbeatSDKSamples.HapbeatShowcaseZ3FishingActor'),
+    ('Z4_StreamConsole', '/Script/HapbeatSDKSamples.HapbeatShowcaseZ4StreamConsoleActor'),
+    ('Z5_ChargeShot',   '/Script/HapbeatSDKSamples.HapbeatShowcaseZ5ChargeShotActor'),
+]
 
 # Marks what this script owns, so a re-run can clear its own actors and only
 # its own. Anything you drop into the map by hand has no tag and survives.
 GENERATED_TAG = 'HapbeatShowcaseGenerated'
 
-# 60 m square, 20 cm thick. The zones build outward from the map origin (Z1's
-# lane is the longest run) and the player is teleported between them, so the
-# floor only has to be bigger than the largest zone -- there is no level
-# geometry beyond it. Cube is 100 cm authored, hence the scale numbers.
-FLOOR_SCALE = (60.0, 60.0, 0.2)
-# Sunk by half its thickness so the walking surface is exactly Z = 0, which is
-# what every zone's GetPlayerSpawnRelative() assumes.
-FLOOR_LOCATION = (0.0, 0.0, -10.0)
+# Rooms are 20 m square; 30 m of pitch leaves a 10 m gap between them, which is
+# enough that no zone's props (Z1's lane is the longest run, ~9.4 m) can reach
+# into a neighbour and that the walls read as solid from inside.
+ZONE_PITCH_CM = 3000.0
 
 # Unity's Showcase has one Directional Light plus ambient. Pitch -50 puts the
 # sun high enough to light the zones' top faces without flattening them.
 SUN_ROTATION = (0.0, -50.0, 30.0)  # (roll, pitch, yaw)
 
-# Z1..Z5 all teleport the player themselves; this only decides where you stand
-# for the frame before the initial zone applies its own pose. Matches Z1's
-# 2.5 m back, lifted clear of the floor so the capsule does not spawn half
-# buried.
-PLAYER_START_LOCATION = (-250.0, 0.0, 100.0)
+# Where you stand for the frame before the initial zone applies its own pose:
+# Z1's own PlayerSpawn (-1.87 m back), lifted clear of the floor so the capsule
+# does not spawn half buried.
+PLAYER_START_LOCATION = (-187.0, 0.0, 100.0)
 
 
 # ---------------------------------------------------------------------- setup
@@ -85,13 +91,13 @@ def prime_asset_registry():
     """
     Make sure the Asset Registry has seen our content before we ask about it.
 
-    Same call as the other two scripts. A full editor does start the registry
-    search on its own, but asynchronously, and -ExecCmds fires as soon as
+    Same call as the other scripts. A full editor does start the registry search
+    on its own, but asynchronously, and -ExecCmds fires as soon as
     initialisation is done -- so a scan that has not reached the plugin yet
     would have does_asset_exist() answer about an empty world, sending this
-    script down the "create a new level" path over a map plainly on disk and
-    failing to load the floor material. Scanning synchronously first removes
-    the race; it is a no-op when the search already covered these paths.
+    script down the "create a new level" path over a map plainly on disk.
+    Scanning synchronously first removes the race; it is a no-op when the search
+    already covered these paths.
     """
     unreal.AssetRegistryHelpers.get_asset_registry().scan_paths_synchronous(
         [PLUGIN_CONTENT], True)
@@ -204,49 +210,59 @@ def finish(actor, label):
     return actor
 
 
-def spawn_floor(editor_actors):
-    mesh = unreal.EditorAssetLibrary.load_asset(CUBE_MESH)
-    if mesh is None:
-        raise RuntimeError('could not load ' + CUBE_MESH)
+def zone_origin(index):
+    """Zone k (0-based here) stands at (0, k * pitch, 0)."""
+    return unreal.Vector(0.0, index * ZONE_PITCH_CM, 0.0)
 
-    actor = editor_actors.spawn_actor_from_object(
-        mesh, unreal.Vector(*FLOOR_LOCATION), unreal.Rotator(0.0, 0.0, 0.0))
-    actor.set_actor_scale3d(unreal.Vector(*FLOOR_SCALE))
 
-    # Oak veneer, the same board Unity's Showcase floor uses. Missing art is a
-    # warning rather than an error: the map is still playable in engine grey,
-    # and import_showcase_assets.py can be run afterwards.
-    material = unreal.EditorAssetLibrary.load_asset(FLOOR_MATERIAL)
-    if material is None:
-        unreal.log_warning(
-            '[Hapbeat] {} not found -- floor left with the default material. '
-            'Run import_showcase_assets.py first.'.format(FLOOR_MATERIAL))
-    else:
-        actor.static_mesh_component.set_material(0, material)
+def spawn_rooms_and_zones(editor_actors):
+    """
+    One room + one zone actor per slot. The zone's own components carry its
+    props, so this places two actors per zone and nothing else -- everything you
+    see inside a room is editable on the zone actor in the Details panel.
+    """
+    no_rotation = unreal.Rotator(0.0, 0.0, 0.0)
+    room_class = load_class(ROOM_CLASS)
 
-    return finish(actor, 'ShowcaseFloor')
+    for index, (label, class_path) in enumerate(ZONE_CLASSES):
+        origin = zone_origin(index)
+
+        room = editor_actors.spawn_actor_from_class(room_class, origin, no_rotation)
+        finish(room, 'ShowcaseRoom_' + label)
+
+        zone = editor_actors.spawn_actor_from_class(load_class(class_path), origin, no_rotation)
+        finish(zone, label)
 
 
 def spawn_lighting(editor_actors):
     """
-    One sun plus sky: the UE equivalent of Unity's single Directional Light
-    and its ambient/skybox, and no more than that. Intensities are left at the
-    engine defaults so this stays a lighting setup a reader can recognise
-    rather than a tuned one they have to reverse-engineer.
+    One sun plus sky: the UE equivalent of Unity's single Directional Light and
+    its ambient/skybox, and no more than that. Intensities are left at the
+    engine defaults so this stays a lighting setup a reader can recognise rather
+    than a tuned one they have to reverse-engineer.
     """
     sun = editor_actors.spawn_actor_from_class(
         unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 1000.0),
         unreal.Rotator(*SUN_ROTATION))
+    # Stationary, not Movable: the sun never moves, and a movable directional
+    # light re-renders its whole cascaded shadow map every frame across five
+    # rooms. NOTE the map ships without built lighting (a headless generator
+    # cannot run a light build), so until someone builds it the editor shows the
+    # usual "lighting needs to be rebuilt" banner and the static half of the
+    # saving is not yet realised -- Build > Build Lighting Only claims it.
+    sun_component = sun.get_editor_property('light_component')
+    sun_component.set_editor_property('mobility', unreal.ComponentMobility.STATIONARY)
     finish(sun, 'ShowcaseSun')
 
     sky_light = editor_actors.spawn_actor_from_class(
         unreal.SkyLight, unreal.Vector(0.0, 0.0, 1000.0), unreal.Rotator(0.0, 0.0, 0.0))
-    # Real-time capture keeps the ambient correct without a lighting build --
-    # which a headless generator cannot run, and which a sample should not
-    # require. It needs a movable component, hence the mobility first.
     component = sky_light.get_editor_property('light_component')
     component.set_editor_property('mobility', unreal.ComponentMobility.MOVABLE)
-    component.set_editor_property('real_time_capture', True)
+    # Real-time capture re-renders the sky cubemap every frame. The sky here
+    # never changes, so it buys nothing and costs a lot; a single capture at load
+    # is enough. (Movable mobility is kept so the map still needs no lighting
+    # build, which a headless generator cannot run.)
+    component.set_editor_property('real_time_capture', False)
     finish(sky_light, 'ShowcaseSkyLight')
 
     # Gives the sky something to capture; without it the skylight sees black.
@@ -264,8 +280,9 @@ def spawn_player_start(editor_actors):
 
 def spawn_showcase_actor(editor_actors):
     """
-    The one actor that matters. It sits at the origin because every zone is
-    spawned at its transform and every zone is authored around its own origin.
+    The switcher. It sits at the origin -- with zones placed in the level its
+    own transform no longer decides where anything is, but the origin is still
+    where you would look for it.
     """
     actor = editor_actors.spawn_actor_from_class(
         load_class(SHOWCASE_ACTOR_CLASS), unreal.Vector(0.0, 0.0, 0.0),
@@ -285,7 +302,7 @@ def main():
     set_game_mode(editor_actors)
 
     clear_generated_actors(editor_actors)
-    spawn_floor(editor_actors)
+    spawn_rooms_and_zones(editor_actors)
     spawn_lighting(editor_actors)
     spawn_player_start(editor_actors)
     spawn_showcase_actor(editor_actors)

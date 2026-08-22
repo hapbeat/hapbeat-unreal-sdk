@@ -8,46 +8,48 @@
 #include "HapbeatSequenceComponent.h"
 #include "HapbeatShowcaseCharacter.h"
 
+#include "Components/CapsuleComponent.h"
+#include "Components/ChildActorComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "DrawDebugHelpers.h"
 #include "Engine/CollisionProfile.h"
-#include "Engine/EngineTypes.h"
 #include "Engine/StaticMesh.h"
-#include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::LeftMouseButton
 #include "Kismet/GameplayStatics.h" // GetPlayerPawn
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
+#include "Math/RotationMatrix.h" // FRotationMatrix::MakeFromZ, for aiming the line mesh
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ3, Log, All);
 
 namespace
 {
-	/** Best-effort tint via a dynamic material instance off the stock BasicShapeMaterial. Harmless
-	 * no-op if "Color" isn't the base material's actual parameter name (verified against
-	 * UMaterialInstanceDynamic::SetVectorParameterValue -> SetVectorParameterValueInternal, which
-	 * just stores a per-instance override keyed by name with no validation against the base
-	 * material's real parameter list). */
-	void TintMesh(UStaticMeshComponent* Comp, const FLinearColor& Color)
-	{
-		if (Comp == nullptr)
-		{
-			return;
-		}
-		if (UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial")))
-		{
-			if (UMaterialInstanceDynamic* Mid = Comp->CreateDynamicMaterialInstance(0, Base))
-			{
-				Mid->SetVectorParameterValue(TEXT("Color"), Color);
-			}
-		}
-	}
+	// Unity Showcase.unity, Z3_Fishing subtree, converted: UE (X, Y, Z) cm =
+	// (Unity z, Unity x, Unity y) x 100.
+
+	/** Unity FishingObject: local (0.5, 0.45, -0.018). */
+	const FVector SharkStartCm(-1.8f, 50.0f, 45.0f);
+	/** Unity FishingObject_RestPose: local (0.5, 0.15, 0). */
+	const FVector SharkRestCm(0.0f, 50.0f, 15.0f);
+	/** Unity Z3_Fishing/PlayerSpawn: local (0, 1, -2). Z is the player's feet, hence 0. */
+	const FVector PlayerSpawnCm(-200.0f, 0.0f, 0.0f);
+
+	/**
+	 * Where the line hangs from with nobody holding the rod: roughly where a
+	 * standing player's hand would be, so the shark still tethers sensibly.
+	 */
+	const FVector RodTipFallbackCm(60.0f, 44.0f, 175.0f);
+
+	constexpr float SharkMassKg = 1.0f;
 }
+
+// =============================================================================
+// AHapbeatShowcaseZ3FishingActor
+// =============================================================================
 
 AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 {
@@ -55,42 +57,40 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
-	// Water: a flat, wide cube standing in for a translucent water surface (see class comment --
-	// an opaque blue tint approximates "translucent-ish" without depending on a translucent-blend
-	// base material being available at a known path).
-	WaterMeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WaterMesh"));
-	WaterMeshComp->SetupAttachment(RootComponent);
-	// Movable: the zone is spawned at runtime (Hapbeat Showcase zone switching) and its
-	// Movable root is moved by FootprintOffset in BeginPlay. Lighting is dynamic.
-	// Mobility is set here, before SetupVisuals() assigns the mesh, so SetStaticMesh never
-	// runs on a Static component.
-	WaterMeshComp->SetMobility(EComponentMobility::Movable);
-	WaterMeshComp->SetRelativeLocation(FVector::ZeroVector);
-	WaterMeshComp->SetRelativeScale3D(FVector(14.0f, 10.0f, 0.06f)); // Cube is ~100 uu/side -> ~14m x 10m x 6cm slab
-	WaterMeshComp->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+	RodTipAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("RodTipAnchor"));
+	RodTipAnchor->SetupAttachment(RootComponent);
+	RodTipAnchor->SetMobility(EComponentMobility::Movable); // swayed each Tick when bEnableRodTipSway
+	RodTipAnchor->SetRelativeLocation(RodTipFallbackCm);
 
-	// Rod: a thin, leaning cylinder. Purely decorative -- not geometrically linked to RodTipMeshComp
-	// below (which is independently positioned/animated); precise visual alignment between the two
-	// is not attempted (engine-primitive visuals are a stand-in, per the design doc's minimal-effort
-	// samples principle).
-	RodBaseMeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RodBaseMesh"));
-	RodBaseMeshComp->SetupAttachment(RootComponent);
-	// Movable for the same reason as WaterMeshComp above (runtime spawn + FootprintOffset move),
-	// and set before SetupVisuals() assigns the mesh.
-	RodBaseMeshComp->SetMobility(EComponentMobility::Movable);
-	RodBaseMeshComp->SetRelativeLocation(FVector(-600.0f, -350.0f, 60.0f));
-	RodBaseMeshComp->SetRelativeRotation(FRotator(-55.0f, 20.0f, 0.0f));
-	RodBaseMeshComp->SetRelativeScale3D(FVector(0.045f, 0.045f, 3.0f)); // thin, ~3m tall
-	RodBaseMeshComp->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+	// The fishing line as a real mesh, not DrawDebugLine: debug drawing is
+	// compiled out of a Shipping build, and Unity draws this line with a
+	// LineRenderer that is always there. A unit cylinder stretched between the
+	// two endpoints each Tick is the cheapest equivalent.
+	LineMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("LineMesh"));
+	LineMesh->SetupAttachment(RootComponent);
+	LineMesh->SetMobility(EComponentMobility::Movable);
+	if (UStaticMesh* CylinderMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")))
+	{
+		LineMesh->SetStaticMesh(CylinderMesh);
+	}
+	// Nothing may touch it and it casts no shadow: it is a 2 cm thread whose
+	// shadow would only be noise, and a collider on it would catch the shark.
+	LineMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+	LineMesh->SetCastShadow(false);
 
-	// Rod tip marker: kinematic (never simulates physics), moved every Tick via SetRelativeLocation
-	// (UpdateRodTipSway) -- Movable mobility is required for that.
-	RodTipMeshComp = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RodTipMesh"));
-	RodTipMeshComp->SetupAttachment(RootComponent);
-	RodTipMeshComp->SetMobility(EComponentMobility::Movable);
-	RodTipMeshComp->SetRelativeLocation(RodTipBaseRelativeLocation);
-	RodTipMeshComp->SetRelativeScale3D(FVector(0.15f));
-	RodTipMeshComp->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+	SharkRestAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("SharkRestAnchor"));
+	SharkRestAnchor->SetupAttachment(RootComponent);
+	SharkRestAnchor->SetRelativeLocation(SharkRestCm);
+
+	// The shark as a child actor: an editable relative transform here, and an
+	// actor of its own to carry the sequence + binding (see the class comment).
+	// The pitch lays the body capsule's axis along the shark's length.
+	SharkSlot = CreateDefaultSubobject<UChildActorComponent>(TEXT("Shark"));
+	SharkSlot->SetupAttachment(RootComponent);
+	SharkSlot->SetMobility(EComponentMobility::Movable);
+	SharkSlot->SetChildActorClass(AHapbeatShowcaseZ3SharkActor::StaticClass());
+	SharkSlot->SetRelativeLocation(SharkStartCm);
+	SharkSlot->SetRelativeRotation(FRotator(AHapbeatShowcaseZ3SharkActor::BodyPitchDegrees, 0.0f, 0.0f));
 
 	// Default to the Showcase Event Map that ships with the plugin, so this zone
 	// runs against the same authored asset a real project would edit -- gains and
@@ -109,13 +109,8 @@ void AHapbeatShowcaseZ3FishingActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	// Shared Showcase convention: a master/layout actor spaces the 5 zones out by setting only
-	// FootprintOffset per zone, so apply it to the root here (all 3 decorative meshes above are
-	// attached to the root and move with it automatically; SpawnShark() below accounts for it too).
-	GetRootComponent()->SetRelativeLocation(FootprintOffset);
-
-	SetupVisuals();
-	SpawnShark();
+	SetUpShark();
+	SetUpLineVisual();
 	BuildEventMapAndHaptics();
 	BindInput();
 
@@ -125,225 +120,39 @@ void AHapbeatShowcaseZ3FishingActor::BeginPlay()
 
 void AHapbeatShowcaseZ3FishingActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	// Stop the loop (STREAM_END) + queue the release one-shot before the shark (and its Hapbeat
-	// components) get torn down -- shared Showcase convention: "EndPlay stops its haptics".
-	if (bHooked && HookSequenceComp != nullptr)
-	{
-		HookSequenceComp->Stop();
-	}
-
-	// Take the rod out of the player's hand: the character outlives this zone
-	// (the switcher only destroys zones), so a rod left mounted would follow the
-	// player into the next zone.
-	if (AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
-	{
-		Character->UnmountItem();
-	}
-	MountedCharacter.Reset();
-
-	if (SharkActor != nullptr)
-	{
-		SharkActor->Destroy();
-		SharkActor = nullptr;
-	}
-
+	// Stop the loop (STREAM_END) + queue the release one-shot before the shark
+	// (and its Hapbeat components) get torn down.
+	OnZoneDeactivated();
+	UnmountRod();
 	Super::EndPlay(EndPlayReason);
 }
 
-void AHapbeatShowcaseZ3FishingActor::TryDeferredMount()
+FTransform AHapbeatShowcaseZ3FishingActor::GetSharkRestWorldTransform() const
 {
-	if (bMountAttempted)
-	{
-		return;
-	}
-	if (UGameplayStatics::GetPlayerPawn(this, 0) == nullptr)
-	{
-		return; // nothing possessed yet -- try again next frame
-	}
-	bMountAttempted = true;
-	MountRodOnCharacter();
-	// The tip just moved from the zone's prop to the player's hand; without this
-	// the next frame would read that jump as an enormous rod-tip velocity.
-	PrevRodTipWorldPos = GetRodTipWorldLocation();
+	// Position from the rest anchor, orientation from the slot's authored pitch
+	// (which is what lays the body capsule along the shark).
+	const FVector Location = SharkRestAnchor != nullptr
+		? SharkRestAnchor->GetComponentLocation()
+		: GetActorLocation();
+	const FQuat Rotation = SharkSlot != nullptr
+		? SharkSlot->GetComponentQuat()
+		: GetActorQuat();
+	return FTransform(Rotation, Location);
 }
 
-void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
+void AHapbeatShowcaseZ3FishingActor::SetUpShark()
 {
-	AHapbeatShowcaseCharacter* Character =
-		Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
-	UStaticMesh* RodMesh = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(
-		TEXT("Meshes"), TEXT("SM_FishingRod"));
-	if (Character == nullptr || RodMesh == nullptr)
+	Shark = SharkSlot != nullptr
+		? Cast<AHapbeatShowcaseZ3SharkActor>(SharkSlot->GetChildActor())
+		: nullptr;
+	if (Shark == nullptr)
 	{
-		// No Showcase character (bare level / default pawn) or no imported rod:
-		// keep this zone's own standing rod props, which is what it did before
-		// there was a player at all.
+		UE_LOG(LogHapbeatShowcaseZ3, Warning,
+			TEXT("Z3 Fishing: the Shark child actor is missing; this zone will do nothing."));
 		return;
 	}
-
-	FTransform MountPose = AHapbeatShowcaseCharacter::GetDefaultHandMountRelativeTransform();
-	MountPose.SetRotation((MountPose.Rotator() + RodMountExtraRotation).Quaternion());
-	Character->MountItem(RodMesh, MountPose,
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")));
-	MountedCharacter = Character;
-
-	// ~389 cm along its longest axis: the rod length Unity's Showcase instance
-	// works out to (35 x 389 x 25 cm). MountItem takes no scale, so it is set on
-	// the mount component afterwards.
-	if (UStaticMeshComponent* Mount = Character->GetHandMount())
-	{
-		Mount->SetRelativeScale3D(FVector(
-			FHapbeatSampleLibrary::ComputeUniformScaleForLength(RodMesh, 389.0f)));
-	}
-
-	// Where the line hangs from, in the rod's own space. The rod is a long thin
-	// mesh, so its tip is the far end of its longest axis -- which axis that is
-	// depends on how the source model was authored, so read it from the bounds
-	// rather than assuming one.
-	if (!RodTipLocalOffsetOverride.IsNearlyZero())
-	{
-		RodTipLocalOffset = RodTipLocalOffsetOverride;
-	}
-	else
-	{
-		const FBoxSphereBounds Bounds = RodMesh->GetBounds();
-		const FVector Extent = Bounds.BoxExtent;
-		FVector Offset = Bounds.Origin;
-		if (Extent.X >= Extent.Y && Extent.X >= Extent.Z)
-		{
-			Offset.X += Extent.X;
-		}
-		else if (Extent.Y >= Extent.Z)
-		{
-			Offset.Y += Extent.Y;
-		}
-		else
-		{
-			Offset.Z += Extent.Z;
-		}
-		RodTipLocalOffset = Offset;
-	}
-
-	// The zone's own rod props would now be a second, floating rod.
-	if (RodBaseMeshComp != nullptr)
-	{
-		RodBaseMeshComp->SetVisibility(false);
-	}
-	if (RodTipMeshComp != nullptr)
-	{
-		RodTipMeshComp->SetVisibility(false);
-	}
-}
-
-FVector AHapbeatShowcaseZ3FishingActor::GetRodTipWorldLocation() const
-{
-	if (const AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
-	{
-		if (const UStaticMeshComponent* Mount = Character->GetHandMount())
-		{
-			return Mount->GetComponentTransform().TransformPosition(RodTipLocalOffset);
-		}
-	}
-	return RodTipMeshComp != nullptr ? RodTipMeshComp->GetComponentLocation() : GetActorLocation();
-}
-
-void AHapbeatShowcaseZ3FishingActor::SetupVisuals()
-{
-	if (UStaticMesh* CubeMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
-	{
-		WaterMeshComp->SetStaticMesh(CubeMesh);
-	}
-	TintMesh(WaterMeshComp, FLinearColor(0.05f, 0.25f, 0.5f, 0.6f));
-
-	if (UStaticMesh* CylinderMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cylinder.Cylinder")))
-	{
-		RodBaseMeshComp->SetStaticMesh(CylinderMesh);
-	}
-	TintMesh(RodBaseMeshComp, FLinearColor(0.25f, 0.16f, 0.08f, 1.0f));
-
-	if (UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")))
-	{
-		RodTipMeshComp->SetStaticMesh(SphereMesh);
-	}
-	TintMesh(RodTipMeshComp, FLinearColor(0.9f, 0.85f, 0.2f, 1.0f));
-}
-
-void AHapbeatShowcaseZ3FishingActor::SpawnShark()
-{
-	UWorld* World = GetWorld();
-	if (World == nullptr)
-	{
-		return;
-	}
-
-	UStaticMesh* SharkMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
-	if (SharkMesh == nullptr)
-	{
-		UE_LOG(LogHapbeatShowcaseZ3, Warning, TEXT("Z3 Fishing: could not load /Engine/BasicShapes/Cube; shark not spawned."));
-		return;
-	}
-
-	// SharkLocalSpawnOffset is root-relative so the shark lands in the right spot regardless of
-	// FootprintOffset (already applied to the root above by the time this runs).
-	const FVector SpawnWorldLocation = GetRootComponent()->GetComponentTransform().TransformPosition(SharkLocalSpawnOffset);
-
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = this;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	SharkActor = World->SpawnActor<AStaticMeshActor>(SpawnWorldLocation, FRotator::ZeroRotator, SpawnParams);
-	if (SharkActor == nullptr)
-	{
-		UE_LOG(LogHapbeatShowcaseZ3, Warning, TEXT("Z3 Fishing: failed to spawn the shark actor."));
-		return;
-	}
-
-	SharkMeshComp = SharkActor->GetStaticMeshComponent();
-	// AStaticMeshActor's component defaults to Static mobility (fine for level geometry, but a
-	// simulating body must be Movable) -- flip it before enabling physics.
-	SharkMeshComp->SetMobility(EComponentMobility::Movable);
-	if (UStaticMesh* ImportedShark =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Shark")))
-	{
-		SharkMeshComp->SetStaticMesh(ImportedShark);
-		// ~96 cm along its longest axis -- the size Unity's Showcase instance
-		// works out to (69 x 69 x 96 cm).
-		SharkMeshComp->SetRelativeScale3D(FVector(
-			FHapbeatSampleLibrary::ComputeUniformScaleForLength(ImportedShark, 96.0f)));
-		// SM_Shark comes in with four slots named after the source .mtl
-		// (Shark_Main / Shark_Dark / Shark_Light / Eyes); match on the name, and
-		// fall back to the .obj's declaration order if an importer renamed them.
-		FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMeshComp, TEXT("Dark"), 0,
-			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Dark")));
-		FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMeshComp, TEXT("Main"), 1,
-			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Main")));
-		FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMeshComp, TEXT("Light"), 2,
-			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Light")));
-		FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMeshComp, TEXT("Eyes"), 3,
-			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Eyes")));
-	}
-	else
-	{
-		SharkMeshComp->SetStaticMesh(SharkMesh);
-		SharkMeshComp->SetRelativeScale3D(FVector(1.6f, 0.55f, 0.45f)); // elongated cube ~1.6 m long -- a "shark" silhouette stand-in
-	}
-	SharkMeshComp->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
-	SharkMeshComp->SetSimulatePhysics(true);
-	// A swimming creature, not a sinking prop -- deliberate divergence from FishingController.cs's
-	// useGravity=true (see class comment); buoyant, so gravity is off and damping + wander impulses
-	// alone keep it moving near the water plane.
-	SharkMeshComp->SetEnableGravity(false);
-	SharkMeshComp->SetLinearDamping(SwimLinearDamping);
-	SharkMeshComp->SetAngularDamping(SwimAngularDamping);
-
-	// The stand-in tint is only meaningful on the primitive fallback; the imported
-	// shark already carries its own materials.
-	if (SharkMeshComp->GetStaticMesh() == SharkMesh)
-	{
-		TintMesh(SharkMeshComp, FLinearColor(0.35f, 0.37f, 0.4f, 1.0f));
-	}
-
-	SharkHomeWorldLocation = SharkActor->GetActorLocation();
+	Shark->ApplySharkSize(SharkSizeCm);
+	Shark->SetDamping(SwimLinearDamping, SwimAngularDamping);
 }
 
 void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
@@ -365,41 +174,23 @@ void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 	const FGuid HookReleaseId = FHapbeatSampleLibrary::FindEntryId(
 		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"));
 
-	if (SharkActor == nullptr)
+	if (Shark == nullptr || Shark->HookSequence == nullptr)
 	{
-		UE_LOG(LogHapbeatShowcaseZ3, Warning, TEXT("Z3 Fishing: shark actor missing; haptics not wired."));
-		return;
+		return; // already warned in SetUpShark
 	}
+	Shark->HookSequence->EventMap = EventMap;
+	Shark->HookSequence->EntryId = HookLoopId;
+	Shark->HookSequence->StartEntryId = HookStartId;
+	Shark->HookSequence->StopEntryId = HookReleaseId;
 
-	// Both Hapbeat components live on the shark actor -- see the class comment for why
-	// (ParameterBinding reads its OWNER's root velocity; PreSeedBindings() only scans its own
-	// owner's components).
-	HookSequenceComp = NewObject<UHapbeatSequenceComponent>(SharkActor, TEXT("Z3HookSequence"));
-	HookSequenceComp->EventMap = EventMap;
-	HookSequenceComp->EntryId = HookLoopId;
-	HookSequenceComp->StartEntryId = HookStartId;
-	HookSequenceComp->StopEntryId = HookReleaseId;
-	HookSequenceComp->RegisterComponent();
-
-	// UE's world scale is 1 uu = 1 cm (Unity: 1 unit = 1 m) and GetPhysicsLinearVelocity() returns
-	// uu/s, so the authored 0..3 m/s input range becomes 0..300 uu/s; OutputMin/Max are a gain
-	// multiplier (unit-agnostic) and need no conversion.
-	constexpr float UuPerMeter = 100.0f;
-	HookVelocityBinding = NewObject<UHapbeatParameterBinding>(SharkActor, TEXT("Z3HookLoopVelocityBinding"));
-	HookVelocityBinding->SourceProperty = EHapbeatBindingSource::VelocityMagnitude;
-	HookVelocityBinding->InputMin = 0.0f;
-	HookVelocityBinding->InputMax = 3.0f * UuPerMeter;
-	HookVelocityBinding->CurveType = EHapbeatBindingCurve::Linear;
-	HookVelocityBinding->OutputParameter = EHapbeatBindingOutput::StreamGain;
-	HookVelocityBinding->OutputMin = 0.0f;
-	HookVelocityBinding->OutputMax = 1.5f;
-	HookVelocityBinding->RegisterComponent();
 	// Read this zone actor's manual velocity edits (UpdateHookedLinePhysics /
-	// UpdateSharkWander, both run from OUR Tick) before the binding's own TickComponent
-	// samples the shark's velocity the same frame -- a same-frame ordering nicety, not a
-	// correctness requirement (GetPhysicsLinearVelocity() reflects the current physics
-	// state regardless of tick order; this just avoids a possible 1-frame-stale read).
-	HookVelocityBinding->AddTickPrerequisiteActor(this);
+	// UpdateSharkWander, both run from OUR Tick) before the binding's own
+	// TickComponent samples the shark's velocity the same frame -- a same-frame
+	// ordering nicety, not a correctness requirement.
+	if (Shark->HookVelocityBinding != nullptr)
+	{
+		Shark->HookVelocityBinding->AddTickPrerequisiteActor(this);
+	}
 }
 
 UHapbeatEventMap* AHapbeatShowcaseZ3FishingActor::BuildFallbackEventMap()
@@ -413,27 +204,22 @@ UHapbeatEventMap* AHapbeatShowcaseZ3FishingActor::BuildFallbackEventMap()
 	HookReleaseClip = FHapbeatSampleLibrary::LoadSampleClip(this,
 		TEXT("Showcase/Kit/showcase-kit/stream-clips/z3_hook_release.wav"));
 
-	// Gains + manifest intensities verbatim from ShowcaseEventMap.md / showcase-kit-manifest.json:
-	// all 3 are StreamClip mode, gain (authored) = 1.00; intensities 0.60 / 0.50 / 0.55 respectively.
-	// Z3_hook_loop is the only one with a Parameter Binding (VelocityMagnitude -> StreamGain,
-	// input 0..3 m/s, Linear, output 0..1.5) -- wired onto the shark in
-	// BuildEventMapAndHaptics, which runs for the shipped asset too.
-	const FHapbeatEventEntry HookStartEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.60f, HookStartClip, TEXT("Z3_hook_start"));
-
-	const FHapbeatEventEntry HookLoopEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"),
-		/*Gain=*/1.0f, /*bLoop=*/true, /*CachedIntensity=*/0.50f, HookLoopClip, TEXT("Z3_hook_loop"));
-
-	const FHapbeatEventEntry HookReleaseEntry = FHapbeatSampleLibrary::MakeEntry(
-		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.55f, HookReleaseClip, TEXT("Z3_hook_release"));
-
+	// Gains + manifest intensities verbatim from ShowcaseEventMap.md /
+	// showcase-kit-manifest.json: all 3 are StreamClip mode, gain (authored) =
+	// 1.00; intensities 0.60 / 0.50 / 0.55 respectively. z3_hook_loop is the only
+	// one with a Parameter Binding (VelocityMagnitude -> StreamGain, input
+	// 0..3 m/s, Linear, output 0..1.5) -- that binding lives on the shark and is
+	// configured there, so it applies with the shipped asset too.
 	Fallback->Entries.Reset(3);
-	Fallback->Entries.Add(HookStartEntry);
-	Fallback->Entries.Add(HookLoopEntry);
-	Fallback->Entries.Add(HookReleaseEntry);
+	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"),
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.60f, HookStartClip, TEXT("Z3_hook_start")));
+	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"),
+		/*Gain=*/1.0f, /*bLoop=*/true, /*CachedIntensity=*/0.50f, HookLoopClip, TEXT("Z3_hook_loop")));
+	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
+		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"),
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.55f, HookReleaseClip, TEXT("Z3_hook_release")));
 	return Fallback;
 }
 
@@ -457,8 +243,101 @@ void AHapbeatShowcaseZ3FishingActor::BindInput()
 
 	// Hold to hook, release to let go -- Unity FishingController.HandleInput's
 	// leftButton.wasPressedThisFrame / wasReleasedThisFrame pair, not a toggle.
+	// Bound once; the switcher pushes and pops the whole component.
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &AHapbeatShowcaseZ3FishingActor::HandleFirePressed);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &AHapbeatShowcaseZ3FishingActor::HandleFireReleased);
+}
+
+void AHapbeatShowcaseZ3FishingActor::TryDeferredMount()
+{
+	if (bMountAttempted)
+	{
+		return;
+	}
+	if (UGameplayStatics::GetPlayerPawn(this, 0) == nullptr)
+	{
+		return; // nothing possessed yet -- try again next frame
+	}
+	bMountAttempted = true;
+	MountRodOnCharacter();
+	// The tip just moved from the fallback anchor to the player's hand; without
+	// this the next frame would read that jump as an enormous rod-tip velocity.
+	PrevRodTipWorldPos = GetRodTipWorldLocation();
+}
+
+void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
+{
+	AHapbeatShowcaseCharacter* Character =
+		Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
+	UStaticMesh* RodMesh = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(
+		TEXT("Meshes"), TEXT("SM_FishingRod"));
+	if (Character == nullptr || RodMesh == nullptr)
+	{
+		// No Showcase character (bare level / default pawn) or no imported rod:
+		// the line hangs from RodTipAnchor, which is what it did before there was
+		// a player at all.
+		return;
+	}
+
+	// Fit and align first, because the mount pose is the pose of the FITTED mesh:
+	// the rod is turned so its longest axis runs forward (+X), then scaled to
+	// Unity's 389 cm length, and only then placed where CameraFollowMount says.
+	const FVector Scale = FHapbeatSampleLibrary::ComputeAxisFitScale(RodMesh, FVector(RodLengthCm, 0.0f, 0.0f));
+	const FRotator AlignRotation = FHapbeatSampleLibrary::ComputeLongestAxisToForwardRotation(RodMesh);
+	const FRotator MountRotation =
+		FHapbeatSampleLibrary::UnityEulerToUERotator(RodMountUnityEulerDeg) + RodMountExtraRotation;
+	// In the aligned mesh's own space: alignment picks the axis, this picks which
+	// end of it leads (see bFlipRodForward).
+	const FQuat FlipRotation = bFlipRodForward ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) : FQuat::Identity;
+
+	FTransform MountPose;
+	MountPose.SetLocation(RodMountCameraOffsetCm);
+	// Align first, then the camera-relative mount rotation on top of it.
+	MountPose.SetRotation(MountRotation.Quaternion() * FlipRotation * AlignRotation.Quaternion());
+	MountPose.SetScale3D(Scale);
+
+	Character->MountItem(RodMesh, MountPose,
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")));
+	MountedCharacter = Character;
+
+	// Where the line hangs from, in the MOUNT component's space: the far end of
+	// the rod's longest axis once fitted and aligned. Which local axis that is
+	// depends on how the source model was authored, so it is read from the bounds
+	// rather than assumed.
+	// The SAME rotation the mesh was mounted with (alignment plus the optional
+	// flip), so flipping the rod moves the line's anchor to the end that is now
+	// in front instead of leaving it behind the player's head.
+	const FRotator FittedRotation = (FlipRotation * AlignRotation.Quaternion()).Rotator();
+	RodTipLocalOffset = !RodTipLocalOffsetOverride.IsNearlyZero()
+		? RodTipLocalOffsetOverride
+		: FHapbeatSampleLibrary::ComputeFittedTipOffset(RodMesh, Scale, FittedRotation);
+}
+
+void AHapbeatShowcaseZ3FishingActor::UnmountRod()
+{
+	// The character outlives this zone, so a rod left mounted would follow the
+	// player into the next one.
+	if (AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
+	{
+		Character->UnmountItem();
+	}
+	MountedCharacter.Reset();
+	bMountAttempted = false;
+}
+
+FVector AHapbeatShowcaseZ3FishingActor::GetRodTipWorldLocation() const
+{
+	if (const AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
+	{
+		if (const UStaticMeshComponent* Mount = Character->GetHandMount())
+		{
+			// The mount's transform already carries the fit scale, and
+			// RodTipLocalOffset is the tip AFTER that scale, so the offset is
+			// rotated and translated but must not be scaled a second time.
+			return Mount->GetComponentLocation() + Mount->GetComponentQuat().RotateVector(RodTipLocalOffset);
+		}
+	}
+	return RodTipAnchor != nullptr ? RodTipAnchor->GetComponentLocation() : GetActorLocation();
 }
 
 void AHapbeatShowcaseZ3FishingActor::HandleFirePressed()
@@ -473,88 +352,119 @@ void AHapbeatShowcaseZ3FishingActor::HandleFireReleased()
 
 void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 {
-	if (bNewHooked == bHooked || SharkMeshComp == nullptr)
+	if (bNewHooked == bHooked || Shark == nullptr)
 	{
 		return;
 	}
 	bHooked = bNewHooked;
 
+	UCapsuleComponent* Body = Shark->GetBody();
+	if (Body == nullptr)
+	{
+		return;
+	}
+
 	if (bHooked)
 	{
-		SharkMeshComp->SetLinearDamping(AttachedLinearDamping);
-		SharkMeshComp->SetAngularDamping(AttachedAngularDamping);
+		Shark->SetDamping(AttachedLinearDamping, AttachedAngularDamping);
 
-		// Instant "hooked!" snap to tether range -- parity with FishingController.cs's Attach():
-		// "_object.position = rodTip.position + Vector3.down * maxLineLength". ETeleportType::
-		// ResetPhysics re-syncs the simulating body's transform cleanly instead of fighting the
-		// solver with an ordinary (non-teleporting) SetWorldLocation.
-		const FVector RodTipPos = GetRodTipWorldLocation();
-		const FVector SnapPos = RodTipPos + FVector::DownVector * MaxLineLength;
-		SharkMeshComp->SetWorldLocation(SnapPos, false, nullptr, ETeleportType::ResetPhysics);
-		SharkMeshComp->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		// Instant "hooked!" snap to tether range -- parity with
+		// FishingController.cs's Attach(): "_object.position = rodTip.position +
+		// Vector3.down * maxLineLength". ETeleportType::ResetPhysics re-syncs the
+		// simulating body's transform cleanly instead of fighting the solver.
+		const FVector SnapPos = GetRodTipWorldLocation() + FVector::DownVector * MaxLineLength;
+		Body->SetWorldLocation(SnapPos, false, nullptr, ETeleportType::ResetPhysics);
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
 
-		if (HookSequenceComp != nullptr)
+		if (Shark->HookSequence != nullptr)
 		{
-			HookSequenceComp->Fire(); // Phase 1+2: hook-start one-shot, then start the hook loop
+			Shark->HookSequence->Fire(); // Phase 1+2: hook-start one-shot, then the hook loop
 		}
 	}
 	else
 	{
-		SharkMeshComp->SetLinearDamping(SwimLinearDamping);
-		SharkMeshComp->SetAngularDamping(SwimAngularDamping);
-
+		Shark->SetDamping(SwimLinearDamping, SwimAngularDamping);
 		// Unity FishingController.Detach() snaps the object back to its rest pose,
 		// so every hook starts from the same place instead of from wherever the
 		// last one left it drifting.
-		SharkMeshComp->SetWorldLocation(SharkHomeWorldLocation, false, nullptr, ETeleportType::ResetPhysics);
-		SharkMeshComp->SetPhysicsLinearVelocity(FVector::ZeroVector);
-		SharkMeshComp->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		Shark->ResetToTransform(GetSharkRestWorldTransform());
 
-		if (HookSequenceComp != nullptr)
+		if (Shark->HookSequence != nullptr)
 		{
-			HookSequenceComp->Stop(); // Phase 3: stop the loop, then (after StopShotDelay) the release one-shot
+			Shark->HookSequence->Stop(); // Phase 3: stop the loop, then the release one-shot
 		}
 	}
+}
+
+void AHapbeatShowcaseZ3FishingActor::OnZoneActivated()
+{
+	if (Shark != nullptr)
+	{
+		Shark->SetPhysicsRunning(true);
+		Shark->SetDamping(SwimLinearDamping, SwimAngularDamping);
+		Shark->ResetToTransform(GetSharkRestWorldTransform());
+	}
+	bHooked = false;
+	// The rod goes back into the player's hand: the zone hands it back on the way
+	// out, so it has to be re-mounted on the way in.
+	bMountAttempted = false;
+	PrevRodTipWorldPos = GetRodTipWorldLocation();
+}
+
+void AHapbeatShowcaseZ3FishingActor::OnZoneDeactivated()
+{
+	if (bHooked && Shark != nullptr && Shark->HookSequence != nullptr)
+	{
+		Shark->HookSequence->Stop();
+	}
+	bHooked = false;
+	if (Shark != nullptr)
+	{
+		// A hidden zone has its collision off, so a still-simulating shark would
+		// drift (or be pulled) somewhere unrecoverable.
+		Shark->SetPhysicsRunning(false);
+	}
+	UnmountRod();
 }
 
 void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (SharkMeshComp == nullptr)
+	if (Shark == nullptr)
 	{
-		return; // setup failed (see the BeginPlay warnings above); nothing to simulate
+		return; // setup failed (see the BeginPlay warning); nothing to simulate
 	}
 
 	TryDeferredMount();
 
 	ElapsedTimeSeconds += DeltaSeconds;
-	UpdateRodTipSway(DeltaSeconds);
+	UpdateRodTip(DeltaSeconds);
 	UpdateSharkWander(DeltaSeconds);
 	if (bHooked)
 	{
 		UpdateHookedLinePhysics(DeltaSeconds);
 	}
-	DrawLineVisual();
+	UpdateLineVisual();
 	RefreshHud(DeltaSeconds);
 }
 
-void AHapbeatShowcaseZ3FishingActor::UpdateRodTipSway(float DeltaSeconds)
+void AHapbeatShowcaseZ3FishingActor::UpdateRodTip(float DeltaSeconds)
 {
 	// Optional idle sway: a rod held by the player already moves because the view
 	// moves (Unity's only source of rod-tip velocity), so this is only useful for
 	// a zone standing on its own -- hence off by default.
-	if (bEnableRodTipSway && RodTipMeshComp != nullptr && !MountedCharacter.IsValid())
+	if (bEnableRodTipSway && RodTipAnchor != nullptr && !MountedCharacter.IsValid())
 	{
 		const FVector Sway(
 			FMath::Sin(ElapsedTimeSeconds * 0.6f) * RodTipSwayAmplitude,
 			FMath::Cos(ElapsedTimeSeconds * 0.45f) * RodTipSwayAmplitude * 0.6f,
 			FMath::Sin(ElapsedTimeSeconds * 0.33f) * RodTipSwayAmplitude * 0.35f);
-		RodTipMeshComp->SetRelativeLocation(RodTipBaseRelativeLocation + Sway);
+		RodTipAnchor->SetRelativeLocation(RodTipFallbackCm + Sway);
 	}
 
 	// Measured from the tip's world motion either way, so a hand-held rod feeds
-	// the tension model exactly as a swaying prop one does.
+	// the tension model exactly as a swaying anchor does.
 	const FVector CurWorldPos = GetRodTipWorldLocation();
 	RodTipVelocity = DeltaSeconds > KINDA_SMALL_NUMBER
 		? (CurWorldPos - PrevRodTipWorldPos) / DeltaSeconds
@@ -566,65 +476,77 @@ void AHapbeatShowcaseZ3FishingActor::UpdateSharkWander(float DeltaSeconds)
 {
 	if (!bEnableSharkWander)
 	{
-		// Unity's target does nothing until it is pulled; that is the default here too.
+		// Unity's shark does nothing until it is pulled; that is the default here too.
+		return;
+	}
+	UCapsuleComponent* Body = Shark->GetBody();
+	if (Body == nullptr)
+	{
 		return;
 	}
 
-	// Discrete, occasional kick -- a fixed real-time cadence (not frame-rate scaled: a "burst"
-	// should feel the same regardless of framerate, and the interval itself is already real-time
-	// based via the DeltaSeconds countdown).
+	// Discrete, occasional kick -- a fixed real-time cadence (not frame-rate
+	// scaled: a "burst" should feel the same regardless of framerate, and the
+	// interval itself is already real-time based via the DeltaSeconds countdown).
 	TimeToNextWanderImpulse -= DeltaSeconds;
 	if (TimeToNextWanderImpulse <= 0.0f)
 	{
 		FVector RandDir = FMath::VRand();
-		RandDir.Z *= 0.3f; // keep the shark mostly swimming on the horizontal, gentle vertical bob only
+		RandDir.Z *= 0.3f; // mostly horizontal, gentle vertical bob only
 		RandDir.Normalize();
-		SharkMeshComp->AddImpulse(RandDir * WanderImpulseSpeed, NAME_None, /*bVelChange=*/true);
+		Body->AddImpulse(RandDir * WanderImpulseSpeed, NAME_None, /*bVelChange=*/true);
 		TimeToNextWanderImpulse = FMath::FRandRange(WanderIntervalMinSeconds, WanderIntervalMaxSeconds);
 	}
 
-	// Continuous (per-tick) correction -- expressed as an acceleration and integrated by
-	// DeltaSeconds so it stays frame-rate independent (see UpdateHookedLinePhysics's comment for
-	// the same pattern applied to the taut-line spring).
+	// Continuous (per-tick) correction -- expressed as an acceleration and
+	// integrated by DeltaSeconds so it stays frame-rate independent.
 	if (!bHooked)
 	{
-		const FVector ToHome = SharkHomeWorldLocation - SharkMeshComp->GetComponentLocation();
+		const FVector Home = GetSharkRestWorldTransform().GetLocation();
+		const FVector ToHome = Home - Body->GetComponentLocation();
 		const float DistFromHome = ToHome.Size();
 		if (DistFromHome > HomeLeashRadius)
 		{
 			const FVector Dir = ToHome / FMath::Max(DistFromHome, KINDA_SMALL_NUMBER);
-			SharkMeshComp->AddImpulse(Dir * HomeLeashAccel * DeltaSeconds, NAME_None, /*bVelChange=*/true);
+			Body->AddImpulse(Dir * HomeLeashAccel * DeltaSeconds, NAME_None, /*bVelChange=*/true);
 		}
 	}
 }
 
 void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 {
+	UCapsuleComponent* Body = Shark->GetBody();
+	if (Body == nullptr)
+	{
+		return;
+	}
+
 	const FVector RodTipPos = GetRodTipWorldLocation();
-	const FVector SharkPos = SharkMeshComp->GetComponentLocation();
+	const FVector SharkPos = Body->GetComponentLocation();
 	const FVector ToShark = SharkPos - RodTipPos;
 	const float Dist = ToShark.Size();
 
 	if (Dist < MaxLineLength)
 	{
-		return; // slack: the shark's own wander/buoyant swim physics applies unmodified
+		return; // slack: the shark's own physics applies unmodified
 		        // (FishingController.cs FixedUpdate, "糸が slack: 物理任せ... 何もしない")
 	}
 
 	const FVector Dir = ToShark / FMath::Max(Dist, KINDA_SMALL_NUMBER);
 
-	// FishingController.FixedUpdate() applies these corrections once per Unity physics tick (a
-	// fixed ~50 Hz cadence) with no additional dt scaling -- so its 3 additive terms are each
-	// implicitly "per 1/50 s". UE's Tick runs at a variable cadence, so the ONE term that is a
-	// literal port of a Unity-tuned constant (rod-tip inertia, below) is expressed as an
-	// acceleration (constant x UnityReferenceHz) and integrated by DeltaSeconds: summed over any
-	// 1 real second this reproduces the exact same total velocity change as 50 discrete Unity
-	// ticks would, regardless of UE's actual frame rate. The spring pull-back and radial damping
-	// are NOT literal ports (see class comment) so they are simply authored directly in
-	// per-second units, with no extra Hz factor.
+	// FishingController.FixedUpdate() applies these corrections once per Unity
+	// physics tick (a fixed ~50 Hz cadence) with no additional dt scaling -- so
+	// its 3 additive terms are each implicitly "per 1/50 s". UE's Tick runs at a
+	// variable cadence, so the ONE term that is a literal port of a Unity-tuned
+	// constant (rod-tip inertia, below) is expressed as an acceleration
+	// (constant x UnityReferenceHz) and integrated by DeltaSeconds: summed over
+	// any 1 real second this reproduces the same total velocity change as 50
+	// discrete Unity ticks would, regardless of UE's actual frame rate. The
+	// spring pull-back and radial damping are NOT literal ports (see the class
+	// comment) so they are authored directly in per-second units.
 	constexpr float UnityReferenceHz = 50.0f;
 
-	FVector Velocity = SharkMeshComp->GetPhysicsLinearVelocity();
+	FVector Velocity = Body->GetPhysicsLinearVelocity();
 
 	// 1) Rod-tip inertia transfer -- FishingController.cs:
 	//    "_object.linearVelocity += rodTipVel * _rodInertiaFactor" (capped rodTipVel).
@@ -636,19 +558,19 @@ void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 	}
 	Velocity += CappedRodTipVel * RodInertiaFactor * UnityReferenceHz * DeltaSeconds;
 
-	// 2) Hooke's-law restoring force pulling the shark back toward the max-length sphere -- the
-	//    "manual Hooke spring force in Tick" alternative to a physics constraint (see class
-	//    comment for why a UPhysicsConstraintComponent doesn't fit). Replaces Unity's per-tick
-	//    position Lerp ("Vector3.Lerp(pos, snapPos, 0.5f)") with an equivalent velocity-domain
-	//    pull: F = -k * overshoot, applied as a mass-independent (bVelChange) velocity impulse
-	//    scaled by DeltaSeconds (semi-implicit Euler spring integration).
+	// 2) Hooke's-law restoring force pulling the shark back toward the
+	//    max-length sphere -- the velocity-domain replacement for Unity's
+	//    per-tick position Lerp ("Vector3.Lerp(pos, snapPos, 0.5f)"): F = -k *
+	//    overshoot, applied as a mass-independent velocity change scaled by
+	//    DeltaSeconds (semi-implicit Euler spring integration).
 	const float Overshoot = Dist - MaxLineLength;
 	Velocity += -Dir * Overshoot * LineSpringStiffness * DeltaSeconds;
 
-	// 3) Radial damping: remove part of the outward velocity component so the shark doesn't keep
-	//    fighting the tether -- FishingController.cs: "linearVelocity -= dir*radialSpeed*0.7f".
-	//    Clamped to never remove MORE than the current outward speed (defensive against a large
-	//    DeltaSeconds flipping the direction of travel).
+	// 3) Radial damping: remove part of the outward velocity component so the
+	//    shark doesn't keep fighting the tether -- FishingController.cs:
+	//    "linearVelocity -= dir*radialSpeed*0.7f". Clamped to never remove MORE
+	//    than the current outward speed (defensive against a large DeltaSeconds
+	//    flipping the direction of travel).
 	const float RadialSpeed = Velocity | Dir; // FVector::operator| is the dot product
 	if (RadialSpeed > 0.0f)
 	{
@@ -656,27 +578,118 @@ void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 		Velocity -= Dir * DampAmount;
 	}
 
-	SharkMeshComp->SetPhysicsLinearVelocity(Velocity);
+	Body->SetPhysicsLinearVelocity(Velocity);
 
-	// Auto-release when the line is overstretched. Unity has no such rule (you let
-	// go when you let go), so this is opt-in.
+	// Auto-release when the line is overstretched. Unity has no such rule (you
+	// let go when you let go), so this is opt-in.
 	if (bEnableLineBreak && Overshoot > BreakDistance)
 	{
 		SetHooked(false);
 	}
 }
 
-void AHapbeatShowcaseZ3FishingActor::DrawLineVisual() const
+void AHapbeatShowcaseZ3FishingActor::SetUpLineVisual()
 {
+	if (LineMesh == nullptr)
+	{
+		return;
+	}
+
+	// Measure the cylinder rather than assume its size: the scale below is
+	// "wanted size / the mesh's own size", so nothing here depends on the engine
+	// primitive being a particular number of units tall.
+	const UStaticMesh* Mesh = LineMesh->GetStaticMesh();
+	if (Mesh == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcaseZ3, Warning,
+			TEXT("Z3 Fishing: no line mesh; the fishing line will not be drawn."));
+		LineMesh->SetVisibility(false);
+		return;
+	}
+	const FBoxSphereBounds Bounds = Mesh->GetBounds();
+	LineMeshLocalLengthCm = Bounds.BoxExtent.Z * 2.0f;
+	LineMeshLocalDiameterCm = FMath::Max(Bounds.BoxExtent.X, Bounds.BoxExtent.Y) * 2.0f;
+
+	// Two dynamic instances of the Showcase's own master material, so the line
+	// keeps the unhooked-blue / hooked-green distinction the debug line had.
+	// Absent art leaves the mesh on its default material -- the line is still
+	// there, it is just one colour (see LoadShowcaseAsset's doc).
+	if (UMaterialInterface* Base =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("M_ShowcaseBase")))
+	{
+		LineSlackMaterial = UMaterialInstanceDynamic::Create(Base, this);
+		if (LineSlackMaterial != nullptr)
+		{
+			LineSlackMaterial->SetVectorParameterValue(TEXT("Tint"), LineSlackColor);
+		}
+		LineHookedMaterial = UMaterialInstanceDynamic::Create(Base, this);
+		if (LineHookedMaterial != nullptr)
+		{
+			LineHookedMaterial->SetVectorParameterValue(TEXT("Tint"), LineHookedColor);
+		}
+	}
+}
+
+void AHapbeatShowcaseZ3FishingActor::UpdateLineVisual()
+{
+	if (LineMesh == nullptr)
+	{
+		return;
+	}
+
 	const FVector RodTipPos = GetRodTipWorldLocation();
-	const FVector EndPos = (bHooked && SharkMeshComp != nullptr)
-		? SharkMeshComp->GetComponentLocation()
+	const UCapsuleComponent* Body = Shark != nullptr ? Shark->GetBody() : nullptr;
+	const FVector EndPos = (bHooked && Body != nullptr)
+		? Body->GetComponentLocation()
 		: RodTipPos + FVector::DownVector * MaxLineLength;
-	DrawDebugLine(GetWorld(), RodTipPos, EndPos, bHooked ? FColor::Green : FColor::Blue, false, -1.0f, 0, 2.0f);
+
+	const FVector Delta = EndPos - RodTipPos;
+	const float Length = Delta.Size();
+	const UStaticMesh* Mesh = LineMesh->GetStaticMesh();
+	if (Mesh == nullptr || Length <= KINDA_SMALL_NUMBER
+		|| LineMeshLocalLengthCm <= KINDA_SMALL_NUMBER || LineMeshLocalDiameterCm <= KINDA_SMALL_NUMBER)
+	{
+		// A zero-length line would be a degenerate scale, and a zone with no line
+		// mesh has nothing to place; either way, draw nothing this frame.
+		LineMesh->SetVisibility(false);
+		return;
+	}
+	LineMesh->SetVisibility(true);
+
+	// The cylinder's own axis is its local Z, so pointing that at the far end
+	// lays the mesh along the line. MakeFromZ picks an arbitrary roll about that
+	// axis, which a round cross-section does not care about.
+	const FRotator Rotation = FRotationMatrix::MakeFromZ(Delta / Length).Rotator();
+	const float GirthScale = LineDiameterCm / LineMeshLocalDiameterCm;
+	const FVector Scale(GirthScale, GirthScale, Length / LineMeshLocalLengthCm);
+
+	LineMesh->SetWorldScale3D(Scale);
+	LineMesh->SetWorldRotation(Rotation);
+	// It is the mesh's BOUNDS CENTRE that has to land on the midpoint of the two
+	// endpoints, not the component's origin -- a primitive whose pivot sits at
+	// one end would otherwise put the line half a length off.
+	LineMesh->SetWorldLocation((RodTipPos + EndPos) * 0.5f
+		- FHapbeatSampleLibrary::ComputeFittedBoundsCentre(Mesh, Scale, Rotation));
+
+	UMaterialInterface* Wanted = bHooked ? ToRawPtr(LineHookedMaterial) : ToRawPtr(LineSlackMaterial);
+	if (Wanted != nullptr && LineMesh->GetMaterial(0) != Wanted)
+	{
+		LineMesh->SetMaterial(0, Wanted);
+	}
 }
 
 void AHapbeatShowcaseZ3FishingActor::RefreshHud(float DeltaSeconds)
 {
+	// The Showcase switcher draws a shared Slate HUD covering the key guide, the
+	// zone's own state and the device footer, so a zone under it prints none of
+	// this. ONE EARLY RETURN, not a guard around each line: the per-line form let
+	// the other zones' status lines be written outside it, so they showed on top
+	// of the shared HUD. Everything below here is HUD-only.
+	if (IsOwnedByShowcaseSwitcher(this))
+	{
+		return;
+	}
+
 	HudRefreshTimer -= DeltaSeconds;
 	if (HudRefreshTimer > 0.0f)
 	{
@@ -684,28 +697,20 @@ void AHapbeatShowcaseZ3FishingActor::RefreshHud(float DeltaSeconds)
 	}
 	HudRefreshTimer = HudRefreshIntervalSeconds;
 
-	// The Showcase switcher draws a shared Slate key guide covering this, so
-	// only print the line when this zone is running on its own.
-	if (!IsOwnedByShowcaseSwitcher(this))
-	{
-		FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-			TEXT("Hapbeat Showcase Z3 Fishing -- hold LMB: hook the shark, release: let go"),
-			FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
-	}
+	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
+		TEXT("Hapbeat Showcase Z3 Fishing -- hold LMB: hook the shark, release: let go"),
+		FColor::Cyan, HudRefreshIntervalSeconds * 2.0f);
 
 	float Distance = 0.0f;
-	if (SharkMeshComp != nullptr)
+	if (const UCapsuleComponent* Body = Shark != nullptr ? Shark->GetBody() : nullptr)
 	{
-		Distance = FVector::Dist(SharkMeshComp->GetComponentLocation(), GetRodTipWorldLocation());
+		Distance = FVector::Dist(Body->GetComponentLocation(), GetRodTipWorldLocation());
 	}
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
-		FString::Printf(TEXT("Hooked: %s | line: %.0f / %.0f uu"), bHooked ? TEXT("yes") : TEXT("no"), Distance, MaxLineLength),
+		FString::Printf(TEXT("Hooked: %s | line: %.0f / %.0f uu"),
+			bHooked ? TEXT("yes") : TEXT("no"), Distance, MaxLineLength),
 		bHooked ? FColor::Orange : FColor::Silver, HudRefreshIntervalSeconds * 2.0f);
-	// Same reason: the shared HUD has a device / ping footer.
-	if (!IsOwnedByShowcaseSwitcher(this))
-	{
-		FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
-	}
+	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
 }
 
 FText AHapbeatShowcaseZ3FishingActor::GetZoneLabel() const
@@ -723,7 +728,147 @@ TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ3FishingActor::GetHudCommand
 
 FTransform AHapbeatShowcaseZ3FishingActor::GetPlayerSpawnRelative() const
 {
-	// Unity Showcase.unity: Z3_Fishing/PlayerSpawn at (0, 1, -2) m -- 2 m back
-	// and 1 m up, standing on the pier rather than in the water.
-	return FTransform(FRotator::ZeroRotator, FVector(-200.0f, 0.0f, 100.0f));
+	return FTransform(FRotator::ZeroRotator, PlayerSpawnCm);
+}
+
+// =============================================================================
+// AHapbeatShowcaseZ3SharkActor
+// =============================================================================
+
+AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor()
+{
+	PrimaryActorTick.bCanEverTick = false;
+
+	Body = CreateDefaultSubobject<UCapsuleComponent>(TEXT("Body"));
+	RootComponent = Body;
+	Body->SetMobility(EComponentMobility::Movable);
+	Body->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
+	// Unity's FishingObject Rigidbody is 1 kg; without the override UE would
+	// derive a mass from the capsule's volume, which changes how the line feels.
+	Body->SetMassOverrideInKg(NAME_None, SharkMassKg, /*bNewOverrideMass=*/true);
+	// A hanging creature, not a sinking prop: Unity's FishingController turns
+	// gravity ON at Attach, but the shark here is held by the line the whole time
+	// and gravity only fights the tether, so it stays off and the damping +
+	// spring do the work.
+	Body->SetEnableGravity(false);
+	// SetSimulatePhysics() is deferred to BeginPlay -- calling it on an
+	// unregistered component is order-dependent.
+
+	SharkMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SharkMesh"));
+	SharkMesh->SetupAttachment(Body);
+	SharkMesh->SetMobility(EComponentMobility::Movable);
+	// The capsule is the collider; a second one inside it would fight the solver.
+	SharkMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+
+	// Both on the shark, not on the zone: the binding reads its OWNER's root
+	// velocity and PreSeedBindings() only scans its own owner (see the zone's
+	// class comment).
+	HookSequence = CreateDefaultSubobject<UHapbeatSequenceComponent>(TEXT("HookSequence"));
+
+	// UE's world scale is 1 uu = 1 cm (Unity: 1 unit = 1 m) and
+	// GetPhysicsLinearVelocity() returns uu/s, so the authored 0..3 m/s input
+	// range becomes 0..300 uu/s; OutputMin/Max are a gain multiplier
+	// (unit-agnostic) and need no conversion.
+	HookVelocityBinding = CreateDefaultSubobject<UHapbeatParameterBinding>(TEXT("HookVelocityBinding"));
+	HookVelocityBinding->SourceProperty = EHapbeatBindingSource::VelocityMagnitude;
+	HookVelocityBinding->InputMin = 0.0f;
+	HookVelocityBinding->InputMax = 300.0f;
+	HookVelocityBinding->CurveType = EHapbeatBindingCurve::Linear;
+	HookVelocityBinding->OutputParameter = EHapbeatBindingOutput::StreamGain;
+	HookVelocityBinding->OutputMin = 0.0f;
+	HookVelocityBinding->OutputMax = 1.5f;
+}
+
+void AHapbeatShowcaseZ3SharkActor::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (Body != nullptr)
+	{
+		Body->SetSimulatePhysics(true);
+	}
+}
+
+void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
+{
+	if (Body != nullptr)
+	{
+		// The capsule is stated in the FINISHED shark's terms: half its length
+		// along the capsule axis, and half its girth as the radius. The actor's
+		// BodyPitchDegrees is what lays that axis along the body.
+		Body->SetCapsuleSize(FMath::Max(SizeCm.Y, SizeCm.Z) * 0.5f, SizeCm.X * 0.5f);
+	}
+
+	if (SharkMesh == nullptr)
+	{
+		return;
+	}
+
+	UStaticMesh* Mesh = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Shark"));
+	if (Mesh == nullptr)
+	{
+		// No imported art: an engine cube standing in for the silhouette, fitted
+		// the same way so the zone is the same size either way.
+		Mesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube"));
+		if (Mesh == nullptr)
+		{
+			return;
+		}
+	}
+	SharkMesh->SetStaticMesh(Mesh);
+
+	// SM_Shark comes in with four slots named after the source .mtl
+	// (Shark_Main / Shark_Dark / Shark_Light / Eyes); match on the name, and fall
+	// back to the .obj's declaration order if an importer renamed them.
+	FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMesh, TEXT("Dark"), 0,
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Dark")));
+	FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMesh, TEXT("Main"), 1,
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Main")));
+	FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMesh, TEXT("Light"), 2,
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Light")));
+	FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMesh, TEXT("Eyes"), 3,
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Eyes")));
+
+	// Fit to the finished size (longest axis = the body length), then point that
+	// axis forward IN WORLD TERMS. The actor is pitched by BodyPitchDegrees to
+	// lay the capsule along the body, so the mesh divides that back out.
+	const FVector Scale = FHapbeatSampleLibrary::ComputeAxisFitScale(Mesh, SizeCm);
+	const FQuat AlignToForward =
+		FHapbeatSampleLibrary::ComputeLongestAxisToForwardRotation(Mesh).Quaternion();
+	const FQuat BodyPitch = FRotator(BodyPitchDegrees, 0.0f, 0.0f).Quaternion();
+	const FQuat MeshRotation = BodyPitch.Inverse() * AlignToForward;
+
+	SharkMesh->SetRelativeScale3D(Scale);
+	SharkMesh->SetRelativeRotation(MeshRotation);
+	// Centre the fitted mesh in the capsule, so an off-centre pivot in the
+	// imported model does not leave the shark hanging beside its body.
+	SharkMesh->SetRelativeLocation(
+		-FHapbeatSampleLibrary::ComputeFittedBoundsCentre(Mesh, Scale, MeshRotation.Rotator()));
+}
+
+void AHapbeatShowcaseZ3SharkActor::SetPhysicsRunning(bool bRunning)
+{
+	if (Body != nullptr)
+	{
+		Body->SetSimulatePhysics(bRunning);
+	}
+}
+
+void AHapbeatShowcaseZ3SharkActor::SetDamping(float Linear, float Angular)
+{
+	if (Body != nullptr)
+	{
+		Body->SetLinearDamping(Linear);
+		Body->SetAngularDamping(Angular);
+	}
+}
+
+void AHapbeatShowcaseZ3SharkActor::ResetToTransform(const FTransform& RestTransform)
+{
+	SetActorTransform(RestTransform, false, nullptr, ETeleportType::ResetPhysics);
+	if (Body != nullptr && Body->IsSimulatingPhysics())
+	{
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	}
 }

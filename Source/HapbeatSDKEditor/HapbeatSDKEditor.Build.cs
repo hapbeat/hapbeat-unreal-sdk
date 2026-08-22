@@ -16,6 +16,7 @@ public class HapbeatSDKEditor : ModuleRules
 			"Networking",    // FUdpSocketBuilder / FIPv4Address
 			"Json",          // FJsonSerializer / FJsonObject (manifest.json parsing)
 			"UnrealEd",      // FEditorDelegates::EndPIE, FScopedTransaction, UFactory
+			"LevelEditor",   // FLevelEditorModule::GetFirstActiveViewport (the PIE target for the capture script)
 			"AssetTools",    // IAssetTools::RegisterAdvancedAssetCategory (Content Browser "Hapbeat" category)
 			"AssetDefinition", // UAssetDefinition (asset display name / color for the two authored assets)
 			"PropertyEditor",// IDetailCustomization, FPropertyEditorModule

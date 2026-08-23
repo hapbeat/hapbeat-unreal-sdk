@@ -12,7 +12,6 @@ class UHapbeatEventMap;
 class UHapbeatTriggerComponent;
 class USceneComponent;
 class USoundBase;
-class UStaticMesh;
 class UStaticMeshComponent;
 
 /**
@@ -44,13 +43,21 @@ enum class EHapbeatZ2DoorState : uint8
  * turned the actor root, which took the frame (and everything else) round with
  * it.
  *
- * GEOMETRY, from Unity Showcase.unity's Z2_Door subtree, converted (Unity
- * (x, y, z) m -> UE (z, x, y) cm): the leaf is 150 (Y) x 200 (Z) x 10 (X) cm
- * centred 1 m up, and the frame sits 42.7 cm to +Y of the zone origin. The
- * leaf, frame and handle are three separate imported meshes -- SM_Door,
- * SM_DoorFrame, SM_DoorHandle -- which is why Scripts/import_showcase_assets.py
- * imports Door.fbx with Combine Meshes OFF: a single combined mesh cannot have
- * its leaf rotated away from its frame.
+ * GEOMETRY COMES FROM THE FBX, NOT FROM UNITY'S NUMBERS. Door.fbx holds the
+ * three pieces -- SM_Door (leaf), SM_DoorFrame, SM_DoorHandle -- modelled
+ * against ONE shared origin, so at scale 1 and zero relative offset they
+ * already fit each other: the leaf is 133 wide x 11.5 thick x 298 high and the
+ * frame 175 x 33 x 314, i.e. the leaf exactly fills the frame's 133 cm opening
+ * (175 - 2 x 21). Phase 2 instead fitted the leaf to Unity's 150 x 200 slab and
+ * pushed the frame 42.7 cm sideways, which is what left a too-small leaf
+ * hanging out of its frame. Both pieces are now placed at their authored
+ * transforms and the ASSEMBLY is yawed 90 degrees as a unit, because the FBX
+ * runs the leaf's width along X and its thickness along Y while this zone wants
+ * width along Y (and therefore the face towards the player on -X).
+ *
+ * That the three are separate meshes at all is why
+ * Scripts/import_showcase_assets.py imports Door.fbx with Combine Meshes OFF:
+ * a single combined mesh cannot have its leaf rotated away from its frame.
  *
  * Key layout (3 keys reach all 6 showcase-kit events -- Unity's DoorController
  * drives the same 6 transitions off F/G/L too, see
@@ -134,14 +141,6 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Door", meta = (ClampMin = "0.0"))
 	float RattleAmplitudeDegrees = 3.0f;
 
-	/**
-	 * Extra scale on the imported frame. The frame is imported at its authored
-	 * size and expected to need none, but the source model is not this repo's to
-	 * control, so the correction is a property rather than a constant.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Door", meta = (ClampMin = "0.01"))
-	float FrameScale = 1.0f;
-
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -173,15 +172,6 @@ private:
 	 * missing one simply keeps its primitive, or is skipped.
 	 */
 	void ApplyShowcaseAssets();
-
-	/**
-	 * Fit one imported door piece into a box stated in the zone's axes
-	 * (X = thickness, Y = width, Z = height) and, if the source model runs its
-	 * width along X instead of Y, yaw it 90 degrees so it faces the way this
-	 * zone's frame does. Returns the yaw applied, so the frame and the leaf can
-	 * be turned the same way.
-	 */
-	float FitDoorPiece(UStaticMeshComponent* Component, UStaticMesh* Mesh, const FVector& TargetSizeCm);
 
 	/** One-shot SFX at the door, mirroring Unity's SoundPlayer.Play(name) calls off the door animations. */
 	void PlayDoorSound(USoundBase* Sound) const;
@@ -251,11 +241,15 @@ private:
 
 	// ---- Constructor-created default subobjects: the editable scene ----
 
-	/** The pivot the leaf swings about, at the leaf's hinge-side edge. The ONLY thing that rotates. */
+	/**
+	 * The pivot the leaf swings about, at the leaf's hinge-side edge, and the ONLY
+	 * thing that rotates. It also carries the assembly's base yaw (see the class
+	 * comment), so its relative yaw is that base plus the swing angle.
+	 */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Door")
 	TObjectPtr<USceneComponent> DoorHinge;
 
-	/** The swinging leaf, offset half a leaf-width from the hinge. */
+	/** The swinging leaf, offset from the hinge back to the FBX's shared origin. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Door")
 	TObjectPtr<UStaticMeshComponent> DoorLeafMesh;
 

@@ -16,6 +16,7 @@ class USoundBase;
 class UStaticMesh;
 class UStaticMeshComponent;
 class AHapbeatShowcaseZ1PinActor;
+class AHapbeatShowcaseZ1BallActor;
 
 /**
  * Z1 Bowling Lane -- the "component-only haptics" showcase zone: a lane with a
@@ -34,8 +35,16 @@ class AHapbeatShowcaseZ1PinActor;
  * each pin its own actor -- satisfying that rule -- while keeping its transform
  * an ordinary, editable, SAVED relative transform in this actor's Details panel.
  * (Phase 2 spawned the pins from code instead, which meant their layout could
- * not be adjusted in the editor at all.) The lane and the ball, which need no
- * trigger, stay as ordinary components.
+ * not be adjusted in the editor at all.)
+ *
+ * WHY THE BALL IS A CHILD ACTOR TOO, though it carries no trigger of its own:
+ * a pin's trigger filters on the OTHER ACTOR's tag
+ * (UHapbeatCollisionTriggerComponent::HandleCollision -> ActorHasTag), and only
+ * the ball and the other pins may make a pin fire. With the ball a plain
+ * component of this zone actor, tagging it would have meant tagging the zone
+ * actor -- which also owns the LANE, so every pin settling onto the lane would
+ * have counted as a ball strike. Its own actor is what lets the tag mean
+ * exactly "ball or pin". The lane, which must not match, stays a component.
  *
  * LAYOUT: every number below is the Unity Showcase's own, converted -- Unity
  * (x, y, z) metres become UE (z, x, y) centimetres. The lane, the ball's mark
@@ -79,6 +88,27 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling", meta = (ClampMin = "1.0"))
 	float PinDiameterCm = 19.0f;
 
+	/**
+	 * Turn the stood-up pin mesh a further 180 degrees, so it stands on its base
+	 * rather than on its neck.
+	 *
+	 * ComputeLongestAxisToUpRotation only decides which AXIS runs vertically, not
+	 * which END of it is the top, and bowling_pin.obj comes out of the importer
+	 * with its base at the axis's positive end -- so the rack was upside down.
+	 * True for that model; kept editable so a replacement mesh can be corrected
+	 * without a code change.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling")
+	bool bFlipPinUp = true;
+
+	/**
+	 * The actor tag the ball and every pin carry, and the ONLY tag each pin's
+	 * HitTrigger fires on (UHapbeatCollisionTriggerComponent::TagFilter). The
+	 * lane, the room floor and the walls carry it not at all, so a pin settling
+	 * onto the lane -- which used to fire as loudly as a strike -- is silent.
+	 */
+	static const FName ContactTag;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -92,6 +122,9 @@ private:
 
 	/** Hand each child pin actor its EventMap / entry / SFX and remember the pose Space returns it to. */
 	void SetUpPins();
+
+	/** Cache the ball child actor, tag it and start it simulating. */
+	void SetUpBall();
 
 	/** Swap in the imported lane / ball materials when that optional content is present; no-op otherwise. */
 	void ApplyShowcaseAssets();
@@ -161,9 +194,17 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Bowling")
 	TObjectPtr<UStaticMeshComponent> LaneMesh;
 
-	/** Unity Z1_Bowling/Ball: 40 cm sphere on its mark at (-100, 0, 129.5) cm, 4 kg. */
+	/**
+	 * Unity Z1_Bowling/Ball: 40 cm sphere on its mark at (-100, 0, 129.5) cm,
+	 * 4 kg. A child actor so it can carry ContactTag without the lane (a
+	 * component of THIS actor) carrying it too -- see the class comment.
+	 */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Bowling")
-	TObjectPtr<UStaticMeshComponent> BallMesh;
+	TObjectPtr<UChildActorComponent> BallSlot;
+
+	/** Cached BallSlot->GetChildActor(); the thing LMB launches. */
+	UPROPERTY(Transient)
+	TObjectPtr<AHapbeatShowcaseZ1BallActor> Ball;
 
 	/**
 	 * The 6 pins of the rack, each a child actor so it can own its own collision
@@ -225,8 +266,13 @@ public:
 	UPROPERTY(Transient)
 	TObjectPtr<USoundBase> HitSound;
 
-	/** Fit the mesh child to DesiredHeight x DesiredDiameter cm, stood upright and centred in the capsule. */
-	void ApplyPinSize(float DesiredHeightCm, float DesiredDiameterCm);
+	/**
+	 * Fit the mesh child to DesiredHeight x DesiredDiameter cm, stood upright and
+	 * centred in the capsule. bFlipUp turns the stood-up mesh a further 180
+	 * degrees, for a model whose base is at the top of its longest axis (see
+	 * AHapbeatShowcaseZ1BowlingActor::bFlipPinUp).
+	 */
+	void ApplyPinSize(float DesiredHeightCm, float DesiredDiameterCm, bool bFlipUp);
 
 	/** Rack pose restore: teleport back and clear the physics body's momentum. */
 	void ResetToTransform(const FTransform& RestTransform);
@@ -271,4 +317,45 @@ private:
 	/** Look only -- no collision, so it never competes with the capsule. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UStaticMeshComponent> PinMesh;
+};
+
+/**
+ * The bowling ball -- a sphere with the physics body, and nothing else.
+ *
+ * It exists as an actor purely so it can carry
+ * AHapbeatShowcaseZ1BowlingActor::ContactTag: the pins' triggers filter on the
+ * tag of the OTHER ACTOR, and the zone actor that would otherwise own the ball
+ * also owns the lane, which must not fire anything. See the zone's class
+ * comment.
+ */
+UCLASS()
+class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ1BallActor : public AActor
+{
+	GENERATED_BODY()
+
+public:
+	AHapbeatShowcaseZ1BallActor();
+
+	/** The sphere: the physics body, the collider and the look in one. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
+	TObjectPtr<UStaticMeshComponent> BallMesh;
+
+	/** Swap in the imported ball material when that optional content is present. */
+	void ApplyShowcaseAssets();
+
+	/** Teleport back to its mark and clear the body's momentum (Unity BallLauncher.ResetPose). */
+	void ResetToTransform(const FTransform& RestTransform);
+
+	/** Add straight to the ball's velocity (mass-independent), as Unity assigns linearVelocity. */
+	void LaunchWithVelocity(const FVector& Velocity);
+
+	/** Start / stop simulating -- the zone stops its ball while it is hidden. */
+	void SetPhysicsRunning(bool bRunning);
+
+protected:
+	/**
+	 * Enables physics simulation, deferred from the constructor so the mesh is
+	 * fully registered first (same reason as AHapbeatShowcaseZ1PinActor).
+	 */
+	virtual void BeginPlay() override;
 };

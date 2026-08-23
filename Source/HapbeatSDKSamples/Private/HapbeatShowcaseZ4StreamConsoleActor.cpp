@@ -11,6 +11,7 @@
 
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
+#include "Engine/GameInstance.h" // GetSubsystem<UHapbeatSubsystem>()
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/GameViewportClient.h"
@@ -21,12 +22,23 @@
 #include "Styling/CoreStyle.h" // FCoreStyle::Get().GetBrush("WhiteBrush")
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SViewport.h" // SViewport (focus target after a slider drag)
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SSlider.h"
+#include "Widgets/Input/SSpinBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Text/STextBlock.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ4, Log, All);
+
+namespace
+{
+	/** An override axis as text: the disabled sentinel reads as a word, not as -1. */
+	FString FormatOverrideValue(int32 Value)
+	{
+		return Value >= 1 ? FString::FromInt(Value) : FString(TEXT("off"));
+	}
+}
 
 AHapbeatShowcaseZ4StreamConsoleActor::AHapbeatShowcaseZ4StreamConsoleActor()
 {
@@ -83,6 +95,16 @@ void AHapbeatShowcaseZ4StreamConsoleActor::BeginPlay()
 
 	BuildEventMap();
 	BindInput();
+
+	// Start the address fields from what is actually applied, so opening the zone
+	// and leaving it again cannot change anyone's routing. Read BEFORE the panel
+	// is built, since its fields display these.
+	if (const UHapbeatSubsystem* Subsystem = ResolveSubsystem())
+	{
+		EditingOverridePlayer = Subsystem->GetOverridePlayer();
+		EditingOverrideGroup = Subsystem->GetOverrideGroup();
+	}
+
 	CreateSliderPanel();
 
 	// Push the initial Gain/Pan so a StreamClip started later (T) picks them up
@@ -275,6 +297,10 @@ void AHapbeatShowcaseZ4StreamConsoleActor::CreateSliderPanel()
 						.OnMouseCaptureEnd_Lambda([this]() { ReturnFocusToGameViewport(); })
 					]
 				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 12.0f, 0.0f, 0.0f)
+				[
+					MakeAddressOverrideSection()
+				]
 			]
 		];
 
@@ -316,6 +342,163 @@ void AHapbeatShowcaseZ4StreamConsoleActor::ReturnFocusToGameViewport()
 		Mode.SetWidgetToFocus(ViewportWidget);
 	}
 	PC->SetInputMode(Mode);
+}
+
+TSharedRef<SWidget> AHapbeatShowcaseZ4StreamConsoleActor::MakeAddressOverrideSection()
+{
+	// A row builder rather than two copies: Player and Group differ only in which
+	// field they write, and a copy-pasted pair drifts.
+	auto MakeField = [this](const FText& Label, int32* Value) -> TSharedRef<SWidget>
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				SNew(SBox).WidthOverride(64.0f)
+				[
+					SNew(STextBlock)
+					.ColorAndOpacity(FSlateColor(FLinearColor::White))
+					.Text(Label)
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).WidthOverride(80.0f)
+				[
+					// -1 is the disabled sentinel and 1..99 the device-addressing
+					// range, so the box spans exactly that; anything else the
+					// subsystem would normalize away cannot be typed in the first
+					// place.
+					SNew(SSpinBox<int32>)
+					.MinValue(-1).MaxValue(99)
+					.MinSliderValue(-1).MaxSliderValue(99)
+					.Value_Lambda([Value]() { return *Value; })
+					.OnValueChanged_Lambda([Value](int32 NewValue) { *Value = NewValue; })
+					// Same reason as the sliders: a field that keeps keyboard
+					// focus swallows the space bar before the loop toggle sees it.
+					.OnValueCommitted_Lambda([this, Value](int32 NewValue, ETextCommit::Type)
+					{
+						*Value = NewValue;
+						ReturnFocusToGameViewport();
+					})
+				]
+			];
+	};
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+		[
+			SNew(STextBlock)
+			.ColorAndOpacity(FSlateColor(FLinearColor::White))
+			.Text(FText::FromString(TEXT("Address override   (-1 = do not override)")))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeField(FText::FromString(TEXT("Player")), &EditingOverridePlayer)
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeField(FText::FromString(TEXT("Group")), &EditingOverrideGroup)
+		]
+		// Two status lines, always both present: they must not appear and
+		// disappear with the state, or the buttons below them would move under
+		// the cursor.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
+		[
+			SNew(STextBlock)
+			.ColorAndOpacity(FSlateColor(FLinearColor::White))
+			.Text_Lambda([this]()
+			{
+				const UHapbeatSubsystem* Subsystem = ResolveSubsystem();
+				if (Subsystem == nullptr)
+				{
+					return FText::FromString(TEXT("Active: (no subsystem)"));
+				}
+				return FText::FromString(FString::Printf(TEXT("Active: player=%s  group=%s"),
+					*FormatOverrideValue(Subsystem->GetOverridePlayer()),
+					*FormatOverrideValue(Subsystem->GetOverrideGroup())));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			SNew(STextBlock)
+			.ColorAndOpacity(FSlateColor(FLinearColor::White))
+			.Text_Lambda([]()
+			{
+				// What the NEXT run would start with, which is not necessarily
+				// what is applied now -- that difference is the whole point of
+				// showing both lines.
+				int32 SavedPlayer = -1;
+				int32 SavedGroup = -1;
+				if (!UHapbeatSubsystem::TryGetPersistedAddressOverride(SavedPlayer, SavedGroup))
+				{
+					return FText::FromString(TEXT("Saved on this device: none"));
+				}
+				return FText::FromString(FString::Printf(TEXT("Saved on this device: player=%s  group=%s"),
+					*FormatOverrideValue(SavedPlayer), *FormatOverrideValue(SavedGroup)));
+			})
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 6.0f, 0.0f, 0.0f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
+			[
+				SNew(SButton)
+				.Text(FText::FromString(TEXT("Apply")))
+				.ToolTipText(FText::FromString(
+					TEXT("Send every later command to this player / group, and remember it on this machine.")))
+				.OnClicked_Lambda([this]()
+				{
+					ApplyAddressOverride();
+					return FReply::Handled();
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SButton)
+				.Text(FText::FromString(TEXT("Clear")))
+				.ToolTipText(FText::FromString(TEXT("Turn both axes off and forget the saved choice.")))
+				.OnClicked_Lambda([this]()
+				{
+					ClearAddressOverride();
+					return FReply::Handled();
+				})
+			]
+		];
+}
+
+UHapbeatSubsystem* AHapbeatShowcaseZ4StreamConsoleActor::ResolveSubsystem() const
+{
+	if (UGameInstance* GameInstance = GetGameInstance())
+	{
+		return GameInstance->GetSubsystem<UHapbeatSubsystem>();
+	}
+	return nullptr;
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::ApplyAddressOverride()
+{
+	if (UHapbeatSubsystem* Subsystem = ResolveSubsystem())
+	{
+		// Persisted: this demo exists for the one-build-many-seats case, where
+		// the point is that the machine remembers which Hapbeat it is bound to.
+		Subsystem->SetAddressOverride(EditingOverridePlayer, EditingOverrideGroup, /*bPersist=*/true);
+		// Read back what was actually applied, so a value the subsystem
+		// normalized away is shown as normalized instead of as typed.
+		EditingOverridePlayer = Subsystem->GetOverridePlayer();
+		EditingOverrideGroup = Subsystem->GetOverrideGroup();
+	}
+	ReturnFocusToGameViewport();
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::ClearAddressOverride()
+{
+	if (UHapbeatSubsystem* Subsystem = ResolveSubsystem())
+	{
+		Subsystem->ClearPersistedAddressOverride();
+		EditingOverridePlayer = Subsystem->GetOverridePlayer();
+		EditingOverrideGroup = Subsystem->GetOverrideGroup();
+	}
+	ReturnFocusToGameViewport();
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey()
@@ -465,6 +648,8 @@ TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ4StreamConsoleActor::GetHudC
 	Commands.Add({ FText::FromString(TEXT("Space")), FText::FromString(TEXT("toggle the looping stream")) });
 	Commands.Add({ FText::FromString(TEXT("Mouse")),
 		FText::FromString(TEXT("drag the Gain / Pan sliders (one tick per detent)")) });
+	Commands.Add({ FText::FromString(TEXT("Panel")),
+		FText::FromString(TEXT("set Player / Group, then Apply, to bind this build to one device")) });
 	return Commands;
 }
 

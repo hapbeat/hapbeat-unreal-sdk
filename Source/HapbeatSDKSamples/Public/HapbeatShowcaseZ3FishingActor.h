@@ -196,13 +196,15 @@ public:
 	 * Turn the aligned rod 180 degrees about its up axis before the mount pose is
 	 * applied. Longest-axis alignment only decides which AXIS runs forward, not
 	 * which END of it leads, so a model authored the other way round is held
-	 * butt-first. False for SM_FishingRod, whose tip already points forward in
-	 * the PIE capture; kept editable so a replacement mesh can be corrected
-	 * without code. The derived rod-tip offset follows this flag, so the line
-	 * still hangs from the end that is actually in front.
+	 * butt-first. True for SM_FishingRod: the PIE capture read the right way
+	 * round, but in the headset the rod is held butt-forward -- the model's
+	 * longest axis runs from tip to butt, which alignment alone cannot tell.
+	 * Kept editable so a replacement mesh can be corrected without code. The
+	 * derived rod-tip offset follows this flag, so the line still hangs from the
+	 * end that is actually in front.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
-	bool bFlipRodForward = false;
+	bool bFlipRodForward = true;
 
 	/**
 	 * Rod-tip position in the mounted rod's local space. Left at zero (the

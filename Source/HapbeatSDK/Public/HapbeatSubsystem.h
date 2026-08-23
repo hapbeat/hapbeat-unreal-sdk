@@ -317,6 +317,20 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
 	void ClearPersistedAddressOverride();
 
+	/**
+	 * Read the SAVED address override without applying it — what the next launch
+	 * on this machine would start with, which is not necessarily what is running
+	 * now (SetAddressOverride with bPersist false changes one and not the other).
+	 * Both out params come back as AddressOverrideDisabled (-1) when their key is
+	 * absent. Returns true if either key is present.
+	 *
+	 * Static, and free of any subsystem state, so tooling and UI can ask before a
+	 * session exists. Mirrors HapbeatManager.TryGetPersistedAddressOverride
+	 * (Unity SDK); like NormalizeAddressOverride it is a plain public static
+	 * rather than a UFUNCTION, matching the Unity method it mirrors.
+	 */
+	static bool TryGetPersistedAddressOverride(int32& OutPlayer, int32& OutGroup);
+
 	/** Currently effective forced player number, or AddressOverrideDisabled (-1) if this axis doesn't override the target's player. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat|Target")
 	int32 GetOverridePlayer() const { return OverridePlayer; }

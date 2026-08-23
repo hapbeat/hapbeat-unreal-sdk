@@ -8,6 +8,7 @@
 
 class UHapbeatClip;
 class UHapbeatEventMap;
+class UHapbeatSubsystem;
 class UHapbeatTriggerComponent;
 class UHapbeatParameterBinding;
 class USoundBase;
@@ -38,6 +39,17 @@ class SWidget;
  * NO 3D GEOMETRY: Unity's Z4 is a UI zone and nothing else -- there is no
  * console model in the scene -- so there is none here either. (The Phase 2
  * version drew a cube pedestal that had no counterpart and nothing to do.)
+ *
+ * IT ALSO CARRIES THE ADDRESS-OVERRIDE DEMO, under the two sliders. Unity's
+ * Z4 has one (Samples~/Showcase/Scripts/AddressOverrideDemo.cs, a subclass of
+ * the SDK's own HapbeatAddressOverridePanel) because "which Hapbeat does this
+ * build talk to" is a question every multi-seat install has to answer from
+ * inside the running app. The UE SDK's equivalent,
+ * UHapbeatAddressOverridePanelComponent, draws its panel as a full-screen
+ * viewport overlay -- right for a VR config screen, wrong on top of this zone's
+ * console -- so the same three controls (Player, Group, Apply / Clear) are
+ * rebuilt here against the public UHapbeatSubsystem API and live in the console
+ * panel where the zone's other controls are.
  *
  * The sliders are Slate built in code (SSlider), added straight to the viewport
  * -- same reasoning as the shared Showcase HUD: no UI .uasset to author, and it
@@ -128,6 +140,26 @@ private:
 
 	/** Fire TickTrigger (z4_slider_tick) + its SFX for one detent. */
 	void FireTick();
+
+	/** The GameInstance's Hapbeat subsystem, or null outside a live session. */
+	UHapbeatSubsystem* ResolveSubsystem() const;
+
+	/**
+	 * The address-override section of the console panel: two numeric fields and
+	 * the two buttons that commit them. Built separately from the sliders only to
+	 * keep CreateSliderPanel readable -- it is one panel.
+	 */
+	TSharedRef<SWidget> MakeAddressOverrideSection();
+
+	/** Push the staged Player / Group onto the subsystem, persisting them. */
+	void ApplyAddressOverride();
+
+	/** Turn both axes off, forget the saved choice, and re-read the staged values from it. */
+	void ClearAddressOverride();
+
+	/** Staged Player / Group, as shown in the fields. Read from the subsystem at BeginPlay. */
+	int32 EditingOverridePlayer = -1;
+	int32 EditingOverrideGroup = -1;
 
 	/**
 	 * Hand keyboard focus back to the game viewport after a slider drag, so the

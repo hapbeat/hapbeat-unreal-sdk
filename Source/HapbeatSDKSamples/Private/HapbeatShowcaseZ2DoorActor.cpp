@@ -22,21 +22,31 @@ DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ2, Log, All);
 
 namespace
 {
-	// Unity Showcase.unity, Z2_Door subtree, converted: UE (X, Y, Z) cm =
-	// (Unity z, Unity x, Unity y) x 100.
+	// The door's geometry is Door.fbx's own -- see the class comment. In the
+	// FBX's frame ("native" below) the pieces share one origin, X is the leaf's
+	// width, Y its thickness and Z its height, with the floor already at Z ~ 1.
 
-	/** Unity Door: local (0, 1, 0) with scale (1.5, 2, 0.1) -- a 1.5 x 2 x 0.1 m slab. */
-	constexpr float LeafWidthCm = 150.0f;    // along UE Y
-	constexpr float LeafHeightCm = 200.0f;   // along UE Z
-	constexpr float LeafThicknessCm = 10.0f; // along UE X
-	constexpr float LeafCentreZCm = 100.0f;  // Unity y = 1 m
+	/**
+	 * Yaw applied to the whole assembly, so the FBX's width axis (X) becomes this
+	 * zone's width axis (Y) and its thickness axis becomes X -- which puts the
+	 * door's face towards the player, who stands on -X.
+	 */
+	constexpr float AssemblyYawDegrees = 90.0f;
 
-	/** The hinge sits at the leaf's -Y edge, so the leaf centre is half a width away from it. */
-	const FVector HingeLocalCm(0.0f, -LeafWidthCm * 0.5f, 0.0f);
-	const FVector LeafCentreFromHingeCm(0.0f, LeafWidthCm * 0.5f, LeafCentreZCm);
+	/**
+	 * The hinge, in the FBX's frame: the leaf's +X edge
+	 * (bounds origin -0.4 + extent 66.5 ~ +66.2). THE HINGE IS THE SIDE OPPOSITE
+	 * THE HANDLE -- SM_DoorHandle is modelled at native x ~ -39.3, i.e. on the -X
+	 * half of the leaf, so hanging the leaf off its -X edge (what the previous
+	 * version did) would have put the handle on top of the hinge. The leaf is then
+	 * placed back at -66.2 within the hinge, which returns it to the shared origin
+	 * the frame is at.
+	 */
+	constexpr float HingeNativeXCm = 66.2f;
 
-	/** Unity DoorFrame: local (0.427, 0, 0). Native size, so no fit -- only FrameScale. */
-	const FVector FrameLocalCm(0.0f, 42.7f, 0.0f);
+	/** Fallback slab, used only when SM_Door is missing: the FBX leaf's own size. */
+	const FVector FallbackLeafSizeCm(133.0f, 11.5f, 298.0f); // native X width / Y thickness / Z height
+	constexpr float FallbackLeafCentreZCm = 150.0f;          // native leaf bounds origin, floor at Z ~ 1
 
 	/** Unity Z2_Door/PlayerSpawn: local (0.2, 0.2, -4). Z is the player's feet, hence 0. */
 	const FVector PlayerSpawnCm(-400.0f, 20.0f, 0.0f);
@@ -54,11 +64,12 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 	// put. DoorHinge below is the pivot.
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
-	// Fixed frame, at Unity's DoorFrame offset.
+	// Fixed frame, at the FBX's own origin, carrying the assembly yaw.
 	DoorFrameMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorFrameMesh"));
 	DoorFrameMesh->SetupAttachment(RootComponent);
 	DoorFrameMesh->SetMobility(EComponentMobility::Movable);
-	DoorFrameMesh->SetRelativeLocation(FrameLocalCm);
+	DoorFrameMesh->SetRelativeLocation(FVector::ZeroVector);
+	DoorFrameMesh->SetRelativeRotation(FRotator(0.0f, AssemblyYawDegrees, 0.0f));
 	DoorFrameMesh->SetCollisionProfileName(TEXT("BlockAll"));
 	// No primitive stand-in: a frame drawn as a cube would be a wall across the
 	// doorway. It simply does not appear until SM_DoorFrame is imported.
@@ -69,7 +80,11 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 	DoorHinge = CreateDefaultSubobject<USceneComponent>(TEXT("DoorHinge"));
 	DoorHinge->SetupAttachment(RootComponent);
 	DoorHinge->SetMobility(EComponentMobility::Movable);
-	DoorHinge->SetRelativeLocation(HingeLocalCm);
+	// The native hinge point, carried through the assembly yaw, and that same yaw
+	// as the hinge's own resting rotation (SetDoorYaw adds the swing on top).
+	DoorHinge->SetRelativeLocation(
+		FRotator(0.0f, AssemblyYawDegrees, 0.0f).RotateVector(FVector(HingeNativeXCm, 0.0f, 0.0f)));
+	DoorHinge->SetRelativeRotation(FRotator(0.0f, AssemblyYawDegrees, 0.0f));
 
 	DoorLeafMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("DoorLeafMesh"));
 	DoorLeafMesh->SetupAttachment(DoorHinge);
@@ -78,9 +93,12 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 	{
 		DoorLeafMesh->SetStaticMesh(CubeMesh);
 	}
-	DoorLeafMesh->SetRelativeLocation(LeafCentreFromHingeCm);
-	DoorLeafMesh->SetRelativeScale3D(
-		FVector(LeafThicknessCm, LeafWidthCm, LeafHeightCm) / 100.0f); // engine Cube is 100 cm authored
+	// Stand-in only: a cube the size of the FBX leaf, in the FBX's own axes, sat
+	// where that leaf's bounds centre is. ApplyShowcaseAssets replaces both the
+	// mesh and this offset when SM_Door is present.
+	DoorLeafMesh->SetRelativeLocation(
+		FVector(-HingeNativeXCm, 0.0f, FallbackLeafCentreZCm));
+	DoorLeafMesh->SetRelativeScale3D(FallbackLeafSizeCm / 100.0f); // engine Cube is 100 cm authored
 	DoorLeafMesh->SetCollisionProfileName(TEXT("BlockAll"));
 
 	// Carried by the leaf, so it swings with it. Its own placement comes from
@@ -122,42 +140,6 @@ void AHapbeatShowcaseZ2DoorActor::BeginPlay()
 	ResetDoorState();
 }
 
-float AHapbeatShowcaseZ2DoorActor::FitDoorPiece(UStaticMeshComponent* Component, UStaticMesh* Mesh,
-	const FVector& TargetSizeCm)
-{
-	if (Component == nullptr || Mesh == nullptr)
-	{
-		return 0.0f;
-	}
-
-	const FBoxSphereBounds Bounds = Mesh->GetBounds();
-	const FVector Size = Bounds.BoxExtent * 2.0f;
-
-	// Which way round the source model runs its width is a property of the FBX,
-	// not something this zone can assume: measure it. A door leaf is wide in one
-	// horizontal axis and thin in the other, so whichever of X/Y is larger IS the
-	// width -- and if that is X, the piece needs a quarter turn to face the way
-	// this zone's doorway does (width along Y).
-	const bool bWidthRunsAlongX = Size.X > Size.Y;
-	const float YawDegrees = bWidthRunsAlongX ? 90.0f : 0.0f;
-
-	// Fit in the MESH's own axes, so the target box has to be stated the same
-	// way round as the mesh is before the yaw above turns it.
-	const FVector MeshTarget = bWidthRunsAlongX
-		? FVector(TargetSizeCm.Y, TargetSizeCm.X, TargetSizeCm.Z)
-		: TargetSizeCm;
-	const FVector Scale(
-		MeshTarget.X / FMath::Max(Size.X, KINDA_SMALL_NUMBER),
-		MeshTarget.Y / FMath::Max(Size.Y, KINDA_SMALL_NUMBER),
-		MeshTarget.Z / FMath::Max(Size.Z, KINDA_SMALL_NUMBER));
-
-	Component->SetStaticMesh(Mesh);
-	Component->SetRelativeScale3D(Scale);
-	Component->SetRelativeRotation(FRotator(0.0f, YawDegrees, 0.0f));
-	Component->SetVisibility(true);
-	return YawDegrees;
-}
-
 void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 {
 	UMaterialInterface* DoorMaterial =
@@ -166,20 +148,24 @@ void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 	// Three separate meshes out of Door.fbx (imported with Combine Meshes OFF).
 	// The leaf has to be its own asset for any of this to work: a leaf welded to
 	// its frame cannot swing.
+	//
+	// NONE of them is scaled or re-oriented here. They were modelled against one
+	// shared origin, so each is placed at scale 1 with the offset that returns it
+	// to that origin, and the assembly's yaw lives on the frame and the hinge
+	// (see the class comment). Fitting them to invented box sizes -- what Phase 2
+	// did -- is exactly what broke the fit between leaf and frame.
 	if (UStaticMesh* LeafMesh =
 		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Door")))
 	{
-		const float LeafYaw = FitDoorPiece(DoorLeafMesh, LeafMesh,
-			FVector(LeafThicknessCm, LeafWidthCm, LeafHeightCm));
 		if (DoorLeafMesh != nullptr)
 		{
-			// Sit the fitted leaf's centre exactly on the component's origin (which
-			// the constructor already placed half a width from the hinge), so an
-			// off-centre pivot in the source model does not push the leaf out of
-			// its frame.
-			DoorLeafMesh->SetRelativeLocation(LeafCentreFromHingeCm
-				- FHapbeatSampleLibrary::ComputeFittedBoundsCentre(
-					LeafMesh, DoorLeafMesh->GetRelativeScale3D(), FRotator(0.0f, LeafYaw, 0.0f)));
+			DoorLeafMesh->SetStaticMesh(LeafMesh);
+			DoorLeafMesh->SetRelativeScale3D(FVector::OneVector);
+			DoorLeafMesh->SetRelativeRotation(FRotator::ZeroRotator);
+			// Back to the shared origin: the hinge sits at native X = +66.2, so the
+			// leaf sits at -66.2 within it.
+			DoorLeafMesh->SetRelativeLocation(FVector(-HingeNativeXCm, 0.0f, 0.0f));
+			DoorLeafMesh->SetVisibility(true);
 			if (DoorMaterial != nullptr)
 			{
 				DoorLeafMesh->SetMaterial(0, DoorMaterial);
@@ -192,23 +178,11 @@ void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 	{
 		if (DoorFrameMesh != nullptr)
 		{
-			// The frame is used at its authored size (only FrameScale adjusts it),
-			// so it is placed rather than fitted: same yaw rule as the leaf, and its
-			// bottom sat on the floor.
-			const FVector Size = FrameMesh->GetBounds().BoxExtent * 2.0f;
-			const float YawDegrees = Size.X > Size.Y ? 90.0f : 0.0f;
-			const FRotator Rotation(0.0f, YawDegrees, 0.0f);
-			const FVector Scale(FrameScale);
-
+			// Authored size, authored position: the constructor already gave this
+			// component the assembly yaw and a zero offset, which is the shared
+			// origin. Its own geometry puts the sill on the floor.
 			DoorFrameMesh->SetStaticMesh(FrameMesh);
-			DoorFrameMesh->SetRelativeScale3D(Scale);
-			DoorFrameMesh->SetRelativeRotation(Rotation);
-			const FVector Centre = FHapbeatSampleLibrary::ComputeFittedBoundsCentre(FrameMesh, Scale, Rotation);
-			const float HalfHeight = FrameMesh->GetBounds().BoxExtent.Z * Scale.Z;
-			DoorFrameMesh->SetRelativeLocation(FVector(
-				FrameLocalCm.X - Centre.X,
-				FrameLocalCm.Y - Centre.Y,
-				FrameLocalCm.Z - Centre.Z + HalfHeight)); // bottom on the floor
+			DoorFrameMesh->SetRelativeScale3D(FVector::OneVector);
 			DoorFrameMesh->SetVisibility(true);
 			if (DoorMaterial != nullptr)
 			{
@@ -222,19 +196,16 @@ void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 	{
 		if (DoorHandleMesh != nullptr)
 		{
-			// Left at its authored transform relative to the leaf -- the handle's
-			// position on the door is the model's own business, and it rides the
-			// leaf's swing through the attachment -- but with the leaf's
-			// non-uniform fit scale divided back out, so a leaf squashed to 10 cm
-			// thick does not take the handle with it.
-			const FVector LeafScale = DoorLeafMesh != nullptr
-				? DoorLeafMesh->GetRelativeScale3D()
-				: FVector::OneVector;
-			DoorHandleMesh->SetRelativeScale3D(FVector(
-				1.0f / FMath::Max(FMath::Abs(LeafScale.X), KINDA_SMALL_NUMBER),
-				1.0f / FMath::Max(FMath::Abs(LeafScale.Y), KINDA_SMALL_NUMBER),
-				1.0f / FMath::Max(FMath::Abs(LeafScale.Z), KINDA_SMALL_NUMBER)));
+			// A child of the leaf, so it rides the swing -- and offset back to the
+			// shared origin the same way the leaf was, since the leaf component is
+			// itself 66.2 cm off it (hence the opposite sign of the leaf's own
+			// offset). Its own geometry -- the handle is modelled at native
+			// x ~ -39.3, the far side of the leaf from the hinge -- then puts it
+			// on the door.
 			DoorHandleMesh->SetStaticMesh(HandleMesh);
+			DoorHandleMesh->SetRelativeScale3D(FVector::OneVector);
+			DoorHandleMesh->SetRelativeRotation(FRotator::ZeroRotator);
+			DoorHandleMesh->SetRelativeLocation(FVector(HingeNativeXCm, 0.0f, 0.0f));
 			DoorHandleMesh->SetVisibility(true);
 			if (DoorMaterial != nullptr)
 			{
@@ -511,7 +482,12 @@ void AHapbeatShowcaseZ2DoorActor::SetDoorYaw(float Degrees)
 	// the whole zone) with the leaf.
 	if (DoorHinge != nullptr)
 	{
-		DoorHinge->SetRelativeRotation(FRotator(0.0f, Degrees, 0.0f));
+		// The assembly's base yaw MINUS the swing, so that a positive Degrees still
+		// means "open towards the player". The leaf hangs at native -66.2 inside a
+		// hinge yawed 90 degrees, i.e. at assembly -Y; turning that arm by -Degrees
+		// sweeps its tip towards -X, the side the player stands on. (With the hinge
+		// on the old -X edge the arm pointed the other way and the sign was +.)
+		DoorHinge->SetRelativeRotation(FRotator(0.0f, AssemblyYawDegrees - Degrees, 0.0f));
 	}
 }
 

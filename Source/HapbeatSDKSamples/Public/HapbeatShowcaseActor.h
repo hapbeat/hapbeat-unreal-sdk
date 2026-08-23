@@ -118,6 +118,23 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
 	void SetActiveZone(int32 OneBasedIndex) { ShowZone(OneBasedIndex); }
 
+	/**
+	 * CAPTURE AID: stand the player somewhere specific and point the view.
+	 *
+	 * SetActiveZone always drops the player on the zone's own spawn pose, which
+	 * is where a visitor starts but not always where the thing being checked can
+	 * be seen (the pin rack is 6 m down the lane). This teleports without
+	 * changing zone, so Scripts/capture_showcase_views.py can photograph a zone
+	 * from more than one place.
+	 *
+	 * @param WorldLocation The player's FEET, in world space -- the capsule's half
+	 *                      height is added here, exactly as the zone spawn path does.
+	 * @param Yaw           View and body yaw, degrees.
+	 * @param Pitch         View pitch, degrees; negative looks down.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void DebugPlacePlayer(FVector WorldLocation, float Yaw, float Pitch);
+
 	/** How many zones are reachable: the placed ones, or the configured fallback list. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat|Showcase")
 	int32 GetZoneCount() const;

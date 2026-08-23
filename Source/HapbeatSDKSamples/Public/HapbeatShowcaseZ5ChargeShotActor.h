@@ -92,11 +92,18 @@ public:
 	 * this exists at all. The spawned actor does not move, has collision off (it
 	 * therefore fires no target haptics) and removes itself after 10 seconds.
 	 *
-	 * Placed 120 cm along the muzzle's forward axis, with the heavy one another
-	 * 60 cm to the right so both can be posed side by side in one shot.
+	 * Placed 150 cm in front of the player at a fixed 120 cm above the zone
+	 * floor -- from the PLAYER's view yaw, not the muzzle's, so the pose does not
+	 * move when the blaster does -- with the heavy one another 60 cm to the right
+	 * so both can be posed side by side in one shot.
+	 *
+	 * @param YawOffsetDeg  Added to the view yaw. 0 photographs the projectile
+	 *                      nose-on (which says nothing about its roll); 90 turns
+	 *                      it broadside, which is the shot that shows whether the
+	 *                      nose points the way it flies.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
-	void SpawnProjectilePreview(bool bHeavy);
+	void SpawnProjectilePreview(bool bHeavy, float YawOffsetDeg = 0.0f);
 
 	/** Charge fraction (0..1) at/above which a shot / hit counts as "heavy". Mirrors Unity's _heavyThreshold (default 0.7). */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.0", ClampMax = "1.0"))
@@ -350,6 +357,19 @@ public:
 	TObjectPtr<UHapbeatCollisionTriggerComponent> HeavyHitTrigger;
 
 	/**
+	 * Turn the aimed board a further 180 degrees about its up axis, so the
+	 * PRINTED face looks at the player rather than its back.
+	 *
+	 * ComputeShortestAxisToDirectionRotation only brings the board's depth axis
+	 * onto the given direction; which of the two faces that leaves forward
+	 * depends on which end of that axis the model calls positive, and
+	 * target-large.fbx puts its back there. True for that model; kept editable so
+	 * a replacement can be corrected without a code change.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	bool bFlipTargetFacing = true;
+
+	/**
 	 * Give the board its finished size, its look and its sounds. Every asset
 	 * argument is optional (null keeps the primitive / stays silent), which is
 	 * what makes the zone survive a checkout without the generated art.
@@ -436,12 +456,17 @@ public:
 	 * @param InScale    Charge-driven scale multiplier (visual only; no gameplay effect).
 	 * @param InMesh     SM_BulletFoam / SM_Missile, or null to keep the sphere.
 	 * @param InBaseLengthCm  Finished length of the mesh's longest axis at scale 1.
+	 * @param InMeshExtraRotation  Stored into ProjectileMeshExtraRotation and
+	 *                      applied on top of the alignment -- the per-mesh nose
+	 *                      correction, which the spawner knows and this actor
+	 *                      cannot (one class, two models).
 	 *
 	 * The mesh is also turned so its longest axis points along InVelocity, so a
 	 * missile flies nose-first instead of sideways.
 	 */
 	void Configure(const FVector& InVelocity, bool bInHeavy, float InScale,
-		UStaticMesh* InMesh = nullptr, float InBaseLengthCm = 0.0f);
+		UStaticMesh* InMesh = nullptr, float InBaseLengthCm = 0.0f,
+		const FRotator& InMeshExtraRotation = FRotator::ZeroRotator);
 
 	/**
 	 * Turn the aligned mesh 180 degrees about its up axis, for a projectile
@@ -452,6 +477,30 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat")
 	bool bFlipForward = false;
+
+	/**
+	 * Extra rotation on the aligned mesh, in the actor's space.
+	 *
+	 * Longest-axis alignment leaves the model free to ROLL and YAW about that
+	 * axis however the source file happened to lie, which is how SM_BulletFoam
+	 * ended up flying 90 degrees off. Distinct from bFlipForward, which is only
+	 * the two-way "which end leads" question. Configure() overwrites this with
+	 * the value the spawner passes (the per-model correction lives there, since
+	 * one class serves both models); the property matters for a projectile placed
+	 * or subclassed by hand.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	FRotator ProjectileMeshExtraRotation = FRotator::ZeroRotator;
+
+	/**
+	 * Gravity applied to the flight, cm/s^2 along -Z, as a multiple of the
+	 * world's own gravity. Unity's projectiles are plain Rigidbodies with gravity
+	 * on (bullet 0.2 kg, missile 1 kg), so a UE shot that flew dead straight was
+	 * the odd one out. Mass does not enter into it -- gravity is an acceleration.
+	 * 0 restores the straight-line flight.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat", meta = (ClampMin = "0.0"))
+	float GravityScale = 1.0f;
 
 protected:
 	virtual void BeginPlay() override;

@@ -117,6 +117,12 @@ MATERIAL_INSTANCES = [
     ('MI_TargetLight',     'T_Colormap',                  (1.0, 0.9365, 0.0, 1.0),       1.0),
     ('MI_TargetHeavy',     'T_Colormap',                  (1.0, 0.0, 0.0995, 1.0),       1.0),
     ('MI_BowlingBall',     None,                          (0.1, 0.1, 0.15, 1.0),         0.3),
+    # No map: bowling_pin.obj ships with the shared colormap, which read grey on
+    # a pin that should be white. Flat white with a little sheen instead.
+    ('MI_BowlingPin',      None,                          (1.0, 1.0, 1.0, 1.0),          0.6),
+    # bowling_pin.obj carries two mtl slots: mat21 (white body) and mat8 (red
+    # stripe). The stripe gets its own instance so the pin is not flat white.
+    ('MI_BowlingPinStripe', None,                         (0.91, 0.05, 0.03, 1.0),       0.6),
 ]
 
 

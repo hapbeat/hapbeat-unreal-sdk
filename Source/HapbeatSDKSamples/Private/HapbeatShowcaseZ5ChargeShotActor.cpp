@@ -62,8 +62,17 @@ namespace
 	const FLinearColor ChargeBarLowColor(0.3f, 0.6f, 1.0f, 1.0f);
 	const FLinearColor ChargeBarHighColor(1.0f, 0.3f, 0.2f, 1.0f);
 
+	/**
+	 * Per-model correction for the roll / yaw the longest-axis alignment cannot
+	 * decide (see AHapbeatShowcaseZ5ProjectileActor::ProjectileMeshExtraRotation).
+	 * SM_BulletFoam reads a quarter turn off; SM_Missile is already true.
+	 */
+	const FRotator LightProjectileMeshExtraRotation(0.0f, -90.0f, 0.0f);
+	const FRotator HeavyProjectileMeshExtraRotation(0.0f, 0.0f, 0.0f);
+
 	/** SpawnProjectilePreview() placement / lifetime (capture aid only). */
-	constexpr float PreviewForwardCm = 120.0f;
+	constexpr float PreviewForwardCm = 150.0f;
+	constexpr float PreviewHeightCm = 120.0f;
 	constexpr float PreviewHeavyRightCm = 60.0f;
 	constexpr float PreviewLifeSeconds = 10.0f;
 
@@ -713,11 +722,12 @@ void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectile(float ChargeT, bool bHea
 		// heavy one is a missile and is correspondingly larger.
 		UStaticMesh* Mesh = bHeavy ? ToRawPtr(ProjectileMeshHeavy) : ToRawPtr(ProjectileMeshLight);
 		const float BaseLength = bHeavy ? MissileLengthCm : BulletLengthCm;
-		Projectile->Configure(Direction * Speed, bHeavy, Scale, Mesh, BaseLength);
+		Projectile->Configure(Direction * Speed, bHeavy, Scale, Mesh, BaseLength,
+			bHeavy ? HeavyProjectileMeshExtraRotation : LightProjectileMeshExtraRotation);
 	}
 }
 
-void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectilePreview(bool bHeavy)
+void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectilePreview(bool bHeavy, float YawOffsetDeg)
 {
 	UWorld* World = GetWorld();
 	if (World == nullptr)
@@ -725,9 +735,19 @@ void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectilePreview(bool bHeavy)
 		return;
 	}
 
-	const FTransform Muzzle = GetMuzzleTransform();
-	const FQuat Rotation = Muzzle.GetRotation();
-	FVector Location = Muzzle.GetLocation() + Rotation.GetForwardVector() * PreviewForwardCm;
+	// From the PLAYER's view, not the muzzle's: the preview is a photograph of
+	// the model, and hanging it off the blaster made where it landed depend on
+	// where the blaster happened to be mounted. Yaw only -- a pitched view must
+	// not tilt the pose being examined.
+	const AHapbeatShowcaseCharacter* Character = MountedCharacter.Get();
+	const FTransform View = Character != nullptr ? Character->GetViewTransform() : GetMuzzleTransform();
+	const FQuat Rotation = FRotator(0.0f, View.GetRotation().Rotator().Yaw + YawOffsetDeg, 0.0f).Quaternion();
+
+	// Placed along the view's own yaw, then lifted to a fixed height above the
+	// zone floor so the shot frames the same way whatever the player is doing.
+	const FVector ViewForward = FRotator(0.0f, View.GetRotation().Rotator().Yaw, 0.0f).Vector();
+	FVector Location = View.GetLocation() + ViewForward * PreviewForwardCm;
+	Location.Z = GetActorLocation().Z + PreviewHeightCm;
 	if (bHeavy)
 	{
 		// Offset sideways so a light and a heavy preview posed together do not
@@ -750,7 +770,10 @@ void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectilePreview(bool bHeavy)
 	// happens, the flight does not.
 	UStaticMesh* Mesh = bHeavy ? ToRawPtr(ProjectileMeshHeavy) : ToRawPtr(ProjectileMeshLight);
 	const float BaseLength = bHeavy ? MissileLengthCm : BulletLengthCm;
-	Projectile->Configure(FVector::ZeroVector, bHeavy, /*InScale=*/1.0f, Mesh, BaseLength);
+	Projectile->Configure(FVector::ZeroVector, bHeavy, /*InScale=*/1.0f, Mesh, BaseLength,
+		bHeavy ? HeavyProjectileMeshExtraRotation : LightProjectileMeshExtraRotation);
+	// Tick off, so neither the flight nor the gravity in it runs: the preview is
+	// scenery that has to stay where it was put.
 	Projectile->SetActorTickEnabled(false);
 	// Collision off so a preview parked in front of the board cannot fire the
 	// target's hit entries; it is scenery for one screenshot.
@@ -971,8 +994,13 @@ void AHapbeatShowcaseZ5TargetActor::ApplyShowcaseAssets(const FVector& SizeCm, c
 		// is what puts the printed face towards them whichever way the source
 		// model lies.
 		TargetMesh->SetRelativeScale3D(FHapbeatSampleLibrary::ComputeAxisFitScale(Mesh, SizeCm));
-		TargetMesh->SetRelativeRotation(
-			FHapbeatSampleLibrary::ComputeShortestAxisToDirectionRotation(Mesh, FaceDirection));
+		// ... and then, if asked, turned end for end about up, because aiming the
+		// depth axis at the player says nothing about WHICH of the two faces ends
+		// up forward (see bFlipTargetFacing).
+		const FQuat Aimed =
+			FHapbeatSampleLibrary::ComputeShortestAxisToDirectionRotation(Mesh, FaceDirection).Quaternion();
+		const FQuat Facing = bFlipTargetFacing ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) * Aimed : Aimed;
+		TargetMesh->SetRelativeRotation(Facing);
 	}
 
 	if (BaseMaterial != nullptr)
@@ -1073,9 +1101,10 @@ void AHapbeatShowcaseZ5ProjectileActor::BeginPlay()
 }
 
 void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, bool bInHeavy, float InScale,
-	UStaticMesh* InMesh, float InBaseLengthCm)
+	UStaticMesh* InMesh, float InBaseLengthCm, const FRotator& InMeshExtraRotation)
 {
 	Velocity = InVelocity;
+	ProjectileMeshExtraRotation = InMeshExtraRotation;
 	Tags.Add(bInHeavy ? FName(TEXT("ProjectileHeavy")) : FName(TEXT("ProjectileLight")));
 	if (ProjectileMesh == nullptr)
 	{
@@ -1098,7 +1127,11 @@ void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, boo
 		const FQuat AlignRotation =
 			FHapbeatSampleLibrary::ComputeLongestAxisToForwardRotation(InMesh).Quaternion();
 		const FQuat FlipRotation = bFlipForward ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) : FQuat::Identity;
-		ProjectileMesh->SetRelativeRotation(FlipRotation * AlignRotation);
+		// The per-model correction goes on last, in the actor's space: alignment
+		// picks the axis, the flip picks the end, and this fixes the roll / yaw
+		// about that axis that neither of them can know (see the property).
+		ProjectileMesh->SetRelativeRotation(
+			ProjectileMeshExtraRotation.Quaternion() * FlipRotation * AlignRotation);
 	}
 	else
 	{
@@ -1109,7 +1142,20 @@ void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, boo
 void AHapbeatShowcaseZ5ProjectileActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// Gravity first, then the move: Unity's projectiles are ordinary Rigidbodies
+	// with gravity on, so the shot arcs. Read from the world rather than
+	// hardcoded, so a project that changes its gravity gets what it asked for.
+	const UWorld* World = GetWorld();
+	if (World != nullptr && GravityScale > 0.0f)
+	{
+		Velocity.Z += World->GetGravityZ() * GravityScale * DeltaSeconds;
+	}
+
 	// Swept move so BeginOverlap fires against the (non-simulating) target
 	// boards along the path, not just at the final resting position.
 	AddActorWorldOffset(Velocity * DeltaSeconds, /*bSweep=*/true);
+	// Deliberately NOT re-aimed along the new velocity: Unity does not rotate its
+	// projectiles in flight either, and a re-aim would fight the per-model
+	// correction applied in Configure().
 }

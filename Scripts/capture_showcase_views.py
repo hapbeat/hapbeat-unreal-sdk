@@ -10,11 +10,14 @@ A FULL EDITOR, not -run=pythonscript: this drives Play-In-Editor, which needs th
 editor's viewport and tick loop (the same reason generate_showcase_map.py is run
 this way).
 
-Output: Saved/Screenshots/WindowsEditor/showcase_z<k>.png, one per zone, plus a
-second "<k>b" shot for the zones whose interesting state only exists after
-something has been done to them: showcase_z2b (door open), showcase_z4b (the
-stream loop running) and showcase_z5b (a light and a heavy projectile parked in
-front of the muzzle).
+Output: Saved/Screenshots/WindowsEditor/showcase_z<k>.png, one per zone, plus
+one or more suffixed shots for the zones whose interesting state only exists
+after something has been done to them -- or cannot be seen from the zone's own
+spawn point: showcase_z1b (the pin rack, from 1.5 m away), showcase_z2b (door
+open), showcase_z3b (the shark and the rod, looking down), showcase_z4b (the
+stream loop running), showcase_z5b (a light and a heavy projectile nose-on) and
+showcase_z5c (the same two broadside, which is the shot that shows whether the
+nose points the way they fly).
 
 THE SHOTS INCLUDE THE UI. `HighResShot` re-renders the SCENE at an arbitrary
 resolution and never composites Slate, so the HUD, Z4's slider panel and Z5's
@@ -73,11 +76,13 @@ SHOT_DIRECTORY = unreal.Paths.convert_relative_path_to_full(
 # anything that was reset.
 SETTLE_SECONDS = 1.0
 
-# The zones that need a second shot, keyed by zone index:
-#   'action'  -- called once, with the PIE world, right after the first shot.
-#   'settle'  -- seconds to wait before the second shot. The door's is long
-#                enough for its 2.0 s opening tween to finish; the projectiles
-#                only have to exist.
+# The extra shots, keyed by zone index -- a LIST per zone, taken in order, since
+# Z5 wants the projectiles photographed from two angles:
+#   'suffix'  -- appended to the zone's name, so 'b' writes showcase_z<k>b.png.
+#   'action'  -- called once, with the PIE world, right before the settle.
+#   'settle'  -- seconds to wait before shooting. The door's is long enough for
+#                its 2.0 s opening tween to finish; the projectiles only have to
+#                exist.
 # Anything not listed here is captured once, as before.
 FOLLOW_UP_SETTLE_DEFAULT = 1.0
 
@@ -97,20 +102,77 @@ def act_toggle_stream(world):
 
 
 def act_spawn_projectiles(world):
-    """Z5: park a light and a heavy projectile in front of the muzzle."""
+    """Z5: park a light and a heavy projectile in front of the player, nose-on."""
     for zone in unreal.GameplayStatics.get_all_actors_of_class(
             world, unreal.HapbeatShowcaseZ5ChargeShotActor):
-        zone.spawn_projectile_preview(False)
-        zone.spawn_projectile_preview(True)
+        zone.spawn_projectile_preview(False, 0.0)
+        zone.spawn_projectile_preview(True, 0.0)
+
+
+def act_spawn_projectiles_side_on(world):
+    """
+    Z5: the same two, turned 90 degrees.
+
+    Nose-on says nothing about which way a projectile points -- a missile aimed
+    at the camera and one aimed away look identical. Broadside, the nose is at
+    one end of the silhouette and the answer is in the picture.
+    """
+    for zone in unreal.GameplayStatics.get_all_actors_of_class(
+            world, unreal.HapbeatShowcaseZ5ChargeShotActor):
+        zone.spawn_projectile_preview(False, 90.0)
+        zone.spawn_projectile_preview(True, 90.0)
+
+
+def act_stand_at_pin_rack(world):
+    """
+    Z1: stand 1.5 m short of the rack, looking down at it.
+
+    The zone spawn is at the bowler's end, 7 m back, where six 78 cm pins are a
+    few pixels tall -- too small to tell an upright rack from an upside-down one,
+    which is the thing this shot exists to check.
+    """
+    place_player_in_zone(world, unreal.HapbeatShowcaseZ1BowlingActor,
+                         unreal.Vector(450.0, 0.0, 0.0), yaw=0.0, pitch=-15.0)
+
+
+def act_look_down_at_shark(world):
+    """Z3: tip the view down onto the shark and the held rod."""
+    character = find_character(world)
+    if character is not None:
+        character.set_view_pitch_for_capture(-20.0)
+
+
+def place_player_in_zone(world, zone_class, zone_relative_offset, yaw, pitch):
+    """
+    Put the player at an offset from a zone's own origin.
+
+    Zone-relative, not world: the zones sit 30 m apart in the map (zone k at
+    Y = (k-1) * 3000), so a world coordinate would only be right for one of them
+    and would silently drift if the layout ever changed.
+    """
+    zones = unreal.GameplayStatics.get_all_actors_of_class(world, zone_class)
+    switcher = find_switcher(world)
+    if not zones or switcher is None:
+        log('could not place the player: zone or switcher missing.')
+        return
+    origin = zones[0].get_actor_location()
+    switcher.debug_place_player(
+        unreal.Vector(origin.x + zone_relative_offset.x,
+                      origin.y + zone_relative_offset.y,
+                      origin.z + zone_relative_offset.z),
+        yaw, pitch)
 
 
 FOLLOW_UPS = {
-    2: {'action': act_open_door, 'settle': 2.5},
+    1: [{'suffix': 'b', 'action': act_stand_at_pin_rack, 'settle': 1.0}],
+    2: [{'suffix': 'b', 'action': act_open_door, 'settle': 2.5}],
+    3: [{'suffix': 'b', 'action': act_look_down_at_shark, 'settle': 1.0}],
     # Z4's loop is running as soon as the toggle returns; the wait is only there
     # so the panel has repainted. Check the log for "Stream begin ... loop=1" to
     # tell a running loop from a panel that merely looks the same.
-    4: {'action': act_toggle_stream, 'settle': 1.0},
-    5: {'action': act_spawn_projectiles, 'settle': 1.0},
+    4: [{'suffix': 'b', 'action': act_toggle_stream, 'settle': 1.0}],
+    5: [{'suffix': 'b', 'action': act_spawn_projectiles, 'settle': 1.0},
+        {'suffix': 'c', 'action': act_spawn_projectiles_side_on, 'settle': 1.0}],
 }
 
 # Give up waiting for PIE rather than spin forever in an unattended run.
@@ -152,6 +214,7 @@ class ShowcaseCapture:
         self.handle = None
         self.elapsed = 0.0
         self.zone_cursor = 0
+        self.follow_up_cursor = 0
         self.state = 'start_pie'
         self.editor_subsystem = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
 
@@ -225,33 +288,52 @@ class ShowcaseCapture:
         zone_index = ZONES[self.zone_cursor][0]
         self.shoot('showcase_z{}'.format(zone_index))
         log('zone {} captured.'.format(zone_index))
-        if zone_index in FOLLOW_UPS:
+        if FOLLOW_UPS.get(zone_index):
+            self.follow_up_cursor = 0
             self.enter('follow_up_action')
             return
         self.zone_cursor += 1
         self.enter('next_zone')
 
+    def current_follow_up(self):
+        """The follow-up being worked on, or None once the zone's list is done."""
+        follow_ups = FOLLOW_UPS.get(ZONES[self.zone_cursor][0], [])
+        if self.follow_up_cursor >= len(follow_ups):
+            return None
+        return follow_ups[self.follow_up_cursor]
+
     def step_follow_up_action(self):
         zone_index = ZONES[self.zone_cursor][0]
-        follow_up = FOLLOW_UPS[zone_index]
+        follow_up = self.current_follow_up()
+        if follow_up is None:
+            self.zone_cursor += 1
+            self.enter('next_zone')
+            return
         world = self.editor_subsystem.get_game_world()
         if world is None:
             self.finish('the PIE world went away mid-capture -- stopping.')
             return
         follow_up['action'](world)
-        log('zone {} follow-up action taken; settling for {:.1f}s.'.format(
-            zone_index, follow_up.get('settle', FOLLOW_UP_SETTLE_DEFAULT)))
+        log('zone {}{} action taken; settling for {:.1f}s.'.format(
+            zone_index, follow_up['suffix'],
+            follow_up.get('settle', FOLLOW_UP_SETTLE_DEFAULT)))
         self.enter('follow_up_settle')
 
     def step_follow_up_settle(self):
         zone_index = ZONES[self.zone_cursor][0]
-        follow_up = FOLLOW_UPS[zone_index]
+        follow_up = self.current_follow_up()
+        if follow_up is None:
+            self.zone_cursor += 1
+            self.enter('next_zone')
+            return
         if self.elapsed < follow_up.get('settle', FOLLOW_UP_SETTLE_DEFAULT):
             return
-        self.shoot('showcase_z{}b'.format(zone_index))
-        log('zone {} follow-up captured.'.format(zone_index))
-        self.zone_cursor += 1
-        self.enter('next_zone')
+        self.shoot('showcase_z{}{}'.format(zone_index, follow_up['suffix']))
+        log('zone {}{} captured.'.format(zone_index, follow_up['suffix']))
+        # Straight on to the next follow-up for this zone; step_follow_up_action
+        # is what notices the list has run out and moves to the next zone.
+        self.follow_up_cursor += 1
+        self.enter('follow_up_action')
 
     def shoot(self, filename):
         # The write happens asynchronously, over the next frame or two -- which

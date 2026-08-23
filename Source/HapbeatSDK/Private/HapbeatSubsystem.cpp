@@ -816,6 +816,21 @@ void UHapbeatSubsystem::ClearPersistedAddressOverride()
 	UE_LOG(LogHapbeat, Log, TEXT("Persisted address override cleared - reverted to disabled."));
 }
 
+bool UHapbeatSubsystem::TryGetPersistedAddressOverride(int32& OutPlayer, int32& OutGroup)
+{
+	// GetInt leaves its out param untouched when the key is absent, so both are
+	// seeded with the disabled sentinel first: "not saved" and "saved as
+	// something out of range" then read the same way to the caller, which is what
+	// Initialize() already assumes when it normalizes what it read.
+	OutPlayer = AddressOverrideDisabled;
+	OutGroup = AddressOverrideDisabled;
+	const bool bHasPlayer =
+		GConfig->GetInt(AddressOverrideConfigSection, AddressOverridePlayerKey, OutPlayer, GGameUserSettingsIni);
+	const bool bHasGroup =
+		GConfig->GetInt(AddressOverrideConfigSection, AddressOverrideGroupKey, OutGroup, GGameUserSettingsIni);
+	return bHasPlayer || bHasGroup;
+}
+
 bool UHapbeatSubsystem::TickKeepAlive(float /*DeltaSeconds*/)
 {
 	if (Socket == nullptr)

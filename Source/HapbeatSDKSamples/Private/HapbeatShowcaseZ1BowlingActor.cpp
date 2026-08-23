@@ -65,6 +65,10 @@ namespace
 	const FVector PlayerSpawnCm(-187.0f, 0.0f, 0.0f);
 }
 
+// The tag that marks "a thing a pin may react to". Defined here rather than
+// inline so the whole zone shares one FName.
+const FName AHapbeatShowcaseZ1BowlingActor::ContactTag(TEXT("HapbeatShowcaseZ1Contact"));
+
 // =============================================================================
 // AHapbeatShowcaseZ1BowlingActor
 // =============================================================================
@@ -91,24 +95,14 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 	LaneMesh->SetRelativeScale3D(LaneSizeCm / 100.0f); // engine Cube is 100 cm authored
 	LaneMesh->SetCollisionProfileName(TEXT("BlockAll"));
 
+	// The ball, like the pins, is a child actor -- see the class comment: it has
+	// to be an actor of its own to carry ContactTag without the lane inheriting it.
 	BallRestRelativeLocation = BallRestCm;
-	BallMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BallMesh"));
-	BallMesh->SetupAttachment(RootComponent);
-	BallMesh->SetMobility(EComponentMobility::Movable);
-	if (UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")))
-	{
-		BallMesh->SetStaticMesh(SphereMesh);
-	}
-	BallMesh->SetRelativeLocation(BallRestRelativeLocation);
-	BallMesh->SetRelativeScale3D(FVector(BallDiameterCm / 100.0f)); // engine Sphere is 100 cm across
-	BallMesh->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
-	// Unity's ball is a 4 kg Rigidbody; without an override UE would derive the
-	// mass from the sphere's volume and density, which is not the same number and
-	// changes how hard the rack scatters.
-	BallMesh->SetMassOverrideInKg(NAME_None, BallMassKg, /*bNewOverrideMass=*/true);
-	// SetSimulatePhysics() is deferred to BeginPlay (see AHapbeatShowcaseZ1PinActor's
-	// header note) -- calling it here, before BallMesh is registered, is order-
-	// dependent and can log a spurious "no physics body" warning.
+	BallSlot = CreateDefaultSubobject<UChildActorComponent>(TEXT("Ball"));
+	BallSlot->SetupAttachment(RootComponent);
+	BallSlot->SetMobility(EComponentMobility::Movable);
+	BallSlot->SetChildActorClass(AHapbeatShowcaseZ1BallActor::StaticClass());
+	BallSlot->SetRelativeLocation(BallRestRelativeLocation);
 
 	// One child actor per pin: an editable, saved relative transform in this
 	// actor's Details panel, and an actor of its own for the collision trigger
@@ -145,19 +139,32 @@ void AHapbeatShowcaseZ1BowlingActor::BeginPlay()
 	ApplyShowcaseAssets();
 	BuildEventMap();
 	SetUpPins();
+	SetUpBall();
 	BindInput();
+}
 
-	if (BallMesh != nullptr)
+void AHapbeatShowcaseZ1BowlingActor::SetUpBall()
+{
+	Ball = BallSlot != nullptr ? Cast<AHapbeatShowcaseZ1BallActor>(BallSlot->GetChildActor()) : nullptr;
+	if (Ball == nullptr)
 	{
-		BallMesh->SetSimulatePhysics(true);
+		UE_LOG(LogHapbeatShowcaseZ1, Warning,
+			TEXT("Z1: the Ball child actor is missing; there is nothing to launch."));
+		return;
 	}
+
+	// What every pin's HitTrigger filters on. AddUnique because a child actor is
+	// rebuilt with its component and this runs once per play session either way.
+	Ball->Tags.AddUnique(ContactTag);
+	Ball->ApplyShowcaseAssets();
+	Ball->SetPhysicsRunning(true);
 }
 
 void AHapbeatShowcaseZ1BowlingActor::ApplyShowcaseAssets()
 {
-	// The lane and the ball keep their engine primitive shapes (a box and a
-	// sphere are already the right forms) and only take the imported materials;
-	// the pins fit their own imported mesh in ApplyPinSize.
+	// The lane keeps its engine primitive shape (a box is already the right form)
+	// and only takes the imported material; the pins fit their own imported mesh
+	// in ApplyPinSize.
 	if (UMaterialInterface* LaneMaterial =
 		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingLane")))
 	{
@@ -166,14 +173,8 @@ void AHapbeatShowcaseZ1BowlingActor::ApplyShowcaseAssets()
 			LaneMesh->SetMaterial(0, LaneMaterial);
 		}
 	}
-	if (UMaterialInterface* BallMaterial =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingBall")))
-	{
-		if (BallMesh != nullptr)
-		{
-			BallMesh->SetMaterial(0, BallMaterial);
-		}
-	}
+	// The ball's own material is applied by the ball actor, which owns that mesh
+	// now (SetUpBall -> AHapbeatShowcaseZ1BallActor::ApplyShowcaseAssets).
 }
 
 void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
@@ -236,15 +237,20 @@ void AHapbeatShowcaseZ1BowlingActor::SetUpPins()
 				TEXT("Z1: pin slot '%s' has no child actor; that pin will not fire."), *Slot->GetName());
 			continue;
 		}
+		// Both sides of the filter: the pin CARRIES the tag (so a neighbouring pin
+		// knocking it counts as a hit) and its trigger only fires ON that tag (so
+		// the lane, the floor and the walls do not).
+		Pin->Tags.AddUnique(ContactTag);
 		if (Pin->HitTrigger != nullptr)
 		{
 			// The trigger reads these at fire time, so handing them over here is
 			// safe whichever order the child actor's own BeginPlay ran in.
 			Pin->HitTrigger->EventMap = EventMap;
 			Pin->HitTrigger->EntryId = PinHitEntryId;
+			Pin->HitTrigger->TagFilter = ContactTag;
 		}
 		Pin->HitSound = PinHitSound;
-		Pin->ApplyPinSize(PinHeightCm, PinDiameterCm);
+		Pin->ApplyPinSize(PinHeightCm, PinDiameterCm, bFlipPinUp);
 	}
 }
 
@@ -296,16 +302,13 @@ FVector AHapbeatShowcaseZ1BowlingActor::ResolveLaunchDirection() const
 
 void AHapbeatShowcaseZ1BowlingActor::HandleLaunchKey()
 {
-	if (BallMesh == nullptr)
+	if (Ball == nullptr)
 	{
 		return;
 	}
 
 	ResetBallToSpawn();
-	// AddImpulse with bVelChange=true adds directly to velocity (mass-independent),
-	// matching Unity BallLauncher.Launch()'s direct `_ball.linearVelocity = dir *
-	// _launchSpeed;` assignment onto a ball that was just zeroed by ResetBallToSpawn.
-	BallMesh->AddImpulse(ResolveLaunchDirection() * LaunchSpeed, NAME_None, /*bVelChange=*/true);
+	Ball->LaunchWithVelocity(ResolveLaunchDirection() * LaunchSpeed);
 }
 
 void AHapbeatShowcaseZ1BowlingActor::HandleResetKey()
@@ -333,25 +336,22 @@ void AHapbeatShowcaseZ1BowlingActor::ResetPinsToRack()
 
 void AHapbeatShowcaseZ1BowlingActor::ResetBallToSpawn()
 {
-	if (BallMesh == nullptr)
+	if (Ball == nullptr)
 	{
 		return;
 	}
 
-	const FVector SpawnWorldLocation = GetActorTransform().TransformPosition(BallRestRelativeLocation);
-	// ResetPhysics: teleport + fully reset the physics body's velocity/angular
-	// state (not just position), so a ball resting downrange -- or one that fell
-	// off the lane -- comes back clean rather than carrying stale momentum.
-	BallMesh->SetWorldLocation(SpawnWorldLocation, false, nullptr, ETeleportType::ResetPhysics);
-	BallMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
-	BallMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	// Relative -> world at reset time, so a zone moved in the editor still puts
+	// its ball on the mark in front of itself.
+	Ball->ResetToTransform(FTransform(FRotator::ZeroRotator,
+		GetActorTransform().TransformPosition(BallRestRelativeLocation)));
 }
 
 void AHapbeatShowcaseZ1BowlingActor::SetPhysicsRunning(bool bRunning)
 {
-	if (BallMesh != nullptr)
+	if (Ball != nullptr)
 	{
-		BallMesh->SetSimulatePhysics(bRunning);
+		Ball->SetPhysicsRunning(bRunning);
 	}
 	for (UChildActorComponent* Slot : PinSlots)
 	{
@@ -499,7 +499,7 @@ void AHapbeatShowcaseZ1PinActor::BeginPlay()
 	}
 }
 
-void AHapbeatShowcaseZ1PinActor::ApplyPinSize(float DesiredHeightCm, float DesiredDiameterCm)
+void AHapbeatShowcaseZ1PinActor::ApplyPinSize(float DesiredHeightCm, float DesiredDiameterCm, bool bFlipUp)
 {
 	if (PinMesh == nullptr)
 	{
@@ -513,10 +513,29 @@ void AHapbeatShowcaseZ1PinActor::ApplyPinSize(float DesiredHeightCm, float Desir
 		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_BowlingPin")))
 	{
 		PinMesh->SetStaticMesh(ImportedPin);
-		if (UMaterialInterface* PinMaterial =
-			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")))
+		// MI_BowlingPin, not the shared MI_DefaultMaterial: a bowling pin is white,
+		// and the default instance carries the imported colour map instead.
+		// EVERY slot is assigned, not just slot 0: bowling_pin.obj's mtl splits the
+		// model into mat21 (white body) and mat8 (red stripe), so painting slot 0
+		// alone left the body on UE's default grey checker. Slots whose name cannot
+		// be read fall back to white, which is what the body is anyway.
+		UMaterialInterface* PinMaterial =
+			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingPin"));
+		UMaterialInterface* StripeMaterial =
+			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingPinStripe"));
+		if (PinMaterial != nullptr)
 		{
-			PinMesh->SetMaterial(0, PinMaterial);
+			const TArray<FStaticMaterial>& Slots = ImportedPin->GetStaticMaterials();
+			for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
+			{
+				const FStaticMaterial& Slot = Slots[SlotIndex];
+				const bool bIsStripe =
+					Slot.MaterialSlotName == TEXT("mat8") ||
+					Slot.ImportedMaterialSlotName == TEXT("mat8");
+				UMaterialInterface* SlotMaterial =
+					(bIsStripe && StripeMaterial != nullptr) ? StripeMaterial : PinMaterial;
+				PinMesh->SetMaterial(SlotIndex, SlotMaterial);
+			}
 		}
 	}
 
@@ -531,10 +550,18 @@ void AHapbeatShowcaseZ1PinActor::ApplyPinSize(float DesiredHeightCm, float Desir
 	//    uniform fit made the rack visibly squat.
 	const FVector Scale = FHapbeatSampleLibrary::ComputeAxisFitScale(
 		Mesh, FVector(DesiredHeightCm, DesiredDiameterCm, DesiredDiameterCm));
-	// 2. Stand it up, whichever local axis the source model ran its length along.
-	const FRotator Rotation = FHapbeatSampleLibrary::ComputeLongestAxisToUpRotation(Mesh);
+	// 2. Stand it up, whichever local axis the source model ran its length along,
+	//    then turn it end over end if asked -- that alignment only picks the AXIS,
+	//    not which end of it is the top (see bFlipPinUp).
+	FRotator Rotation = FHapbeatSampleLibrary::ComputeLongestAxisToUpRotation(Mesh);
+	if (bFlipUp)
+	{
+		Rotation = FRotator(FQuat(FRotator(0.0f, 0.0f, 180.0f)) * Rotation.Quaternion());
+	}
 	// 3. Centre the fitted mesh on the capsule's centre, so an off-centre pivot
 	//    in the imported model does not leave the pin floating beside its body.
+	//    Uses the FINAL rotation, flip included: computed against the unflipped
+	//    one it would push the mesh off its body by twice the pivot offset.
 	const FVector Offset = -FHapbeatSampleLibrary::ComputeFittedBoundsCentre(Mesh, Scale, Rotation);
 
 	PinMesh->SetRelativeScale3D(Scale);
@@ -597,4 +624,91 @@ void AHapbeatShowcaseZ1PinActor::HandlePinHit(UPrimitiveComponent* HitComponent,
 	const float Volume = FMath::Lerp(HitSoundMinVolume, 1.0f, Alpha);
 	UGameplayStatics::PlaySoundAtLocation(this, HitSound, GetActorLocation(), Volume);
 	LastHitSoundTime = Now;
+}
+
+// =============================================================================
+// AHapbeatShowcaseZ1BallActor
+// =============================================================================
+
+AHapbeatShowcaseZ1BallActor::AHapbeatShowcaseZ1BallActor()
+{
+	PrimaryActorTick.bCanEverTick = false;
+
+	BallMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BallMesh"));
+	RootComponent = BallMesh;
+	BallMesh->SetMobility(EComponentMobility::Movable);
+	if (UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")))
+	{
+		BallMesh->SetStaticMesh(SphereMesh);
+	}
+	BallMesh->SetRelativeScale3D(FVector(BallDiameterCm / 100.0f)); // engine Sphere is 100 cm across
+	BallMesh->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
+	// Unity's ball is a 4 kg Rigidbody; without an override UE would derive the
+	// mass from the sphere's volume and density, which is not the same number and
+	// changes how hard the rack scatters.
+	BallMesh->SetMassOverrideInKg(NAME_None, BallMassKg, /*bNewOverrideMass=*/true);
+	// The pins listen for Hit events, which are only reported when the bodies
+	// involved are set to generate them. Flag-only here -- it needs no registered
+	// body, unlike SetSimulatePhysics below.
+	BallMesh->BodyInstance.bNotifyRigidBodyCollision = true;
+	// SetSimulatePhysics() is deferred to BeginPlay (see AHapbeatShowcaseZ1PinActor's
+	// header note): before the component is registered it is order-dependent and
+	// can log a spurious "no physics body" warning.
+}
+
+void AHapbeatShowcaseZ1BallActor::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (BallMesh != nullptr)
+	{
+		BallMesh->SetSimulatePhysics(true);
+		BallMesh->SetNotifyRigidBodyCollision(true);
+	}
+}
+
+void AHapbeatShowcaseZ1BallActor::ApplyShowcaseAssets()
+{
+	if (BallMesh == nullptr)
+	{
+		return;
+	}
+	if (UMaterialInterface* BallMaterial =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingBall")))
+	{
+		BallMesh->SetMaterial(0, BallMaterial);
+	}
+}
+
+void AHapbeatShowcaseZ1BallActor::ResetToTransform(const FTransform& RestTransform)
+{
+	// ResetPhysics: teleport AND clear the body's momentum, so a ball resting
+	// downrange -- or one that rolled off the lane -- comes back clean rather
+	// than carrying stale velocity into the next launch.
+	SetActorTransform(RestTransform, false, nullptr, ETeleportType::ResetPhysics);
+	if (BallMesh != nullptr && BallMesh->IsSimulatingPhysics())
+	{
+		BallMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		BallMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	}
+}
+
+void AHapbeatShowcaseZ1BallActor::LaunchWithVelocity(const FVector& Velocity)
+{
+	if (BallMesh == nullptr)
+	{
+		return;
+	}
+	// bVelChange=true adds straight to velocity (mass-independent), matching
+	// Unity BallLauncher.Launch()'s `_ball.linearVelocity = dir * _launchSpeed;`
+	// assignment onto a ball the caller has just zeroed.
+	BallMesh->AddImpulse(Velocity, NAME_None, /*bVelChange=*/true);
+}
+
+void AHapbeatShowcaseZ1BallActor::SetPhysicsRunning(bool bRunning)
+{
+	if (BallMesh != nullptr)
+	{
+		BallMesh->SetSimulatePhysics(bRunning);
+	}
 }

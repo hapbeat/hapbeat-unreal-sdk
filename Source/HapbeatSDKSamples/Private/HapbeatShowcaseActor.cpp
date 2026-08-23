@@ -529,6 +529,29 @@ void AHapbeatShowcaseActor::ApplyZonePlayerState()
 	PlayerStateAppliedZone = CurrentZone;
 }
 
+void AHapbeatShowcaseActor::DebugPlacePlayer(FVector WorldLocation, float Yaw, float Pitch)
+{
+	AHapbeatShowcaseCharacter* Character = ResolveShowcaseCharacter();
+	if (Character == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcase, Warning,
+			TEXT("DebugPlacePlayer: no Showcase character possessed; nobody to move."));
+		return;
+	}
+
+	// Feet -> capsule centre, the same correction ApplyZonePlayerState makes, so
+	// a caller can pass zone-floor coordinates either way round the two paths.
+	if (const UCapsuleComponent* Capsule = Character->GetCapsuleComponent())
+	{
+		WorldLocation.Z += Capsule->GetScaledCapsuleHalfHeight();
+	}
+
+	// TeleportToSpawn levels the pitch (it is the zone-entry path), so the pitch
+	// is applied after it rather than folded into the transform.
+	Character->TeleportToSpawn(FTransform(FRotator(0.0f, Yaw, 0.0f), WorldLocation));
+	Character->SetViewPitchForCapture(Pitch);
+}
+
 AHapbeatShowcaseCharacter* AHapbeatShowcaseActor::ResolveShowcaseCharacter() const
 {
 	return Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));

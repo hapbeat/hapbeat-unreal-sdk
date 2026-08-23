@@ -31,10 +31,19 @@ namespace
 	// Unity Showcase.unity, Z3_Fishing subtree, converted: UE (X, Y, Z) cm =
 	// (Unity z, Unity x, Unity y) x 100.
 
-	/** Unity FishingObject: local (0.5, 0.45, -0.018). */
-	const FVector SharkStartCm(-1.8f, 50.0f, 45.0f);
-	/** Unity FishingObject_RestPose: local (0.5, 0.15, 0). */
-	const FVector SharkRestCm(0.0f, 50.0f, 15.0f);
+	/**
+	 * The shark, 3 m in front of the player rather than at Unity's own X.
+	 *
+	 * Unity's FishingObject sits at local (0.5, 0.45, -0.018) -- essentially on
+	 * top of the spawn point, which in first person put it under the camera and
+	 * out of frame. UE's spawn is 2 m back of the zone origin, so +100 cm along X
+	 * places it 3 m ahead of the player, where a cast lands and where it can
+	 * actually be seen. The rest pose follows it, so releasing the fish does not
+	 * teleport it somewhere else.
+	 */
+	const FVector SharkStartCm(100.0f, 50.0f, 45.0f);
+	/** Where Detach() puts the shark back: the same spot, at resting height. */
+	const FVector SharkRestCm(100.0f, 50.0f, 15.0f);
 	/** Unity Z3_Fishing/PlayerSpawn: local (0, 1, -2). Z is the player's feet, hence 0. */
 	const FVector PlayerSpawnCm(-200.0f, 0.0f, 0.0f);
 

@@ -108,6 +108,12 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 	LaneMesh->SetRelativeLocation(LaneCentreCm);
 	LaneMesh->SetRelativeScale3D(LaneSizeCm / 100.0f); // engine Cube is 100 cm authored
 	LaneMesh->SetCollisionProfileName(TEXT("BlockAll"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> LaneMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_BowlingLane.MI_BowlingLane"));
+	if (LaneMaterial.Succeeded())
+	{
+		LaneMesh->SetMaterial(0, LaneMaterial.Object);
+	}
 
 	// The ball, like the pins, is a child actor -- see the class comment: it has
 	// to be an actor of its own to carry ContactTag without the lane inheriting it.
@@ -144,13 +150,18 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 	{
 		EventMapOverride = DefaultEventMap.Object;
 	}
+	static ConstructorHelpers::FObjectFinder<USoundBase> PinHitSound(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z1_pin_hit.S_z1_pin_hit"));
+	if (PinHitSound.Succeeded())
+	{
+		PinHitSoundAsset = PinHitSound.Object;
+	}
 }
 
 void AHapbeatShowcaseZ1BowlingActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	ApplyShowcaseAssets();
 	BuildEventMap();
 	SetUpPins();
 	SetUpBall();
@@ -173,23 +184,6 @@ void AHapbeatShowcaseZ1BowlingActor::SetUpBall()
 	// starts it simulating.
 	Ball->Tags.AddUnique(ContactTag);
 	Ball->SetPhysicsRunning(true);
-}
-
-void AHapbeatShowcaseZ1BowlingActor::ApplyShowcaseAssets()
-{
-	// The lane keeps its engine primitive shape (a box is already the right form)
-	// and only takes the imported material; the pins fit their own imported mesh
-	// in ApplyPinSize.
-	if (UMaterialInterface* LaneMaterial =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingLane")))
-	{
-		if (LaneMesh != nullptr)
-		{
-			LaneMesh->SetMaterial(0, LaneMaterial);
-		}
-	}
-	// The ball's own material is applied by the ball actor, in its own BeginPlay
-	// (AHapbeatShowcaseZ1BallActor::ApplyShowcaseAssets) -- it owns that mesh.
 }
 
 void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
@@ -228,11 +222,6 @@ UHapbeatEventMap* AHapbeatShowcaseZ1BowlingActor::BuildFallbackEventMap()
 
 void AHapbeatShowcaseZ1BowlingActor::SetUpPins()
 {
-	// Optional imported art / SFX, resolved once for the whole rack; any of these
-	// may legitimately be null.
-	USoundBase* PinHitSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(
-		TEXT("Sounds"), TEXT("S_z1_pin_hit"));
-
 	PinRestRelativeTransforms.Reset(PinSlots.Num());
 	for (UChildActorComponent* Slot : PinSlots)
 	{
@@ -264,7 +253,7 @@ void AHapbeatShowcaseZ1BowlingActor::SetUpPins()
 			Pin->HitTrigger->EntryId = PinHitEntryId;
 			Pin->HitTrigger->TagFilter = ContactTag;
 		}
-		Pin->HitSound = PinHitSound;
+		Pin->HitSound = PinHitSoundAsset;
 		Pin->ApplyPinSize(PinHeightCm, PinDiameterCm, bFlipPinUp);
 	}
 }
@@ -457,9 +446,6 @@ AHapbeatShowcaseZ1PinActor::AHapbeatShowcaseZ1PinActor()
 	PinBody->SetMobility(EComponentMobility::Movable);
 	PinBody->SetCapsuleSize(PinCapsuleRadiusCm, PinCapsuleHalfHeightCm);
 	PinBody->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
-	// Unity's BowlingPin Rigidbody is 0.5 kg; without the override UE would
-	// derive a mass from the capsule's volume, which scatters differently.
-	PinBody->SetMassOverrideInKg(NAME_None, PinMassKg, /*bNewOverrideMass=*/true);
 	// SetSimulatePhysics() is deferred to BeginPlay: calling it here, before the
 	// capsule is registered, is order-dependent (it can log a spurious "no
 	// physics body" warning against a not-yet-created BodyInstance). The notify
@@ -475,12 +461,33 @@ AHapbeatShowcaseZ1PinActor::AHapbeatShowcaseZ1PinActor()
 	{
 		PinMesh->SetStaticMesh(CylinderMesh);
 	}
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> ImportedPin(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_BowlingPin.SM_BowlingPin"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> PinMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_BowlingPin.MI_BowlingPin"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> StripeMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_BowlingPinStripe.MI_BowlingPinStripe"));
+	if (ImportedPin.Succeeded())
+	{
+		PinMesh->SetStaticMesh(ImportedPin.Object);
+		const TArray<FStaticMaterial>& Slots = ImportedPin.Object->GetStaticMaterials();
+		for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
+		{
+			const bool bStripe = Slots[SlotIndex].MaterialSlotName == TEXT("mat8")
+				|| Slots[SlotIndex].ImportedMaterialSlotName == TEXT("mat8");
+			PinMesh->SetMaterial(SlotIndex,
+				bStripe && StripeMaterial.Succeeded() ? StripeMaterial.Object : PinMaterial.Object);
+		}
+	}
 	// No collision on the visual: the capsule is the collider, and a second one
 	// inside it would fight the solver.
 	PinMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 
 	HitTrigger = CreateDefaultSubobject<UHapbeatCollisionTriggerComponent>(TEXT("HitTrigger"));
 	HitTrigger->TriggerEvent = EHapbeatCollisionEvent::Hit;
+	// UE has no OnCollisionEnter callback: OnComponentHit is contact-based, so
+	// this gate makes one fire per newly-started contact like Unity.
+	HitTrigger->bEnterOnly = true;
 	HitTrigger->GainMode = EHapbeatGainMode::VelocityScaled;
 	// Unity BowlingPin.prefab HapbeatCollisionTrigger: _velocityThreshold=0.01,
 	// _maxVelocity=1 (Unity m/s), _gainMode=VelocityScaled, default linear curve.
@@ -506,6 +513,10 @@ void AHapbeatShowcaseZ1PinActor::BeginPlay()
 
 	if (PinBody != nullptr)
 	{
+		// Unity's BowlingPin Rigidbody is 0.5 kg. Defer the override until the
+		// component is registered; doing it during native CDO construction asks
+		// GEngine for a physical material before GEngine exists.
+		PinBody->SetMassOverrideInKg(NAME_None, PinMassKg, /*bNewOverrideMass=*/true);
 		PinBody->SetSimulatePhysics(true);
 		PinBody->SetNotifyRigidBodyCollision(true); // required for OnComponentHit to fire
 	}
@@ -526,39 +537,6 @@ void AHapbeatShowcaseZ1PinActor::ApplyPinSize(float DesiredHeightCm, float Desir
 	if (PinMesh == nullptr)
 	{
 		return;
-	}
-
-	// The imported pin, when it is present. Without it the constructor's cylinder
-	// is fitted instead, so both paths go through the same three steps and the
-	// rack is the same size either way.
-	if (UStaticMesh* ImportedPin =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_BowlingPin")))
-	{
-		PinMesh->SetStaticMesh(ImportedPin);
-		// MI_BowlingPin, not the shared MI_DefaultMaterial: a bowling pin is white,
-		// and the default instance carries the imported colour map instead.
-		// EVERY slot is assigned, not just slot 0: bowling_pin.obj's mtl splits the
-		// model into mat21 (white body) and mat8 (red stripe), so painting slot 0
-		// alone left the body on UE's default grey checker. Slots whose name cannot
-		// be read fall back to white, which is what the body is anyway.
-		UMaterialInterface* PinMaterial =
-			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingPin"));
-		UMaterialInterface* StripeMaterial =
-			FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingPinStripe"));
-		if (PinMaterial != nullptr)
-		{
-			const TArray<FStaticMaterial>& Slots = ImportedPin->GetStaticMaterials();
-			for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
-			{
-				const FStaticMaterial& Slot = Slots[SlotIndex];
-				const bool bIsStripe =
-					Slot.MaterialSlotName == TEXT("mat8") ||
-					Slot.ImportedMaterialSlotName == TEXT("mat8");
-				UMaterialInterface* SlotMaterial =
-					(bIsStripe && StripeMaterial != nullptr) ? StripeMaterial : PinMaterial;
-				PinMesh->SetMaterial(SlotIndex, SlotMaterial);
-			}
-		}
 	}
 
 	const UStaticMesh* Mesh = PinMesh->GetStaticMesh();
@@ -648,10 +626,6 @@ AHapbeatShowcaseZ1BallActor::AHapbeatShowcaseZ1BallActor()
 	Body->SetMobility(EComponentMobility::Movable);
 	Body->SetSphereRadius(BallDiameterCm * 0.5f);
 	Body->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
-	// Unity's ball is a 4 kg Rigidbody; without an override UE would derive the
-	// mass from the sphere's volume and density, which is not the same number and
-	// changes how hard the rack scatters.
-	Body->SetMassOverrideInKg(NAME_None, BallMassKg, /*bNewOverrideMass=*/true);
 	// The pins listen for Hit events, which are only reported when the bodies
 	// involved are set to generate them. Flag-only here -- it needs no registered
 	// body, unlike SetSimulatePhysics below.
@@ -674,6 +648,15 @@ AHapbeatShowcaseZ1BallActor::AHapbeatShowcaseZ1BallActor()
 	// No collision on the visual: the sphere is the collider, and a second one
 	// inside it would fight the solver.
 	BallMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BallMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_BowlingBall.MI_BowlingBall"));
+	if (BallMaterial.Succeeded())
+	{
+		for (int32 SlotIndex = 0; SlotIndex < BallMesh->GetNumMaterials(); ++SlotIndex)
+		{
+			BallMesh->SetMaterial(SlotIndex, BallMaterial.Object);
+		}
+	}
 }
 
 void AHapbeatShowcaseZ1BallActor::BeginPlay()
@@ -682,32 +665,13 @@ void AHapbeatShowcaseZ1BallActor::BeginPlay()
 
 	if (Body != nullptr)
 	{
+		// Unity's ball is a 4 kg Rigidbody. As with the pins, set mass only after
+		// registration so native CDO construction stays engine-independent.
+		Body->SetMassOverrideInKg(NAME_None, BallMassKg, /*bNewOverrideMass=*/true);
 		Body->SetSimulatePhysics(true);
 		Body->SetNotifyRigidBodyCollision(true);
 	}
 
-	ApplyShowcaseAssets();
-}
-
-void AHapbeatShowcaseZ1BallActor::ApplyShowcaseAssets()
-{
-	if (BallMesh == nullptr)
-	{
-		return;
-	}
-	if (UMaterialInterface* BallMaterial =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingBall")))
-	{
-		// EVERY slot, not just slot 0: painting only the first left the ball on
-		// the engine's default material (it read pale lilac in PIE), the same
-		// trap the pin's own multi-slot assignment already documents. A sphere
-		// normally has one slot, so this is usually one assignment -- but it
-		// costs nothing and does not depend on that being true.
-		for (int32 SlotIndex = 0; SlotIndex < BallMesh->GetNumMaterials(); ++SlotIndex)
-		{
-			BallMesh->SetMaterial(SlotIndex, BallMaterial);
-		}
-	}
 }
 
 void AHapbeatShowcaseZ1BallActor::ResetToTransform(const FTransform& RestTransform)

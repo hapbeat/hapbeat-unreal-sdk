@@ -1,12 +1,11 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatShowcaseRoomActor.h"
 
-#include "HapbeatSampleLibrary.h"
-
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Materials/MaterialInterface.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -71,35 +70,20 @@ AHapbeatShowcaseRoomActor::AHapbeatShowcaseRoomActor()
 	WallWest = MakeSlab(RootComponent, TEXT("WallWest"),
 		FVector(0.0f, -RoomHalfSpanCm, WallCentreZCm),
 		FVector(RoomSpanCm, WallThicknessCm, WallHeightCm));
-}
 
-void AHapbeatShowcaseRoomActor::BeginPlay()
-{
-	Super::BeginPlay();
-	ApplyShowcaseMaterials();
-}
-
-void AHapbeatShowcaseRoomActor::ApplyShowcaseMaterials()
-{
-	// Missing art is a normal state (the Showcase materials are script-generated
-	// and optional), so the room simply stays engine grey.
-	if (UMaterialInterface* FloorMaterial =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Floor")))
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FloorMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_Floor.MI_Floor"));
+	if (FloorMaterial.Succeeded())
 	{
-		if (Floor != nullptr)
-		{
-			Floor->SetMaterial(0, FloorMaterial);
-		}
+		Floor->SetMaterial(0, FloorMaterial.Object);
 	}
-	if (UMaterialInterface* WallMaterial =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Wall")))
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> WallMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_Wall.MI_Wall"));
+	if (WallMaterial.Succeeded())
 	{
 		for (UStaticMeshComponent* Wall : { WallNorth.Get(), WallSouth.Get(), WallEast.Get(), WallWest.Get() })
 		{
-			if (Wall != nullptr)
-			{
-				Wall->SetMaterial(0, WallMaterial);
-			}
+			Wall->SetMaterial(0, WallMaterial.Object);
 		}
 	}
 }

@@ -10,11 +10,13 @@
 #include "HapbeatSubsystem.h"
 
 #include "Components/AudioComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/ChildActorComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/GameInstance.h"
+#include "Engine/CollisionProfile.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -22,7 +24,10 @@
 #include "InputCoreTypes.h" // EKeys::*
 #include "Kismet/GameplayStatics.h" // GetPlayerPawn / PlaySound2D / SpawnSoundAttached
 #include "Materials/MaterialInterface.h"
+#include "Math/RotationMatrix.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Sound/SoundBase.h"
+#include "Sound/SoundWave.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Styling/CoreStyle.h" // FCoreStyle::Get().GetBrush("WhiteBrush")
@@ -56,6 +61,8 @@ namespace
 	/** Finished sizes of the imported projectiles, longest axis, cm (see the Showcase asset ledger). */
 	constexpr float BulletLengthCm = 25.0f;   // SM_BulletFoam, 15 x 15 x 25
 	constexpr float MissileLengthCm = 129.0f; // SM_Missile, 129 x 53 x 47
+	constexpr float BulletDiameterCm = 15.0f;
+	constexpr float MissileDiameterCm = 53.0f;
 
 	/** Unity ChargeShooter._chargeBarColorLow / _chargeBarColorHigh. */
 	const FLinearColor ChargeBarLowColor(0.3f, 0.6f, 1.0f, 1.0f);
@@ -118,26 +125,63 @@ AHapbeatShowcaseZ5ChargeShotActor::AHapbeatShowcaseZ5ChargeShotActor()
 	{
 		EventMapOverride = DefaultEventMap.Object;
 	}
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> LightProjectile(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_BulletFoam.SM_BulletFoam"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> HeavyProjectile(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_Missile.SM_Missile"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Blaster(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_BlasterG.SM_BlasterG"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> DefaultMat(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_DefaultMaterial.MI_DefaultMaterial"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ColormapMat(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_Colormap.MI_Colormap"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TargetBase(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_TargetBase.MI_TargetBase"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TargetLight(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_TargetLight.MI_TargetLight"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TargetHeavy(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_TargetHeavy.MI_TargetHeavy"));
+	ProjectileMeshLight = LightProjectile.Object;
+	ProjectileMeshHeavy = HeavyProjectile.Object;
+	BlasterMeshAsset = Blaster.Object;
+	DefaultMaterial = DefaultMat.Object;
+	LightProjectileMaterial = ColormapMat.Object;
+	TargetBaseMaterial = TargetBase.Object;
+	TargetLightMaterial = TargetLight.Object;
+	TargetHeavyMaterial = TargetHeavy.Object;
+
+	static ConstructorHelpers::FObjectFinder<USoundBase> ChargeLoop(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z5_charge_loop.S_z5_charge_loop"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> ShotLight(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z5_shot_light.S_z5_shot_light"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> ShotHeavy(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z5_shot_heavy.S_z5_shot_heavy"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> TargetHitLight(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z5_target_hit_light.S_z5_target_hit_light"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> TargetHitHeavy(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z5_target_hit_heavy.S_z5_target_hit_heavy"));
+	ChargeLoopSound = ChargeLoop.Object;
+	ShotLightSound = ShotLight.Object;
+	ShotHeavySound = ShotHeavy.Object;
+	TargetLightSound = TargetHitLight.Object;
+	TargetHeavySound = TargetHitHeavy.Object;
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	LoadShowcaseAssets();
+	// The sound is already hard-referenced; only its playback mode is runtime
+	// state. This preserves Unity's looping AudioSource during a long charge.
+	if (USoundWave* ChargeWave = Cast<USoundWave>(ChargeLoopSound))
+	{
+		ChargeWave->bLooping = true;
+	}
 	BuildEventMap();
 	SetUpTarget();
 	BindInput();
 	CreateChargeBar();
-}
-
-void AHapbeatShowcaseZ5ChargeShotActor::LoadShowcaseAssets()
-{
-	ProjectileMeshLight = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_BulletFoam"));
-	ProjectileMeshHeavy = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Missile"));
-	ChargeLoopSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_charge_loop"));
-	ShotLightSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_shot_light"));
-	ShotHeavySound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_shot_heavy"));
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::TryDeferredMount()
@@ -158,8 +202,7 @@ void AHapbeatShowcaseZ5ChargeShotActor::MountBlasterOnCharacter()
 {
 	AHapbeatShowcaseCharacter* Character =
 		Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
-	UStaticMesh* BlasterMesh = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(
-		TEXT("Meshes"), TEXT("SM_BlasterG"));
+	UStaticMesh* BlasterMesh = BlasterMeshAsset;
 	if (Character == nullptr || BlasterMesh == nullptr)
 	{
 		return; // bare level or no imported art: shots come from the zone origin instead
@@ -185,8 +228,7 @@ void AHapbeatShowcaseZ5ChargeShotActor::MountBlasterOnCharacter()
 	// unlike Z3's rod there is no scale correction to apply here.
 	MountPose.SetScale3D(FVector::OneVector);
 
-	Character->MountItem(BlasterMesh, MountPose,
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")));
+	Character->MountItem(BlasterMesh, MountPose, DefaultMaterial);
 	MountedCharacter = Character;
 }
 
@@ -527,14 +569,10 @@ void AHapbeatShowcaseZ5ChargeShotActor::SetUpTarget()
 	const FVector BoardLocal = TargetSlot != nullptr ? TargetSlot->GetRelativeLocation() : FVector::ZeroVector;
 	const FVector FaceDirection = (-BoardLocal).GetSafeNormal();
 
-	// Any of these may legitimately be null (the art is script-generated and optional).
 	Target->ApplyShowcaseAssets(TargetSizeCm,
 		FaceDirection.IsNearlyZero() ? -FVector::ForwardVector : FaceDirection,
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetBase")),
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetLight")),
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_TargetHeavy")),
-		FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_target_hit_light")),
-		FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z5_target_hit_heavy")));
+		TargetBaseMaterial, TargetLightMaterial, TargetHeavyMaterial,
+		TargetLightSound, TargetHeavySound);
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::BindInput()
@@ -722,9 +760,8 @@ void AHapbeatShowcaseZ5ChargeShotActor::FireOneShotEntry(const FGuid& EntryId)
 	// Fixed modulator (1.0): mirrors Unity's default _chargeShotModulator = 1.0 /
 	// _chargeThresholdModulator = 1.0 (_shotFollowsChargeT = false), i.e. these
 	// one-shots fire at plain entry.GetEffectiveGain(), not scaled by chargeT.
-	// This call REPLACES whatever the subsystem is currently streaming (v1
-	// single-session model) -- by the time this fires, the charge loop has
-	// already been stopped+flushed, so there is nothing to steal from.
+	// The shot is a one-shot source. By the time it fires, the charge loop has
+	// already been stopped+flushed, so it normally opens a fresh wire session.
 	// bForceNonLoop states the one-shot intent at the call site: these entries
 	// are authored non-looping, and a shot must never leave a loop running even
 	// if someone flips that flag while tuning.
@@ -756,8 +793,11 @@ void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectile(float ChargeT, bool bHea
 		// heavy one is a missile and is correspondingly larger.
 		UStaticMesh* Mesh = bHeavy ? ToRawPtr(ProjectileMeshHeavy) : ToRawPtr(ProjectileMeshLight);
 		const float BaseLength = bHeavy ? MissileLengthCm : BulletLengthCm;
-		Projectile->Configure(Direction * Speed, bHeavy, Scale, Mesh, BaseLength,
-			bHeavy ? HeavyProjectileMeshExtraRotation : LightProjectileMeshExtraRotation);
+		const float BaseDiameter = bHeavy ? MissileDiameterCm : BulletDiameterCm;
+		Projectile->Configure(Direction * Speed, bHeavy, Scale, Mesh, BaseLength, BaseDiameter,
+			bHeavy ? HeavyProjectileMeshExtraRotation : LightProjectileMeshExtraRotation,
+			bHeavy ? ToRawPtr(DefaultMaterial) : ToRawPtr(LightProjectileMaterial),
+			ProjectileRestitution, ProjectileFriction);
 	}
 }
 
@@ -766,6 +806,17 @@ void AHapbeatShowcaseZ5ChargeShotActor::DebugSetChargeForCapture(float T)
 	// The displayed value and nothing else -- see the header. The bar reads
 	// LastChargeT every frame, so this is all a capture needs.
 	LastChargeT = FMath::Clamp(T, 0.0f, 1.0f);
+}
+
+void AHapbeatShowcaseZ5ChargeShotActor::DebugFireProjectileForCapture(float ChargeT, bool bHeavy)
+{
+	SpawnProjectile(FMath::Clamp(ChargeT, 0.0f, 1.0f), bHeavy);
+}
+
+bool AHapbeatShowcaseZ5ChargeShotActor::DebugIsChargeSoundLooping() const
+{
+	const USoundWave* ChargeWave = Cast<USoundWave>(ChargeLoopSound);
+	return ChargeWave != nullptr && ChargeWave->bLooping;
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectilePreview(bool bHeavy, float YawOffsetDeg)
@@ -807,18 +858,15 @@ void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectilePreview(bool bHeavy, floa
 		return;
 	}
 
-	// Zero velocity plus no tick: the mesh/scale/alignment work of Configure()
-	// happens, the flight does not.
+	// Configure the real mesh/collider first, then freeze it as capture scenery.
 	UStaticMesh* Mesh = bHeavy ? ToRawPtr(ProjectileMeshHeavy) : ToRawPtr(ProjectileMeshLight);
 	const float BaseLength = bHeavy ? MissileLengthCm : BulletLengthCm;
-	Projectile->Configure(FVector::ZeroVector, bHeavy, /*InScale=*/1.0f, Mesh, BaseLength,
-		bHeavy ? HeavyProjectileMeshExtraRotation : LightProjectileMeshExtraRotation);
-	// Tick off, so neither the flight nor the gravity in it runs: the preview is
-	// scenery that has to stay where it was put.
-	Projectile->SetActorTickEnabled(false);
-	// Collision off so a preview parked in front of the board cannot fire the
-	// target's hit entries; it is scenery for one screenshot.
-	Projectile->SetActorEnableCollision(false);
+	const float BaseDiameter = bHeavy ? MissileDiameterCm : BulletDiameterCm;
+	Projectile->Configure(FVector::ZeroVector, bHeavy, /*InScale=*/1.0f, Mesh, BaseLength, BaseDiameter,
+		bHeavy ? HeavyProjectileMeshExtraRotation : LightProjectileMeshExtraRotation,
+		bHeavy ? ToRawPtr(DefaultMaterial) : ToRawPtr(LightProjectileMaterial),
+		ProjectileRestitution, ProjectileFriction);
+	Projectile->SetPreviewMode();
 	// Longer than Configure()'s BeginPlay lifespan (4 s), which would otherwise
 	// take the preview away mid-capture.
 	Projectile->SetLifeSpan(PreviewLifeSeconds);
@@ -882,16 +930,8 @@ void AHapbeatShowcaseZ5ChargeShotActor::Tick(float DeltaSeconds)
 		if (!bThresholdReached && T >= HeavyThreshold)
 		{
 			bThresholdReached = true;
-			// v1 single-active-stream REPLACE model: firing the threshold one-shot
-			// StreamClip here would permanently kill the still-running charge loop
-			// (Unity's runtime mixes both). Prefer the continuous charge rumble:
-			// skip the ping while the loop is active. The threshold is still felt
-			// on release (heavy shot). Documented v1 limitation.
-			const UHapbeatStreamPlayback* LoopPb = LoopPlayback.Get();
-			if (LoopPb == nullptr || !LoopPb->IsActive())
-			{
-				FireOneShotEntry(ChargeThresholdEntryId);
-			}
+			// Mixed as a one-shot source over the still-running charge loop.
+			FireOneShotEntry(ChargeThresholdEntryId);
 		}
 	}
 
@@ -960,8 +1000,11 @@ AHapbeatShowcaseZ5TargetActor::AHapbeatShowcaseZ5TargetActor()
 {
 	PrimaryActorTick.bCanEverTick = false;
 
+	TargetRoot = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+	RootComponent = TargetRoot;
+
 	TargetMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("TargetMesh"));
-	RootComponent = TargetMesh;
+	TargetMesh->SetupAttachment(TargetRoot);
 	// Movable: the switcher hides and shows the zone this board belongs to, so
 	// its lighting is dynamic. Mobility is set before the mesh assignment so
 	// SetStaticMesh never runs on a Static component.
@@ -970,27 +1013,43 @@ AHapbeatShowcaseZ5TargetActor::AHapbeatShowcaseZ5TargetActor()
 	{
 		TargetMesh->SetStaticMesh(CubeMesh);
 	}
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> TargetAsset(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_TargetLarge.SM_TargetLarge"));
+	if (TargetAsset.Succeeded())
+	{
+		TargetMesh->SetStaticMesh(TargetAsset.Object);
+	}
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> TargetBase(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_TargetBase.MI_TargetBase"));
+	if (TargetBase.Succeeded())
+	{
+		TargetMesh->SetMaterial(0, TargetBase.Object);
+		BaseMaterial = TargetBase.Object;
+	}
 
-	// Kinematic: QueryOnly + Overlap-all + GenerateOverlapEvents, no physics
-	// simulation on either side (the board never moves; the projectile sweeps
-	// through it).
-	TargetMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	// The imported target already has one generated simple-convex hull. Use that
+	// same transformed component for both appearance and blocking collision,
+	// just as Unity uses a convex MeshCollider on target-large.
+	TargetMesh->SetCollisionProfileName(UCollisionProfile::BlockAll_ProfileName);
+	TargetMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	TargetMesh->SetCollisionObjectType(ECC_WorldStatic);
-	TargetMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
-	TargetMesh->SetGenerateOverlapEvents(true);
+	TargetMesh->SetNotifyRigidBodyCollision(true);
+	TargetMesh->SetGenerateOverlapEvents(false);
 
 	// TWO triggers on one board: which entry fires is decided by the TAG of the
 	// projectile that arrives, not by which of two boards it hit. Both bind to
-	// this actor's root primitive (the mesh) and filter independently.
+	// the target mesh and filter independently.
 	LightHitTrigger = CreateDefaultSubobject<UHapbeatCollisionTriggerComponent>(TEXT("LightHitTrigger"));
-	LightHitTrigger->TriggerEvent = EHapbeatCollisionEvent::BeginOverlap;
+	LightHitTrigger->TriggerEvent = EHapbeatCollisionEvent::Hit;
+	LightHitTrigger->bEnterOnly = true;
 	LightHitTrigger->GainMode = EHapbeatGainMode::Fixed;
 	// A missile sweeping through a 53 cm deep board can report more than one
-	// overlap in a frame; the v1 runtime has no mixer to absorb the repeat.
+	// contact in a frame; one physical impact should still fire only once.
 	LightHitTrigger->Cooldown = 0.1f;
 
 	HeavyHitTrigger = CreateDefaultSubobject<UHapbeatCollisionTriggerComponent>(TEXT("HeavyHitTrigger"));
-	HeavyHitTrigger->TriggerEvent = EHapbeatCollisionEvent::BeginOverlap;
+	HeavyHitTrigger->TriggerEvent = EHapbeatCollisionEvent::Hit;
+	HeavyHitTrigger->bEnterOnly = true;
 	HeavyHitTrigger->GainMode = EHapbeatGainMode::Fixed;
 	HeavyHitTrigger->Cooldown = 0.1f;
 	// TagFilter / EventMap / EntryId are assigned by the owning zone actor (see
@@ -1003,7 +1062,7 @@ void AHapbeatShowcaseZ5TargetActor::BeginPlay()
 
 	if (TargetMesh != nullptr)
 	{
-		TargetMesh->OnComponentBeginOverlap.AddDynamic(this, &AHapbeatShowcaseZ5TargetActor::HandleTargetOverlap);
+		TargetMesh->OnComponentHit.AddDynamic(this, &AHapbeatShowcaseZ5TargetActor::HandleTargetHit);
 	}
 }
 
@@ -1016,17 +1075,10 @@ void AHapbeatShowcaseZ5TargetActor::ApplyShowcaseAssets(const FVector& SizeCm, c
 	HeavyFlashMaterial = InHeavyFlash;
 	LightHitSound = InLightSound;
 	HeavyHitSound = InHeavySound;
-
 	if (TargetMesh == nullptr)
 	{
 		return;
 	}
-	if (UStaticMesh* BoardMesh =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_TargetLarge")))
-	{
-		TargetMesh->SetStaticMesh(BoardMesh);
-	}
-
 	const UStaticMesh* Mesh = TargetMesh->GetStaticMesh();
 	if (Mesh != nullptr)
 	{
@@ -1042,6 +1094,9 @@ void AHapbeatShowcaseZ5TargetActor::ApplyShowcaseAssets(const FVector& SizeCm, c
 			FHapbeatSampleLibrary::ComputeShortestAxisToDirectionRotation(Mesh, FaceDirection).Quaternion();
 		const FQuat Facing = bFlipTargetFacing ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) * Aimed : Aimed;
 		TargetMesh->SetRelativeRotation(Facing);
+		const FVector MeshCentre = FHapbeatSampleLibrary::ComputeFittedBoundsCentre(
+			Mesh, TargetMesh->GetRelativeScale3D(), Facing.Rotator());
+		TargetMesh->SetRelativeLocation(-MeshCentre);
 	}
 
 	if (BaseMaterial != nullptr)
@@ -1061,8 +1116,8 @@ void AHapbeatShowcaseZ5TargetActor::ResetLook()
 	EndFlash();
 }
 
-void AHapbeatShowcaseZ5TargetActor::HandleTargetOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult)
+void AHapbeatShowcaseZ5TargetActor::HandleTargetHit(UPrimitiveComponent* HitComponent, AActor* OtherActor,
+	UPrimitiveComponent* OtherComponent, FVector NormalImpulse, const FHitResult& Hit)
 {
 	if (OtherActor == nullptr)
 	{
@@ -1074,6 +1129,7 @@ void AHapbeatShowcaseZ5TargetActor::HandleTargetOverlap(UPrimitiveComponent* Ove
 	{
 		return; // something else drifted through the board
 	}
+	++DebugHitCount;
 
 	if (USoundBase* HitSound = bHeavy ? ToRawPtr(HeavyHitSound) : ToRawPtr(LightHitSound))
 	{
@@ -1111,10 +1167,22 @@ void AHapbeatShowcaseZ5TargetActor::EndFlash()
 
 AHapbeatShowcaseZ5ProjectileActor::AHapbeatShowcaseZ5ProjectileActor()
 {
-	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bCanEverTick = false;
+
+	ProjectileBody = CreateDefaultSubobject<UBoxComponent>(TEXT("ProjectileBody"));
+	RootComponent = ProjectileBody;
+	ProjectileBody->SetMobility(EComponentMobility::Movable);
+	ProjectileBody->SetBoxExtent(FVector(12.5f, 7.5f, 7.5f));
+	ProjectileBody->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
+	ProjectileBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	ProjectileBody->SetNotifyRigidBodyCollision(true);
+	ProjectileBody->SetGenerateOverlapEvents(false);
+	ProjectileBody->BodyInstance.bUseCCD = true;
+	ProjectileBody->BodyInstance.bSimulatePhysics = true;
+	ProjectileBody->BodyInstance.bEnableGravity = true;
 
 	ProjectileMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ProjectileMesh"));
-	RootComponent = ProjectileMesh;
+	ProjectileMesh->SetupAttachment(ProjectileBody);
 	ProjectileMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")))
 	{
@@ -1122,13 +1190,7 @@ AHapbeatShowcaseZ5ProjectileActor::AHapbeatShowcaseZ5ProjectileActor()
 	}
 	ProjectileMesh->SetRelativeScale3D(FVector(0.3f));
 
-	// QueryOnly + Overlap-all + GenerateOverlapEvents: matches the target's
-	// collision setup so a swept move (AddActorWorldOffset(.., bSweep=true) in
-	// Tick) generates BeginOverlap without either side simulating physics.
-	ProjectileMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	ProjectileMesh->SetCollisionObjectType(ECC_WorldDynamic);
-	ProjectileMesh->SetCollisionResponseToAllChannels(ECR_Overlap);
-	ProjectileMesh->SetGenerateOverlapEvents(true);
+	ProjectileMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 }
 
 void AHapbeatShowcaseZ5ProjectileActor::BeginPlay()
@@ -1139,14 +1201,36 @@ void AHapbeatShowcaseZ5ProjectileActor::BeginPlay()
 	// Velocity/tag (safe even though BeginPlay runs before Configure() is
 	// called by the spawner -- see the header's Configure doc).
 	SetLifeSpan(4.0f);
+	if (ProjectileBody != nullptr)
+	{
+		ProjectileBody->SetSimulatePhysics(true);
+		ProjectileBody->SetEnableGravity(true);
+	}
 }
 
 void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, bool bInHeavy, float InScale,
-	UStaticMesh* InMesh, float InBaseLengthCm, const FRotator& InMeshExtraRotation)
+	UStaticMesh* InMesh, float InBaseLengthCm, float InBaseDiameterCm,
+	const FRotator& InMeshExtraRotation, UMaterialInterface* InMaterial,
+	float InRestitution, float InFriction)
 {
-	Velocity = InVelocity;
 	ProjectileMeshExtraRotation = InMeshExtraRotation;
 	Tags.Add(bInHeavy ? FName(TEXT("ProjectileHeavy")) : FName(TEXT("ProjectileLight")));
+	if (ProjectileBody != nullptr)
+	{
+		RuntimePhysicalMaterial = NewObject<UPhysicalMaterial>(this);
+		RuntimePhysicalMaterial->Restitution = FMath::Clamp(InRestitution, 0.0f, 1.0f);
+		RuntimePhysicalMaterial->Friction = FMath::Max(0.0f, InFriction);
+		RuntimePhysicalMaterial->bOverrideRestitutionCombineMode = true;
+		RuntimePhysicalMaterial->RestitutionCombineMode = EFrictionCombineMode::Max;
+		ProjectileBody->SetPhysMaterialOverride(RuntimePhysicalMaterial);
+
+		const float Length = FMath::Max(InBaseLengthCm * InScale, 1.0f);
+		const float Diameter = FMath::Max(InBaseDiameterCm * InScale, 1.0f);
+		ProjectileBody->SetBoxExtent(FVector(Length, Diameter, Diameter) * 0.5f, true);
+		ProjectileBody->SetMassOverrideInKg(NAME_None, bInHeavy ? 1.0f : 0.2f, true);
+		ProjectileBody->SetPhysicsLinearVelocity(InVelocity);
+		ProjectileBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	}
 	if (ProjectileMesh == nullptr)
 	{
 		return;
@@ -1158,18 +1242,12 @@ void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, boo
 	{
 		ProjectileMesh->SetStaticMesh(InMesh);
 
-		// Paint EVERY slot: a slot left alone keeps UE's default material, which
-		// is how both projectiles read grey-white in PIE. The bullet's source
-		// .mtl is the shared colormap; the missile's is DefaultMaterial (its
-		// map_Kd is DefaultMaterial_Base_Color.png), so they take different
-		// instances -- which one is a property of the MODEL, hence the bHeavy
-		// test rather than a caller argument.
-		if (UMaterialInterface* Material = FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(
-			TEXT("Materials"), bInHeavy ? TEXT("MI_DefaultMaterial") : TEXT("MI_Colormap")))
+		// Paint every slot from the spawner's constructor-loaded hard reference.
+		if (InMaterial != nullptr)
 		{
 			for (int32 SlotIndex = 0; SlotIndex < ProjectileMesh->GetNumMaterials(); ++SlotIndex)
 			{
-				ProjectileMesh->SetMaterial(SlotIndex, Material);
+				ProjectileMesh->SetMaterial(SlotIndex, InMaterial);
 			}
 		}
 
@@ -1196,23 +1274,14 @@ void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, boo
 	}
 }
 
-void AHapbeatShowcaseZ5ProjectileActor::Tick(float DeltaSeconds)
+void AHapbeatShowcaseZ5ProjectileActor::SetPreviewMode()
 {
-	Super::Tick(DeltaSeconds);
-
-	// Gravity first, then the move: Unity's projectiles are ordinary Rigidbodies
-	// with gravity on, so the shot arcs. Read from the world rather than
-	// hardcoded, so a project that changes its gravity gets what it asked for.
-	const UWorld* World = GetWorld();
-	if (World != nullptr && GravityScale > 0.0f)
+	if (ProjectileBody != nullptr)
 	{
-		Velocity.Z += World->GetGravityZ() * GravityScale * DeltaSeconds;
+		ProjectileBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		ProjectileBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		ProjectileBody->SetSimulatePhysics(false);
+		ProjectileBody->SetEnableGravity(false);
 	}
-
-	// Swept move so BeginOverlap fires against the (non-simulating) target
-	// boards along the path, not just at the final resting position.
-	AddActorWorldOffset(Velocity * DeltaSeconds, /*bSweep=*/true);
-	// Deliberately NOT re-aimed along the new velocity: Unity does not rotate its
-	// projectiles in flight either, and a re-aim would fight the per-model
-	// correction applied in Configure().
+	SetActorEnableCollision(false);
 }

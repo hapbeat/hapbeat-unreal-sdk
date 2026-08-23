@@ -12,8 +12,11 @@ class UHapbeatStreamPlayback;
 class UHapbeatSubsystem;
 class UHapbeatCollisionTriggerComponent;
 class UAudioComponent;
+class UBoxComponent;
 class UChildActorComponent;
 class UMaterialInterface;
+class UPhysicalMaterial;
+class USceneComponent;
 class USoundBase;
 class UStaticMesh;
 class UStaticMeshComponent;
@@ -62,12 +65,11 @@ class AHapbeatShowcaseZ5ProjectileActor;
  *              (chargeT >= HeavyThreshold picks heavy) and spawns a
  *              projectile toward the targets.
  *
- * On projectile-target overlap, the hit target's own
- * UHapbeatCollisionTriggerComponent (BeginOverlap + Fixed gain + a Light/Heavy
+ * On projectile-target collision, the hit target's own
+ * UHapbeatCollisionTriggerComponent (Hit + enter-only gating + Fixed gain + a Light/Heavy
  * ActorTag TagFilter) fires z5_tar_hit_light / z5_tar_hit_heavy -- mirroring
  * Unity's TargetReceiver (tag-based light/heavy distinction on the incoming
- * projectile), minus the cosmetic material-flash swap (no binary material
- * assets in this sample; see the class .cpp / handoff note "uncertainties").
+ * projectile), including its cosmetic material flash and hit sound.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ5ChargeShotActor : public AActor, public IHapbeatShowcaseZone
@@ -117,6 +119,14 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
 	void DebugSetChargeForCapture(float T);
+
+	/** Capture/verification aid: spawn the real simulated projectile without firing the shot haptic/audio path. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void DebugFireProjectileForCapture(float ChargeT, bool bHeavy);
+
+	/** Verification aid: whether the loaded charge SoundWave will repeat while LMB is held. */
+	UFUNCTION(BlueprintPure, Category = "Hapbeat|Showcase")
+	bool DebugIsChargeSoundLooping() const;
 
 	/** Charge fraction (0..1) at/above which a shot / hit counts as "heavy". Mirrors Unity's _heavyThreshold (default 0.7). */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.0", ClampMax = "1.0"))
@@ -184,6 +194,15 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase")
 	FVector TargetSizeCm = FVector(180.0f, 180.0f, 53.0f);
 
+	/** Projectile bounciness. 0 = no bounce, 1 = preserve normal impact speed. Editable on the placed Z5 actor. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Projectile Physics",
+		meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	float ProjectileRestitution = 0.65f;
+
+	/** Projectile surface friction. Lower values slide/skitter more after impact. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Projectile Physics", meta = (ClampMin = "0.0"))
+	float ProjectileFriction = 0.2f;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -213,9 +232,6 @@ private:
 	 * an attempt made too early would leave the player empty-handed.
 	 */
 	void TryDeferredMount();
-
-	/** Load the projectile meshes / SFX this zone uses; whatever is missing simply stays null. */
-	void LoadShowcaseAssets();
 
 	/** Build the charge bar and add it to the viewport; removed again in EndPlay. */
 	void CreateChargeBar();
@@ -290,18 +306,33 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<AHapbeatShowcaseZ5TargetActor> Target;
 
-	// Optional imported art / SFX; null = keep the primitive or stay silent.
-
-	UPROPERTY(Transient)
+	// Shipped fixed art/SFX references, assigned on the native CDO before Play.
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
 	TObjectPtr<UStaticMesh> ProjectileMeshLight;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
 	TObjectPtr<UStaticMesh> ProjectileMeshHeavy;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
+	TObjectPtr<UStaticMesh> BlasterMeshAsset;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
+	TObjectPtr<UMaterialInterface> DefaultMaterial;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
+	TObjectPtr<UMaterialInterface> LightProjectileMaterial;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
+	TObjectPtr<UMaterialInterface> TargetBaseMaterial;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
+	TObjectPtr<UMaterialInterface> TargetLightMaterial;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
+	TObjectPtr<UMaterialInterface> TargetHeavyMaterial;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
 	TObjectPtr<USoundBase> ChargeLoopSound;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
 	TObjectPtr<USoundBase> ShotLightSound;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
 	TObjectPtr<USoundBase> ShotHeavySound;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
+	TObjectPtr<USoundBase> TargetLightSound;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Showcase|Assets")
+	TObjectPtr<USoundBase> TargetHeavySound;
 
 	/** The charge loop's audio voice while the button is held; stopped on release. */
 	UPROPERTY(Transient)
@@ -345,13 +376,15 @@ private:
 /**
  * THE target board for Z5 -- Unity's single TargetBoard, not one board per
  * projectile type. It carries TWO UHapbeatCollisionTriggerComponents (both
- * BeginOverlap + Fixed gain), one filtered on each projectile tag, so a light
+ * Hit + enter-only gating + Fixed gain), one filtered on each projectile tag, so a light
  * bullet and a heavy missile landing on the same board fire different entries.
  * EventMap / EntryIds / materials / SFX are handed over by
  * AHapbeatShowcaseZ5ChargeShotActor::SetUpTarget.
  *
- * Kinematic: no physics simulation, query-only collision. Nothing pushes it, and
- * the projectiles sweep THROUGH it to generate the overlap.
+ * The board mesh itself is the blocking collider, using SM_TargetLarge's one
+ * generated simple-convex hull. Keeping the visual and collision on the same
+ * component prevents a separately rotated box from drifting away from the
+ * visible disc and matches Unity's convex MeshCollider.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ5TargetActor : public AActor
@@ -403,6 +436,10 @@ public:
 	/** Cancel a flash in progress and put the base material back (leaving the zone). */
 	void ResetLook();
 
+	/** Verification aid: number of tagged projectiles that reached the board's blocking Hit event. */
+	UFUNCTION(BlueprintPure, Category = "Hapbeat|Showcase")
+	int32 DebugGetHitCount() const { return DebugHitCount; }
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -410,15 +447,18 @@ private:
 	/**
 	 * Visual + audio half of a hit. The haptic half is the two triggers' own, so
 	 * this repeats their tag test rather than depending on it -- they are
-	 * independent subscribers to the same overlap, exactly as Unity splits
+	 * independent subscribers to the same hit, exactly as Unity splits
 	 * TargetReceiver (flash + SFX) from the haptic trigger.
 	 */
 	UFUNCTION()
-	void HandleTargetOverlap(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor,
-		UPrimitiveComponent* OtherComponent, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
+	void HandleTargetHit(UPrimitiveComponent* HitComponent, AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent, FVector NormalImpulse, const FHitResult& Hit);
 
 	/** Put the base material back once the flash has run its course. */
 	void EndFlash();
+
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
+	TObjectPtr<USceneComponent> TargetRoot;
 
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UStaticMeshComponent> TargetMesh;
@@ -435,19 +475,16 @@ private:
 	TObjectPtr<USoundBase> HeavyHitSound;
 
 	FTimerHandle FlashTimer;
+	int32 DebugHitCount = 0;
 
 	/** Unity TargetReceiver._flashSeconds. */
 	static constexpr float FlashSeconds = 0.2f;
 };
 
 /**
- * A short-lived, manually-moved projectile for Z5. Not a
- * UProjectileMovementComponent user -- it moves itself via a swept
- * AddActorWorldOffset in Tick() so overlap events are generated against the
- * (QueryOnly, non-simulating) target boards without needing either side to
- * simulate rigid-body physics. Self-destructs after a fixed lifespan
- * (mirrors Unity's `Destroy(projectile.gameObject, 4f)`), independent of
- * whether it hit anything.
+ * A short-lived simulated projectile for Z5. Its blocking box collider uses
+ * gravity and continuous collision detection, matching Unity's Rigidbody +
+ * Collider prefabs, and self-destructs after four seconds.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ5ProjectileActor : public AActor
@@ -460,15 +497,16 @@ public:
 	/**
 	 * Configure the projectile right after SpawnActor. Safe to call after
 	 * BeginPlay has already run synchronously inside SpawnActor (BeginPlay
-	 * here only sets the lifespan, which does not depend on these values --
-	 * movement/tagging reads them starting next Tick).
+	 * here only enables physics and sets the lifespan; Configure replaces the
+	 * shape, mass and initial velocity immediately afterward.
 	 *
-	 * @param InVelocity World-space velocity (cm/s). Movement is Tick-integrated.
+	 * @param InVelocity World-space initial rigid-body velocity (cm/s).
 	 * @param bInHeavy   Tags the actor "ProjectileHeavy" (else "ProjectileLight"),
 	 *                   read by AHapbeatShowcaseZ5TargetActor's HitTrigger TagFilter.
-	 * @param InScale    Charge-driven scale multiplier (visual only; no gameplay effect).
+	 * @param InScale    Charge-driven visual and collider scale multiplier.
 	 * @param InMesh     SM_BulletFoam / SM_Missile, or null to keep the sphere.
 	 * @param InBaseLengthCm  Finished length of the mesh's longest axis at scale 1.
+	 * @param InBaseDiameterCm Finished maximum cross-section at scale 1.
 	 * @param InMeshExtraRotation  Stored into ProjectileMeshExtraRotation and
 	 *                      applied on top of the alignment -- the per-mesh nose
 	 *                      correction, which the spawner knows and this actor
@@ -478,8 +516,12 @@ public:
 	 * missile flies nose-first instead of sideways.
 	 */
 	void Configure(const FVector& InVelocity, bool bInHeavy, float InScale,
-		UStaticMesh* InMesh = nullptr, float InBaseLengthCm = 0.0f,
-		const FRotator& InMeshExtraRotation = FRotator::ZeroRotator);
+		UStaticMesh* InMesh = nullptr, float InBaseLengthCm = 0.0f, float InBaseDiameterCm = 0.0f,
+		const FRotator& InMeshExtraRotation = FRotator::ZeroRotator,
+		UMaterialInterface* InMaterial = nullptr, float InRestitution = 0.3f, float InFriction = 0.7f);
+
+	/** Freeze a configured projectile as non-colliding scenery for capture. */
+	void SetPreviewMode();
 
 	/**
 	 * Turn the aligned mesh 180 degrees about its up axis, for a projectile
@@ -505,23 +547,17 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat")
 	FRotator ProjectileMeshExtraRotation = FRotator::ZeroRotator;
 
-	/**
-	 * Gravity applied to the flight, cm/s^2 along -Z, as a multiple of the
-	 * world's own gravity. Unity's projectiles are plain Rigidbodies with gravity
-	 * on (bullet 0.2 kg, missile 1 kg), so a UE shot that flew dead straight was
-	 * the odd one out. Mass does not enter into it -- gravity is an acceleration.
-	 * 0 restores the straight-line flight.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat", meta = (ClampMin = "0.0"))
-	float GravityScale = 1.0f;
-
 protected:
 	virtual void BeginPlay() override;
-	virtual void Tick(float DeltaSeconds) override;
 
 private:
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
+	TObjectPtr<UBoxComponent> ProjectileBody;
+
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UStaticMeshComponent> ProjectileMesh;
 
-	FVector Velocity = FVector::ZeroVector;
+	/** Per-projectile material built from the placed Z5 actor's Details values. */
+	UPROPERTY(Transient)
+	TObjectPtr<UPhysicalMaterial> RuntimePhysicalMaterial;
 };

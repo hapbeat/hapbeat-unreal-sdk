@@ -43,7 +43,7 @@ namespace
 	 */
 	const FVector SharkStartCm(100.0f, 50.0f, 45.0f);
 	/** Where Detach() puts the shark back: the same spot, at resting height. */
-	const FVector SharkRestCm(100.0f, 50.0f, 15.0f);
+	const FVector SharkRestCm(100.0f, 50.0f, 35.0f);
 	/** Unity Z3_Fishing/PlayerSpawn: local (0, 1, -2). Z is the player's feet, hence 0. */
 	const FVector PlayerSpawnCm(-200.0f, 0.0f, 0.0f);
 
@@ -118,6 +118,19 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	{
 		EventMapOverride = DefaultEventMap.Object;
 	}
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> RodMesh(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_FishingRod.SM_FishingRod"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> HeldMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_DefaultMaterial.MI_DefaultMaterial"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> LineMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/M_ShowcaseBase.M_ShowcaseBase"));
+	RodMeshAsset = RodMesh.Object;
+	HeldItemMaterial = HeldMaterial.Object;
+	LineBaseMaterial = LineMaterial.Object;
+	if (LineBaseMaterial != nullptr)
+	{
+		LineMesh->SetMaterial(0, LineBaseMaterial);
+	}
 }
 
 void AHapbeatShowcaseZ3FishingActor::BeginPlay()
@@ -165,16 +178,16 @@ void AHapbeatShowcaseZ3FishingActor::SetUpShark()
 	}
 	Shark->ApplySharkSize(SharkSizeCm);
 	Shark->SnapToTransform(GetSharkRestWorldTransform());
+	if (UCapsuleComponent* Body = Shark->GetBody())
+	{
+		OriginalLinearDamping = Body->GetLinearDamping();
+		OriginalAngularDamping = Body->GetAngularDamping();
+	}
 
-	// Tick order for one frame of hooked play: THIS actor moves the shark ->
-	// the shark measures the speed that move gave it -> the binding turns that
-	// speed into stream gain. Each link is a prerequisite of the next; without
-	// them the binding can read the previous frame's speed, which is a frame of
-	// lag on every pull.
-	Shark->AddTickPrerequisiteActor(this);
+	// The zone writes the body's velocity before the binding samples it.
 	if (Shark->HookVelocityBinding != nullptr)
 	{
-		Shark->HookVelocityBinding->AddTickPrerequisiteActor(Shark);
+		Shark->HookVelocityBinding->AddTickPrerequisiteActor(this);
 	}
 }
 
@@ -282,8 +295,7 @@ void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
 {
 	AHapbeatShowcaseCharacter* Character =
 		Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
-	UStaticMesh* RodMesh = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(
-		TEXT("Meshes"), TEXT("SM_FishingRod"));
+	UStaticMesh* RodMesh = RodMeshAsset;
 	if (Character == nullptr || RodMesh == nullptr)
 	{
 		// No Showcase character (bare level / default pawn) or no imported rod:
@@ -309,12 +321,11 @@ void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
 	MountPose.SetRotation(MountRotation.Quaternion() * FlipRotation * AlignRotation.Quaternion());
 	MountPose.SetScale3D(Scale);
 
-	Character->MountItem(RodMesh, MountPose,
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")));
+	Character->MountItem(RodMesh, MountPose, HeldItemMaterial);
 	MountedCharacter = Character;
-	// Where the line hangs from is NOT computed here: GetRodTipWorldLocation
-	// reads it off the mounted rod's finished world bounds every time, so it
-	// cannot disagree with the pose the rod was actually given.
+	// Where the line hangs from is NOT guessed here: GetRodTipWorldLocation reads
+	// the explicit RodTip socket (Unity uses an explicit RodTip Transform too),
+	// with a model-local source-coordinate fallback for old generated assets.
 }
 
 void AHapbeatShowcaseZ3FishingActor::UnmountRod()
@@ -335,46 +346,15 @@ FVector AHapbeatShowcaseZ3FishingActor::GetRodTipWorldLocation() const
 	{
 		if (const UStaticMeshComponent* Mount = Character->GetHandMount())
 		{
-			if (!RodTipLocalOffsetOverride.IsNearlyZero())
+			if (!RodTipSocketName.IsNone() && Mount->DoesSocketExist(RodTipSocketName))
 			{
-				// Hand-authored tip, in the mount's own space. The mount transform
-				// already carries the fit scale and the override is stated after
-				// it, so the offset is rotated and translated but not re-scaled.
-				return Mount->GetComponentLocation()
-					+ Mount->GetComponentQuat().RotateVector(RodTipLocalOffsetOverride);
+				return Mount->GetSocketLocation(RodTipSocketName);
 			}
 
-			// Derived tip: of the rod's eight WORLD bounding-box corners, the one
-			// furthest along the mount's forward axis.
-			//
-			// WHY NOT A LOCAL OFFSET FROM THE MESH BOUNDS (what this used to do):
-			// that offset had to be built from the same fit scale, alignment
-			// rotation and flip the mesh was mounted with, and any of them being
-			// re-derived slightly differently -- or a negative scale, or the mesh
-			// being swapped -- put the line's anchor somewhere along the rod
-			// instead of at its end. The finished bounds are the rod as it
-			// actually is on screen, so nothing about how it got there matters.
-			const FVector Forward = Mount->GetForwardVector();
-			const FBoxSphereBounds Bounds = Mount->Bounds;
-			const FVector Centre = Bounds.Origin;
-			const FVector Extent = Bounds.BoxExtent;
-
-			FVector BestCorner = Centre;
-			float BestProjection = -MAX_flt;
-			for (int32 CornerIndex = 0; CornerIndex < 8; ++CornerIndex)
+			if (bUseRodTipMeshLocalOffsetFallback)
 			{
-				const FVector Corner = Centre + FVector(
-					(CornerIndex & 1) ? Extent.X : -Extent.X,
-					(CornerIndex & 2) ? Extent.Y : -Extent.Y,
-					(CornerIndex & 4) ? Extent.Z : -Extent.Z);
-				const float Projection = static_cast<float>(FVector::DotProduct(Corner - Centre, Forward));
-				if (Projection > BestProjection)
-				{
-					BestProjection = Projection;
-					BestCorner = Corner;
-				}
+				return Mount->GetComponentTransform().TransformPosition(RodTipMeshLocalOffset);
 			}
-			return BestCorner;
 		}
 	}
 	return RodTipAnchor != nullptr ? RodTipAnchor->GetComponentLocation() : GetActorLocation();
@@ -390,6 +370,16 @@ void AHapbeatShowcaseZ3FishingActor::HandleFireReleased()
 	SetHooked(false);
 }
 
+void AHapbeatShowcaseZ3FishingActor::DebugSetHookedForCapture(bool bNewHooked)
+{
+	SetHooked(bNewHooked);
+}
+
+FVector AHapbeatShowcaseZ3FishingActor::DebugGetRodTipWorldLocation() const
+{
+	return GetRodTipWorldLocation();
+}
+
 void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 {
 	if (bNewHooked == bHooked || Shark == nullptr)
@@ -400,12 +390,23 @@ void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 
 	if (bHooked)
 	{
+		UCapsuleComponent* Body = Shark->GetBody();
+		if (Body != nullptr)
+		{
+			Body->SetSimulatePhysics(true);
+			Body->SetEnableGravity(true);
+			Body->SetLinearDamping(AttachedLinearDamping);
+			Body->SetAngularDamping(AttachedAngularDamping);
+		}
+
 		// Instant "hooked!" snap to tether range -- parity with
 		// FishingController.cs's Attach(): "_object.position = rodTip.position +
 		// Vector3.down * maxLineLength".
 		FTransform SnapTransform = Shark->GetActorTransform();
 		SnapTransform.SetLocation(GetRodTipWorldLocation() + FVector::DownVector * MaxLineLength);
 		Shark->SnapToTransform(SnapTransform);
+		PrevRodTipLocation = GetRodTipWorldLocation();
+		bHasPrevRodTipLocation = true;
 
 		if (Shark->HookSequence != nullptr)
 		{
@@ -414,6 +415,11 @@ void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 	}
 	else
 	{
+		if (UCapsuleComponent* Body = Shark->GetBody())
+		{
+			Body->SetLinearDamping(OriginalLinearDamping);
+			Body->SetAngularDamping(OriginalAngularDamping);
+		}
 		// Unity FishingController.Detach() snaps the object back to its rest pose,
 		// so every hook starts from the same place instead of from wherever the
 		// last one left it.
@@ -423,6 +429,7 @@ void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 		{
 			Shark->HookSequence->Stop(); // Phase 3: stop the loop, then the release one-shot
 		}
+		bHasPrevRodTipLocation = false;
 	}
 }
 
@@ -430,9 +437,11 @@ void AHapbeatShowcaseZ3FishingActor::OnZoneActivated()
 {
 	if (Shark != nullptr)
 	{
+		Shark->SetPhysicsEnabled(true);
 		Shark->SnapToTransform(GetSharkRestWorldTransform());
 	}
 	bHooked = false;
+	bHasPrevRodTipLocation = false;
 	// The rod goes back into the player's hand: the zone hands it back on the way
 	// out, so it has to be re-mounted on the way in.
 	bMountAttempted = false;
@@ -445,9 +454,18 @@ void AHapbeatShowcaseZ3FishingActor::OnZoneDeactivated()
 		Shark->HookSequence->Stop();
 	}
 	bHooked = false;
+	bHasPrevRodTipLocation = false;
+	if (Shark != nullptr)
+	{
+		if (UCapsuleComponent* Body = Shark->GetBody())
+		{
+			Body->SetLinearDamping(OriginalLinearDamping);
+			Body->SetAngularDamping(OriginalAngularDamping);
+		}
+		Shark->SnapToTransform(GetSharkRestWorldTransform());
+		Shark->SetPhysicsEnabled(false);
+	}
 	UnmountRod();
-	// Nothing to stop simulating: the shark is kinematic and only moves while
-	// this zone's Tick moves it, which the switcher has already disabled.
 }
 
 void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
@@ -465,7 +483,7 @@ void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
 	UpdateRodTip(DeltaSeconds);
 	if (bHooked)
 	{
-		UpdateHookedLineFollow(DeltaSeconds);
+		UpdateHookedLinePhysics(DeltaSeconds);
 	}
 	UpdateLineVisual();
 	RefreshHud(DeltaSeconds);
@@ -486,30 +504,38 @@ void AHapbeatShowcaseZ3FishingActor::UpdateRodTip(float DeltaSeconds)
 	}
 }
 
-void AHapbeatShowcaseZ3FishingActor::UpdateHookedLineFollow(float DeltaSeconds)
+void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 {
-	const UCapsuleComponent* Body = Shark->GetBody();
-	if (Body == nullptr || DeltaSeconds <= KINDA_SMALL_NUMBER)
+	UCapsuleComponent* Body = Shark->GetBody();
+	if (Body == nullptr || !Body->IsSimulatingPhysics() || DeltaSeconds <= KINDA_SMALL_NUMBER)
 	{
 		return;
 	}
 
 	const FVector RodTipPos = GetRodTipWorldLocation();
+	if (!bHasPrevRodTipLocation)
+	{
+		PrevRodTipLocation = RodTipPos;
+		bHasPrevRodTipLocation = true;
+	}
+	const FVector RodTipDelta = RodTipPos - PrevRodTipLocation;
+	PrevRodTipLocation = RodTipPos;
+
 	const FVector SharkPos = Body->GetComponentLocation();
-	const float Dist = FVector::Dist(SharkPos, RodTipPos);
+	const FVector ToShark = SharkPos - RodTipPos;
+	const float Dist = ToShark.Size();
 
 	if (Dist < MaxLineLength)
 	{
-		// Slack line: the target IS where the shark already is, so it stays put.
-		// (FishingController.cs FixedUpdate, "糸が slack: 何もしない" -- there the
-		// shark's own physics carried on; here there is no physics to carry on.)
+		// Slack line: gravity and ordinary rigid-body motion continue untouched.
 		return;
 	}
 
-	// Taut: the shark belongs one line-length straight below the rod tip. Same
-	// point Attach() snaps to, so hooking and pulling agree on where the fish
-	// hangs.
-	const FVector Target = RodTipPos + FVector::DownVector * MaxLineLength;
+	const FVector Direction = ToShark / FMath::Max(Dist, KINDA_SMALL_NUMBER);
+	FVector RodTipVelocity = RodTipDelta / DeltaSeconds;
+	RodTipVelocity = RodTipVelocity.GetClampedToMaxSize(MaxTransferSpeed);
+	FVector SharkVelocity = Body->GetPhysicsLinearVelocity() + RodTipVelocity * RodInertiaFactor;
+	const FVector Target = RodTipPos + Direction * MaxLineLength;
 
 	// Unity closes half the remaining distance PER PHYSICS TICK. Applied per
 	// FRAME that would be a different pull at every frame rate, so it is
@@ -518,11 +544,16 @@ void AHapbeatShowcaseZ3FishingActor::UpdateHookedLineFollow(float DeltaSeconds)
 	const float Keep = FMath::Clamp(1.0f - LineFollowLerpPerTick, 0.0f, 1.0f);
 	const float Alpha = 1.0f - FMath::Pow(Keep, DeltaSeconds * UnityReferenceHz);
 
-	FTransform NewTransform = Shark->GetActorTransform();
-	// Written, NOT teleported: this is ordinary motion and the velocity estimate
-	// must see it (that speed is what drives the hook loop's gain).
-	NewTransform.SetLocation(FMath::Lerp(SharkPos, Target, Alpha));
-	Shark->SetActorTransform(NewTransform, /*bSweep=*/false);
+	Body->SetWorldLocation(FMath::Lerp(SharkPos, Target, Alpha), /*bSweep=*/false,
+		nullptr, ETeleportType::TeleportPhysics);
+
+	// Remove 70% of velocity that is trying to lengthen an already-taut line.
+	const float OutwardSpeed = FVector::DotProduct(SharkVelocity, Direction);
+	if (OutwardSpeed > 0.0f)
+	{
+		SharkVelocity -= Direction * OutwardSpeed * 0.7f;
+	}
+	Body->SetPhysicsLinearVelocity(SharkVelocity);
 
 	// Auto-release when the line is overstretched. Unity has no such rule (you
 	// let go when you let go), so this is opt-in.
@@ -554,19 +585,16 @@ void AHapbeatShowcaseZ3FishingActor::SetUpLineVisual()
 	LineMeshLocalLengthCm = Bounds.BoxExtent.Z * 2.0f;
 	LineMeshLocalDiameterCm = FMath::Max(Bounds.BoxExtent.X, Bounds.BoxExtent.Y) * 2.0f;
 
-	// Two dynamic instances of the Showcase's own master material, so the line
+	// Two dynamic instances of the constructor-loaded Showcase master, so the line
 	// keeps the unhooked-blue / hooked-green distinction the debug line had.
-	// Absent art leaves the mesh on its default material -- the line is still
-	// there, it is just one colour (see LoadShowcaseAsset's doc).
-	if (UMaterialInterface* Base =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("M_ShowcaseBase")))
+	if (LineBaseMaterial != nullptr)
 	{
-		LineSlackMaterial = UMaterialInstanceDynamic::Create(Base, this);
+		LineSlackMaterial = UMaterialInstanceDynamic::Create(LineBaseMaterial, this);
 		if (LineSlackMaterial != nullptr)
 		{
 			LineSlackMaterial->SetVectorParameterValue(TEXT("Tint"), LineSlackColor);
 		}
-		LineHookedMaterial = UMaterialInstanceDynamic::Create(Base, this);
+		LineHookedMaterial = UMaterialInstanceDynamic::Create(LineBaseMaterial, this);
 		if (LineHookedMaterial != nullptr)
 		{
 			LineHookedMaterial->SetVectorParameterValue(TEXT("Tint"), LineHookedColor);
@@ -681,22 +709,17 @@ FTransform AHapbeatShowcaseZ3FishingActor::GetPlayerSpawnRelative() const
 
 AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor()
 {
-	// Ticks to publish its own velocity (see Tick), which is the only way a
-	// kinematic body can report one.
-	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bCanEverTick = false;
 
 	Body = CreateDefaultSubobject<UCapsuleComponent>(TEXT("Body"));
 	RootComponent = Body;
 	Body->SetMobility(EComponentMobility::Movable);
-	// Kinematic: query-only, never simulated. The zone writes the pose, so a
-	// solver would only fight it -- and QueryOnly still answers the overlap /
-	// trace tests anything else in the level might do against the shark.
 	Body->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
-	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	// The FLAG, not SetSimulatePhysics(): that call on an unregistered component
-	// is order-dependent and logs against a BodyInstance that does not exist yet.
-	Body->BodyInstance.bSimulatePhysics = false;
-	Body->SetEnableGravity(false);
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	Body->BodyInstance.bSimulatePhysics = true;
+	Body->BodyInstance.bEnableGravity = true;
+	Body->SetLinearDamping(0.0f);
+	Body->SetAngularDamping(0.05f);
 
 	SharkMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SharkMesh"));
 	SharkMesh->SetupAttachment(Body);
@@ -721,41 +744,53 @@ AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor()
 	HookVelocityBinding->OutputParameter = EHapbeatBindingOutput::StreamGain;
 	HookVelocityBinding->OutputMin = 0.0f;
 	HookVelocityBinding->OutputMax = 1.5f;
+	HookVelocityBinding->TargetTrigger = HookSequence;
+
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> SharkAsset(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_Shark.SM_Shark"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> SharkMain(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_Shark_Main.MI_Shark_Main"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> SharkDark(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_Shark_Dark.MI_Shark_Dark"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> SharkLight(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_Shark_Light.MI_Shark_Light"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> SharkEyes(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_Shark_Eyes.MI_Shark_Eyes"));
+	if (SharkAsset.Succeeded())
+	{
+		SharkMesh->SetStaticMesh(SharkAsset.Object);
+		const TArray<FStaticMaterial>& Slots = SharkAsset.Object->GetStaticMaterials();
+		for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
+		{
+			const FString SlotName = Slots[SlotIndex].MaterialSlotName.ToString()
+				+ TEXT("|") + Slots[SlotIndex].ImportedMaterialSlotName.ToString();
+			UMaterialInterface* SlotMaterial = SharkMain.Object;
+			if (SlotName.Contains(TEXT("Eyes")))
+			{
+				SlotMaterial = SharkEyes.Object;
+			}
+			else if (SlotName.Contains(TEXT("Shark_Dark")))
+			{
+				SlotMaterial = SharkDark.Object;
+			}
+			else if (SlotName.Contains(TEXT("Shark_Light")))
+			{
+				SlotMaterial = SharkLight.Object;
+			}
+			SharkMesh->SetMaterial(SlotIndex, SlotMaterial);
+		}
+	}
 }
 
 void AHapbeatShowcaseZ3SharkActor::BeginPlay()
 {
 	Super::BeginPlay();
-
-	// Seed the velocity estimate from where the shark actually starts, so the
-	// first Tick reports 0 instead of the distance from the world origin.
-	PrevWorldLocation = GetActorLocation();
-	bHasPrevWorldLocation = true;
-}
-
-void AHapbeatShowcaseZ3SharkActor::Tick(float DeltaSeconds)
-{
-	Super::Tick(DeltaSeconds);
-
-	if (Body == nullptr)
+	if (Body != nullptr)
 	{
-		return;
+		Body->SetMassOverrideInKg(NAME_None, 1.0f, true);
+		Body->SetSimulatePhysics(true);
+		Body->SetEnableGravity(true);
 	}
-
-	const FVector Current = GetActorLocation();
-	FVector Velocity = FVector::ZeroVector;
-	if (bHasPrevWorldLocation && DeltaSeconds > KINDA_SMALL_NUMBER)
-	{
-		Velocity = (Current - PrevWorldLocation) / DeltaSeconds;
-	}
-	PrevWorldLocation = Current;
-	bHasPrevWorldLocation = true;
-
-	// USceneComponent::ComponentVelocity is what GetComponentVelocity() returns,
-	// and is the ONLY velocity a non-simulating body has to offer. The gain
-	// binding reads it (see UHapbeatParameterBinding VelocityMagnitude), so this
-	// assignment is what makes a thrashing shark feel like one.
-	Body->ComponentVelocity = Velocity;
 }
 
 void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
@@ -773,7 +808,7 @@ void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
 		return;
 	}
 
-	UStaticMesh* Mesh = FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Shark"));
+	UStaticMesh* Mesh = SharkMesh->GetStaticMesh();
 	if (Mesh == nullptr)
 	{
 		// No imported art: an engine cube standing in for the silhouette, fitted
@@ -785,62 +820,6 @@ void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
 		}
 	}
 	SharkMesh->SetStaticMesh(Mesh);
-
-	// SM_Shark comes in with four slots named after the source .mtl
-	// (Shark_Main / Shark_Dark / Shark_Light / Eyes). EVERY slot is filled here,
-	// driven by the slot's own name -- the previous per-name-with-fallback-INDEX
-	// form left slots untouched whenever the importer's naming or ordering did
-	// not match what it assumed, and an untouched slot keeps UE's default
-	// material: the shark read plain white in PIE.
-	UMaterialInterface* SharkMain =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Main"));
-	UMaterialInterface* SharkDark =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Dark"));
-	UMaterialInterface* SharkLight =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Light"));
-	UMaterialInterface* SharkEyes =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Eyes"));
-
-	const TArray<FStaticMaterial>& Slots = Mesh->GetStaticMaterials();
-	for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
-	{
-		const FStaticMaterial& Slot = Slots[SlotIndex];
-		const FString SlotName = Slot.MaterialSlotName.ToString()
-			+ TEXT("|") + Slot.ImportedMaterialSlotName.ToString();
-
-		// Kept, not temporary debugging: when a replacement model paints up
-		// wrong, the first question is what its slots are actually called, and
-		// this is the only place that can answer it. Once per shark.
-		UE_LOG(LogHapbeatShowcaseZ3, Log, TEXT("Z3 shark material slot %d: '%s'"), SlotIndex, *SlotName);
-
-		// Substring, not equality: the importer prefixes / suffixes slot names.
-		// Eyes is tested before the body colours only for readability -- the
-		// four .mtl names do not overlap.
-		UMaterialInterface* SlotMaterial = SharkMain;
-		if (SlotName.Contains(TEXT("Eyes")))
-		{
-			SlotMaterial = SharkEyes;
-		}
-		else if (SlotName.Contains(TEXT("Shark_Dark")))
-		{
-			SlotMaterial = SharkDark;
-		}
-		else if (SlotName.Contains(TEXT("Shark_Light")))
-		{
-			SlotMaterial = SharkLight;
-		}
-		else if (SlotName.Contains(TEXT("Shark_Main")))
-		{
-			SlotMaterial = SharkMain;
-		}
-		// Anything else falls through to the body colour: a slot nobody
-		// recognises is still part of the shark, and body blue is a far better
-		// wrong answer than UE's default grey.
-		if (SlotMaterial != nullptr)
-		{
-			SharkMesh->SetMaterial(SlotIndex, SlotMaterial);
-		}
-	}
 
 	// Fit to the finished size (longest axis = the body length), then point that
 	// axis forward IN WORLD TERMS. The actor is pitched by BodyPitchDegrees to
@@ -862,15 +841,24 @@ void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
 void AHapbeatShowcaseZ3SharkActor::SnapToTransform(const FTransform& NewTransform)
 {
 	SetActorTransform(NewTransform, /*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
-
-	// Re-seeded, not just moved: a teleport is not motion, and left alone the
-	// next Tick would divide the whole jump by one frame and hand the gain
-	// binding a speed of many metres per second -- a full-strength haptic burst
-	// on every hook and every release.
-	PrevWorldLocation = GetActorLocation();
-	bHasPrevWorldLocation = true;
 	if (Body != nullptr)
 	{
-		Body->ComponentVelocity = FVector::ZeroVector;
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 	}
+}
+
+void AHapbeatShowcaseZ3SharkActor::SetPhysicsEnabled(bool bEnabled)
+{
+	if (Body == nullptr)
+	{
+		return;
+	}
+	if (!bEnabled)
+	{
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+	}
+	Body->SetSimulatePhysics(bEnabled);
+	Body->SetEnableGravity(bEnabled);
 }

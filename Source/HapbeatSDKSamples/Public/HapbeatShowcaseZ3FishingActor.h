@@ -14,8 +14,10 @@ class UHapbeatClip;
 class UHapbeatEventMap;
 class UHapbeatParameterBinding;
 class UHapbeatSequenceComponent;
+class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class USceneComponent;
+class UStaticMesh;
 class UStaticMeshComponent;
 
 /**
@@ -24,22 +26,11 @@ class UStaticMeshComponent;
  * and a shark hangs in front of them. HOLDING THE LEFT MOUSE BUTTON hooks it and
  * RELEASING lets go -- Unity FishingController.cs's LMB-hold, not a toggle.
  *
- * THE SHARK IS KINEMATIC: no rigid-body simulation, query-only collision, and
- * its pose is written every Tick (see UpdateHookedLineFollow). This is a
- * deliberate departure from Unity, whose FishingObject is a Rigidbody with
- * gravity and damping -- decided for this port because everything the zone
- * needs is a fish that hangs still until it is pulled and then follows the rod:
- * the simulated version spent its time being corrected by spring and damping
- * terms that had to be re-tuned away from Unity's anyway (a solver-fought
- * position Lerp does not survive translation), and it could still drift
- * somewhere unrecoverable.
- *
- * Unhooked it rests at SharkRestAnchor and does not move at all. Hooked, its
- * target is the point one line-length below the rod tip; while the line is
- * slack (it is already closer than MaxLineLength) the target is where it
- * already is, so it stays put, and once taut it is eased toward that point --
- * the kinematic form of FishingController.cs's per-tick
- * Vector3.Lerp(pos, snapPos, 0.5f).
+ * The shark is a simulated rigid body, matching Unity FishingController.cs:
+ * gravity acts while the line is slack; once taut, rod-tip velocity is
+ * transferred to the shark, its position is softened back to the line radius,
+ * and outward radial velocity is damped. Releasing restores the body's normal
+ * damping and rest pose.
  *
  * Without an AHapbeatShowcaseCharacter to hold the rod (the zone dropped into a
  * bare level, or before the pawn is possessed) the line hangs from RodTipAnchor
@@ -52,7 +43,7 @@ class UStaticMeshComponent;
  * Two behaviours this zone once had unconditionally (rod-tip sway, line
  * breaking) are UE-side additions Unity does not have, and are off by default --
  * see the bEnable* switches. A third, an idle wander on the shark, went with the
- * simulation: it was impulse-driven and a kinematic body has nothing to push.
+ * simulation and is no longer part of the Unity-parity behaviour.
  *
  * Haptics: a UHapbeatSequenceComponent (3-phase: hook-start one-shot / hook
  * loop / hook-release one-shot) plus a UHapbeatParameterBinding
@@ -95,6 +86,14 @@ public:
 	virtual void OnZoneActivated() override;
 	virtual void OnZoneDeactivated() override;
 
+	/** Capture/verification aid: take the same hook/release path as LMB without synthesising OS input. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void DebugSetHookedForCapture(bool bNewHooked);
+
+	/** Verification aid: the exact endpoint currently feeding the line simulation and visual. */
+	UFUNCTION(BlueprintPure, Category = "Hapbeat|Showcase")
+	FVector DebugGetRodTipWorldLocation() const;
+
 	// ---- Line physics (FishingController.cs's [Header("Line physics")] values, x100 for cm) ----
 
 	/** Unity _maxLineLength 2 m -> 200 cm. Distance from the rod tip beyond which the line goes taut. */
@@ -120,12 +119,28 @@ public:
 	 * per-frame constant.
 	 *
 	 * The actual per-frame alpha is derived from it so the pull feels the same
-	 * at any frame rate (see UpdateHookedLineFollow): a raw 0.5 per FRAME would
+	 * at any frame rate (see UpdateHookedLinePhysics): a raw 0.5 per FRAME would
 	 * make the fish twice as eager at 120 fps as at 60. 1 = snap straight to the
 	 * target with no lag at all.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.01", ClampMax = "1.0"))
 	float LineFollowLerpPerTick = 0.5f;
+
+	/** Unity _rodInertiaFactor. Fraction of rod-tip velocity transferred while the line is taut. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float RodInertiaFactor = 0.15f;
+
+	/** Unity _maxTransferSpeed 1 m/s -> 100 cm/s. Caps rod motion before transfer. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0"))
+	float MaxTransferSpeed = 100.0f;
+
+	/** Unity FishingObject attached drag. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0"))
+	float AttachedLinearDamping = 2.5f;
+
+	/** Unity FishingObject attached angular drag. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0"))
+	float AttachedAngularDamping = 0.5f;
 
 	/** Extra distance (uu) beyond MaxLineLength that snaps the line and auto-releases the hook. Off by default -- see bEnableLineBreak. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0", EditCondition = "bEnableLineBreak"))
@@ -186,24 +201,37 @@ public:
 	 * Turn the aligned rod 180 degrees about its up axis before the mount pose is
 	 * applied. Longest-axis alignment only decides which AXIS runs forward, not
 	 * which END of it leads, so a model authored the other way round is held
-	 * butt-first. True for SM_FishingRod: the PIE capture read the right way
-	 * round, but in the headset the rod is held butt-forward -- the model's
-	 * longest axis runs from tip to butt, which alignment alone cannot tell.
-	 * Kept editable so a replacement mesh can be corrected without code. The
-	 * derived rod-tip offset follows this flag, so the line still hangs from the
-	 * end that is actually in front.
+	 * butt-first. False for SM_FishingRod: its thin physical tip is the positive
+	 * end of the longest (+Y) mesh axis, which the automatic alignment already
+	 * points forward. Kept editable so a replacement mesh can be corrected
+	 * without code; the RodTip socket continues to identify the same physical
+	 * endpoint whichever pose is selected.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
-	bool bFlipRodForward = true;
+	bool bFlipRodForward = false;
 
 	/**
-	 * Rod-tip position in the MOUNT component's space. Left at zero (the
-	 * default) the tip is read off the mounted rod's finished world bounds: the
-	 * corner furthest along the mount's forward axis. Set it non-zero for a rod
-	 * whose tip is not at the end of its bounding box.
+	 * Static Mesh socket used as the fishing-line endpoint. Add or move this
+	 * socket in SM_FishingRod's Socket Manager when an artist needs to tune the
+	 * endpoint by eye. This is the same explicit-marker arrangement as Unity's
+	 * RodTip Transform and avoids guessing a semantic tip from mesh bounds.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
-	FVector RodTipLocalOffsetOverride = FVector::ZeroVector;
+	FName RodTipSocketName = FName(TEXT("RodTip"));
+
+	/** Use RodTipMeshLocalOffset when the mesh has no RodTip socket. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
+	bool bUseRodTipMeshLocalOffsetFallback = true;
+
+	/**
+	 * Fallback endpoint in SM_FishingRod's mesh-local coordinates. UE retains
+	 * this OBJ's source coordinates in the render mesh and expresses its x100
+	 * unit conversion in the component fit scale, so the thin physical tip stays
+	 * at local +Y = 7.000275. A replacement mesh should add a socket instead.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod",
+		meta = (EditCondition = "bUseRodTipMeshLocalOffsetFallback"))
+	FVector RodTipMeshLocalOffset = FVector(0.0f, 7.000275f, 0.0f);
 
 	// ---- Shark ----
 
@@ -264,8 +292,8 @@ private:
 	/** Sway the fallback anchor (opt-in). */
 	void UpdateRodTip(float DeltaSeconds);
 
-	/** Ease the kinematic shark toward the taut-line target (see class comment); a no-op while the line is slack. */
-	void UpdateHookedLineFollow(float DeltaSeconds);
+	/** Apply Unity FishingController.cs's taut-line correction to the simulated shark. */
+	void UpdateHookedLinePhysics(float DeltaSeconds);
 
 	/** Measure the line mesh and build its two tint instances (BeginPlay). */
 	void SetUpLineVisual();
@@ -344,6 +372,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> HookReleaseClip;
 
+	/** Shipped fixed art references; constructor-loaded so BeginPlay does no asset lookup. */
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Fishing|Assets")
+	TObjectPtr<UStaticMesh> RodMeshAsset;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Fishing|Assets")
+	TObjectPtr<UMaterialInterface> HeldItemMaterial;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Fishing|Assets")
+	TObjectPtr<UMaterialInterface> LineBaseMaterial;
+
 	// ---- runtime state ----
 
 	/** Cached SharkSlot->GetChildActor(); the thing the line physics moves. */
@@ -351,6 +387,11 @@ private:
 	TObjectPtr<AHapbeatShowcaseZ3SharkActor> Shark;
 
 	bool bHooked = false;
+
+	FVector PrevRodTipLocation = FVector::ZeroVector;
+	bool bHasPrevRodTipLocation = false;
+	float OriginalLinearDamping = 0.0f;
+	float OriginalAngularDamping = 0.05f;
 
 	/** The character carrying the rod, when there is one; drives GetRodTipWorldLocation(). */
 	TWeakObjectPtr<AHapbeatShowcaseCharacter> MountedCharacter;
@@ -381,8 +422,7 @@ private:
 };
 
 /**
- * The Z3 shark: a capsule body (kinematic -- no simulation, query-only
- * collision; the zone writes its pose), a mesh child for the look,
+ * The Z3 shark: a simulated capsule body with gravity, a mesh child for the look,
  * and the zone's two Hapbeat components -- which have to live HERE rather than
  * on the zone actor because UHapbeatParameterBinding reads its owner's root
  * velocity and UHapbeatTriggerComponent::PreSeedBindings() only scans its own
@@ -422,12 +462,11 @@ public:
 	/** Fit the mesh to SizeCm (longest axis forward) and size the capsule to match. */
 	void ApplySharkSize(const FVector& SizeCm);
 
-	/**
-	 * Put the shark somewhere, kinematically. Also RE-SEEDS the velocity
-	 * estimate, so a teleport (the hook snap, the rest-pose snap) does not read
-	 * as one enormous frame of motion and slam the gain binding to full.
-	 */
+	/** Teleport the shark and clear rigid-body linear/angular velocity. */
 	void SnapToTransform(const FTransform& NewTransform);
+
+	/** Enable physics while this zone is active; disable it while hidden. */
+	void SetPhysicsEnabled(bool bEnabled);
 
 	/** The body the zone moves and the line visual measures from. */
 	UCapsuleComponent* GetBody() const { return Body; }
@@ -435,30 +474,7 @@ public:
 protected:
 	virtual void BeginPlay() override;
 
-	/**
-	 * Measures the shark's own speed from its frame-to-frame world position and
-	 * publishes it as the root's ComponentVelocity.
-	 *
-	 * WHY THIS EXISTS: nothing else can report it. A kinematic body's PHYSICS
-	 * velocity is permanently zero however far it is moved, and the gain binding
-	 * (VelocityMagnitude -> StreamGain) reads exactly that -- so a thrashing
-	 * shark would be felt as a motionless one. UHapbeatParameterBinding falls
-	 * back to GetComponentVelocity() for a non-simulating body, and this is what
-	 * fills it in.
-	 *
-	 * ORDERING: this must run AFTER the zone has moved the shark this frame and
-	 * BEFORE the binding samples it, which the zone arranges with tick
-	 * prerequisites (see AHapbeatShowcaseZ3FishingActor::SetUpShark).
-	 */
-	virtual void Tick(float DeltaSeconds) override;
-
 private:
-	/** Previous world location for the velocity estimate; re-seeded by SnapToTransform. */
-	FVector PrevWorldLocation = FVector::ZeroVector;
-
-	/** False until PrevWorldLocation holds a real sample, so the first frame reports 0 rather than a spike. */
-	bool bHasPrevWorldLocation = false;
-
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UCapsuleComponent> Body;
 

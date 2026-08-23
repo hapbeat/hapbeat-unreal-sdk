@@ -96,11 +96,11 @@ public:
 
 	/** True once Stop() has been called (or the clip finished on its own for non-loop). */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
-	bool IsStopped() const { return bStopped; }
+	bool IsStopped() const;
 
 	/** True while the stream is still active (not stopped). */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
-	bool IsActive() const { return !bStopped; }
+	bool IsActive() const { return !IsStopped(); }
 
 	/**
 	 * Per-channel LINEAR balance coefficients derived from Pan. Returns
@@ -119,8 +119,8 @@ public:
 	 * (there is no trigger to attribute it to).
 	 *
 	 * This is what scopes a UHapbeatParameterBinding to the stream it actually
-	 * describes. v1 runs a single active session, so without an origin every
-	 * binding in the level would write to whatever is playing -- a Z4 slider
+	 * describes. Multiple sources may share one session, so without an origin an
+	 * owner-scoped binding could write to the wrong source -- a Z4 slider
 	 * binding, ticking in a zone nobody is looking at, silently overwriting the
 	 * gain of the Z3 loop every frame. Unity scopes the same way (a binding is
 	 * linked to its owner entry / preset owner); this is the UE equivalent of

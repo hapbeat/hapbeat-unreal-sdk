@@ -5,6 +5,7 @@
 #include "HapbeatConfig.h"
 #include "HapbeatClip.h"
 #include "HapbeatNetInterfaces.h"
+#include "HapbeatNetworkSafety.h"
 #include "HapbeatEventEntry.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatStreamPlayback.h"
@@ -558,6 +559,18 @@ void UHapbeatSubsystem::Ping()
 	SendDiscoveryPacket(FHapbeatProtocol::BuildPing(PingSeq, TimestampUs));
 }
 
+UHapbeatStreamPlayback* UHapbeatSubsystem::GetActivePlayback() const
+{
+	for (UHapbeatStreamPlayback* Playback : ActivePlaybacks)
+	{
+		if (Playback != nullptr && Playback->IsActive())
+		{
+			return Playback;
+		}
+	}
+	return nullptr;
+}
+
 UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float BaselineGain, float InitialGain,
 	const FString& Target, bool bLoop, float InitialPan)
 {
@@ -567,7 +580,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 		return nullptr;
 	}
 
-	// GC-rooted via ActivePlayback for the stream's lifetime (the caller may not
+	// GC-rooted via ActivePlaybacks for the source's lifetime (the caller may not
 	// retain it). Created before the session so the delayed path in
 	// FirePendingSend can reuse StartStreamSession with a handle that already
 	// exists — this public entry point is otherwise unchanged.
@@ -593,13 +606,6 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 		return false;
 	}
 
-	// Single active session, REPLACE semantics: end any current stream first
-	// (joins the old thread before starting a new one).
-	if (StreamRunnable != nullptr)
-	{
-		StopStream();
-	}
-
 	// The stream thread must NOT lazily Connect() itself (that touches
 	// Receiver/tickers/etc — game-thread-only machinery) — ensure the socket
 	// exists here, on the game thread, before spinning the thread up. Same
@@ -619,16 +625,50 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 		}
 	}
 
-	// The UPROPERTY keeps the handle rooted for the stream's lifetime (the caller
-	// may not retain it).
-	ActivePlayback = Playback;
-
 	// Resolve the global address override (if any) BEFORE the streamer captures
 	// Target — it stores this string by value and reuses it, unmodified, for
 	// every STREAM_BEGIN it sends (including the loop-wrap path, which reuses
 	// the session rather than re-resolving). Triggers/EventMap entries stay
 	// untouched: only the wire-bound copy is rewritten.
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
+
+	// Unity parity: compatible calls join the one wire session and get an
+	// independent playback handle. Format/target mismatches are rejected instead
+	// of killing what is already playing. A runnable that has naturally finished
+	// is joined/cleared first so this call can establish the next session.
+	if (StreamRunnable != nullptr && StreamRunnable->IsFinished())
+	{
+		StopStream();
+	}
+	if (StreamRunnable != nullptr)
+	{
+		if (!StreamRunnable->IsCompatible(Clip->SampleRate, Clip->NumChannels, ResolvedTarget))
+		{
+			UE_LOG(LogHapbeat, Warning,
+				TEXT("StreamClip: rate/channel/target mismatch with active session "
+					"(session source format/target must match); rejecting new source."));
+			return false;
+		}
+
+		if (StreamRunnable->AddSource(
+			TArray<uint8>(Clip->Pcm16), bLoop, Playback->GetMirror()))
+		{
+			ActivePlaybacks.Add(Playback);
+			UE_LOG(LogHapbeat, Log,
+				TEXT("Stream source added: %dHz %dch, baseline=%.3f gain=%.3f, target=%s, loop=%d, active sources=%d"),
+				Clip->SampleRate, Clip->NumChannels, Playback->BaselineGain, Playback->GetGain(),
+				ResolvedTarget.IsEmpty() ? TEXT("all") : *ResolvedTarget, bLoop ? 1 : 0,
+				ActivePlaybacks.Num());
+			return true;
+		}
+
+		// The worker atomically closed admission after our IsFinished() check.
+		// Join its already-ending session, then continue below as a new session.
+		StopStream();
+	}
+
+	// Root the first source before the worker can naturally finish it.
+	ActivePlaybacks.Add(Playback);
 
 	// Snapshot the unicast target list for THIS session before the thread
 	// starts (Unity db6fd31 seeds SetStreamUnicastTargets at the same point).
@@ -675,7 +715,7 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 		UE_LOG(LogHapbeat, Warning, TEXT("StreamClip: failed to create the stream thread; aborting."));
 		delete StreamRunnable;
 		StreamRunnable = nullptr;
-		ActivePlayback = nullptr;
+		ActivePlaybacks.RemoveSingleSwap(Playback, /*bAllowShrinking=*/false);
 		return false;
 	}
 
@@ -687,15 +727,23 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 			FTickerDelegate::CreateUObject(this, &UHapbeatSubsystem::TickStream), 0.0f);
 	}
 
-	UE_LOG(LogHapbeat, Log, TEXT("Stream begin: %dHz %dch, baseline=%.3f gain=%.3f, target=%s, loop=%d"),
+	const TCHAR* Route = !bStreamUnicast ? TEXT("broadcast (configured)")
+		: (!bStreamTargetsSnapshotted ? TEXT("broadcast fallback")
+			: (StreamUnicastTargets.Num() > 0 ? TEXT("unicast") : TEXT("filtered; no destination")));
+	UE_LOG(LogHapbeat, Log, TEXT("Stream begin: %dHz %dch, baseline=%.3f gain=%.3f, target=%s, loop=%d, route=%s"),
 		Clip->SampleRate, Clip->NumChannels, Playback->BaselineGain, Playback->GetGain(),
-		Target.IsEmpty() ? TEXT("broadcast") : *Target, bLoop ? 1 : 0);
+		ResolvedTarget.IsEmpty() ? TEXT("all") : *ResolvedTarget, bLoop ? 1 : 0, Route);
 
 	return true;
 }
 
 bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 {
+	ActivePlaybacks.RemoveAllSwap([](const TObjectPtr<UHapbeatStreamPlayback>& Playback)
+	{
+		return Playback == nullptr || Playback->IsStopped();
+	}, /*bAllowShrinking=*/false);
+
 	if (StreamRunnable == nullptr)
 	{
 		// Nothing to drive — auto-unregister this ticker.
@@ -742,11 +790,14 @@ void UHapbeatSubsystem::StopStream()
 		StreamRunnable = nullptr;
 	}
 
-	if (ActivePlayback != nullptr)
+	for (UHapbeatStreamPlayback* Playback : ActivePlaybacks)
 	{
-		ActivePlayback->Stop();
-		ActivePlayback = nullptr;
+		if (Playback != nullptr)
+		{
+			Playback->Stop();
+		}
 	}
+	ActivePlaybacks.Empty();
 
 	// Remove the ticker explicitly. Callers from OUTSIDE the tick callback
 	// (StreamClip's replace path, Deinitialize) land here with a valid handle.
@@ -1049,6 +1100,11 @@ FString UHapbeatSubsystem::AppNameForWire() const
 
 void UHapbeatSubsystem::SendCommandPacket(const TArray<uint8>& Packet, const FString& ResolvedTarget)
 {
+	if (HapbeatIsNetworkSuppressedForEditor())
+	{
+		return;
+	}
+
 	// (a) Feature off -> plain broadcast, exactly as before this existed.
 	if (!bCommandUnicast)
 	{
@@ -1129,12 +1185,14 @@ void UHapbeatSubsystem::RefreshStreamUnicastTargets(const FString& ResolvedTarge
 	bStreamTargetsSnapshotted = false;
 	if (!bStreamUnicast)
 	{
+		UE_LOG(LogHapbeat, Log, TEXT("Stream route: broadcast because Stream Unicast is disabled."));
 		return; // feature off -> no snapshot -> SendStreamPacket broadcasts
 	}
 
 	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
 	if (SocketSubsystem == nullptr)
 	{
+		UE_LOG(LogHapbeat, Warning, TEXT("Stream route: broadcast fallback because the socket subsystem is unavailable."));
 		return;
 	}
 
@@ -1196,10 +1254,20 @@ void UHapbeatSubsystem::RefreshStreamUnicastTargets(const FString& ResolvedTarge
 			TEXT("Stream unicast: all %d live device(s) filtered out by target '%s'; this session sends nowhere."),
 			SkippedByAddress, *ResolvedTarget);
 	}
+	else
+	{
+		UE_LOG(LogHapbeat, Log,
+			TEXT("Stream route: broadcast fallback because no live device has replied to PING yet."));
+	}
 }
 
 void UHapbeatSubsystem::SendStreamPacket(const TArray<uint8>& Packet)
 {
+	if (HapbeatIsNetworkSuppressedForEditor())
+	{
+		return;
+	}
+
 	// Three-state (see the header): no snapshot -> broadcast; snapshot with no
 	// surviving target -> send NOWHERE (the filter said this stream isn't for
 	// anyone here); snapshot with targets -> unicast below.
@@ -1277,6 +1345,11 @@ void UHapbeatSubsystem::LockRouteFor(const FString& DeviceIp)
 
 void UHapbeatSubsystem::SendDiscoveryPacket(const TArray<uint8>& Packet)
 {
+	if (HapbeatIsNetworkSuppressedForEditor())
+	{
+		return;
+	}
+
 	if (Socket == nullptr)
 	{
 		if (bShuttingDown)
@@ -1311,6 +1384,11 @@ void UHapbeatSubsystem::SendDiscoveryPacket(const TArray<uint8>& Packet)
 
 void UHapbeatSubsystem::SendPacket(const TArray<uint8>& Packet)
 {
+	if (HapbeatIsNetworkSuppressedForEditor())
+	{
+		return;
+	}
+
 	if (Socket == nullptr)
 	{
 		if (bShuttingDown)

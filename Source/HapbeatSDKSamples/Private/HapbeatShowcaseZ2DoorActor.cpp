@@ -31,7 +31,9 @@ namespace
 	 * zone's width axis (Y) and its thickness axis becomes X -- which puts the
 	 * door's face towards the player, who stands on -X.
 	 */
-	constexpr float AssemblyYawDegrees = 90.0f;
+	// -90 puts the hinge on the player's LEFT (-Y) and the handle on their RIGHT
+	// (+Y) when they stand at PlayerSpawn and face +X through the doorway.
+	constexpr float AssemblyYawDegrees = -90.0f;
 
 	/**
 	 * The hinge, in the FBX's frame: the leaf's +X edge
@@ -129,13 +131,16 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 	{
 		EventMapOverride = DefaultEventMap.Object;
 	}
+
+	// Fixed Showcase art is constructor-assigned so the actor is complete in the
+	// editor and Play does not synchronously resolve meshes/materials/SFX.
+	ApplyShowcaseAssets();
 }
 
 void AHapbeatShowcaseZ2DoorActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	ApplyShowcaseAssets();
 	BuildEventMap();
 	BindInput();
 
@@ -144,8 +149,14 @@ void AHapbeatShowcaseZ2DoorActor::BeginPlay()
 
 void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 {
-	UMaterialInterface* DoorMaterial =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> DoorMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_DefaultMaterial.MI_DefaultMaterial"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> LeafMesh(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_Door.SM_Door"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> FrameMesh(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_DoorFrame.SM_DoorFrame"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> HandleMesh(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_DoorHandle.SM_DoorHandle"));
 
 	// Three separate meshes out of Door.fbx (imported with Combine Meshes OFF).
 	// The leaf has to be its own asset for any of this to work: a leaf welded to
@@ -156,45 +167,42 @@ void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 	// to that origin, and the assembly's yaw lives on the frame and the hinge
 	// (see the class comment). Fitting them to invented box sizes -- what Phase 2
 	// did -- is exactly what broke the fit between leaf and frame.
-	if (UStaticMesh* LeafMesh =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_Door")))
+	if (LeafMesh.Succeeded())
 	{
 		if (DoorLeafMesh != nullptr)
 		{
-			DoorLeafMesh->SetStaticMesh(LeafMesh);
+			DoorLeafMesh->SetStaticMesh(LeafMesh.Object);
 			DoorLeafMesh->SetRelativeScale3D(FVector::OneVector);
 			DoorLeafMesh->SetRelativeRotation(FRotator::ZeroRotator);
 			// Back to the shared origin: the hinge sits at native X = +66.1, so the
 			// leaf sits at -66.1 within it, i.e. exactly where the FBX authored it.
 			DoorLeafMesh->SetRelativeLocation(FVector(-HingeNativeXCm, 0.0f, 0.0f));
 			DoorLeafMesh->SetVisibility(true);
-			if (DoorMaterial != nullptr)
+			if (DoorMaterial.Succeeded())
 			{
-				DoorLeafMesh->SetMaterial(0, DoorMaterial);
+				DoorLeafMesh->SetMaterial(0, DoorMaterial.Object);
 			}
 		}
 	}
 
-	if (UStaticMesh* FrameMesh =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_DoorFrame")))
+	if (FrameMesh.Succeeded())
 	{
 		if (DoorFrameMesh != nullptr)
 		{
 			// Authored size, authored position: the constructor already gave this
 			// component the assembly yaw and a zero offset, which is the shared
 			// origin. Its own geometry puts the sill on the floor.
-			DoorFrameMesh->SetStaticMesh(FrameMesh);
+			DoorFrameMesh->SetStaticMesh(FrameMesh.Object);
 			DoorFrameMesh->SetRelativeScale3D(FVector::OneVector);
 			DoorFrameMesh->SetVisibility(true);
-			if (DoorMaterial != nullptr)
+			if (DoorMaterial.Succeeded())
 			{
-				DoorFrameMesh->SetMaterial(0, DoorMaterial);
+				DoorFrameMesh->SetMaterial(0, DoorMaterial.Object);
 			}
 		}
 	}
 
-	if (UStaticMesh* HandleMesh =
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UStaticMesh>(TEXT("Meshes"), TEXT("SM_DoorHandle")))
+	if (HandleMesh.Succeeded())
 	{
 		if (DoorHandleMesh != nullptr)
 		{
@@ -204,24 +212,30 @@ void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 			// half, opposite the hinge at +66.1). Re-applying the leaf's hinge
 			// offset here -- what the previous version did -- moved the knob to
 			// native x ~ +27.6, onto the hinge side, which is what PIE showed.
-			DoorHandleMesh->SetStaticMesh(HandleMesh);
+			DoorHandleMesh->SetStaticMesh(HandleMesh.Object);
 			DoorHandleMesh->SetRelativeScale3D(FVector::OneVector);
 			DoorHandleMesh->SetRelativeRotation(FRotator::ZeroRotator);
 			DoorHandleMesh->SetRelativeLocation(FVector::ZeroVector);
 			DoorHandleMesh->SetVisibility(true);
-			if (DoorMaterial != nullptr)
+			if (DoorMaterial.Succeeded())
 			{
-				DoorHandleMesh->SetMaterial(0, DoorMaterial);
+				DoorHandleMesh->SetMaterial(0, DoorMaterial.Object);
 			}
 		}
 	}
 
-	OpenSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_open"));
-	CloseSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_close"));
-	SlamSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_slam"));
-	LockSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_lock"));
-	UnlockSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_unlock"));
-	RattleSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z2_door_rattle"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> OpenSoundAsset(TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z2_door_open.S_z2_door_open"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> CloseSoundAsset(TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z2_door_close.S_z2_door_close"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> SlamSoundAsset(TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z2_door_slam.S_z2_door_slam"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> LockSoundAsset(TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z2_door_lock.S_z2_door_lock"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> UnlockSoundAsset(TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z2_door_unlock.S_z2_door_unlock"));
+	static ConstructorHelpers::FObjectFinder<USoundBase> RattleSoundAsset(TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z2_door_rattle.S_z2_door_rattle"));
+	OpenSound = OpenSoundAsset.Object;
+	CloseSound = CloseSoundAsset.Object;
+	SlamSound = SlamSoundAsset.Object;
+	LockSound = LockSoundAsset.Object;
+	UnlockSound = UnlockSoundAsset.Object;
+	RattleSound = RattleSoundAsset.Object;
 }
 
 void AHapbeatShowcaseZ2DoorActor::PlayDoorSound(USoundBase* Sound) const
@@ -484,16 +498,11 @@ void AHapbeatShowcaseZ2DoorActor::SetDoorYaw(float Degrees)
 	// the whole zone) with the leaf.
 	if (DoorHinge != nullptr)
 	{
-		// The assembly's base yaw MINUS the swing, so that a positive Degrees means
-		// "open towards the player". Derivation: the hinge sits at the leaf's +X
-		// end, so the leaf hangs at -66.1 inside it -- the arm points along the
-		// hinge's local -X. The hinge's resting yaw is +90, which maps local -X to
-		// assembly -Y (local angle 180 + 90 = 270). Yaw is counter-clockwise, so
-		// ADDING Degrees would sweep the free end towards +X (270 + 90 = 360),
-		// away from the player, who stands on -X; subtracting sweeps it to 180,
-		// i.e. -X, the player's side. Open / Close / Slam / Rattle all feed this
-		// one convention, so they stay consistent with the sign.
-		DoorHinge->SetRelativeRotation(FRotator(0.0f, AssemblyYawDegrees - Degrees, 0.0f));
+		// At rest, AssemblyYaw=-90 maps the hinge-side native +X to player-left
+		// (-Y), while the free/handle side points to player-right (+Y). Adding the
+		// positive swing rotates that free edge from +Y to -X, towards the player.
+		// Open / Close / Slam / Rattle all feed this one convention.
+		DoorHinge->SetRelativeRotation(FRotator(0.0f, AssemblyYawDegrees + Degrees, 0.0f));
 	}
 }
 

@@ -106,21 +106,6 @@ FGuid FHapbeatSampleLibrary::FindEntryId(const UHapbeatEventMap* Map, EHapticMod
 	return FGuid();
 }
 
-UObject* FHapbeatSampleLibrary::LoadShowcaseObject(UClass* Class, const TCHAR* Folder, const TCHAR* AssetName)
-{
-	if (Class == nullptr || Folder == nullptr || AssetName == nullptr)
-	{
-		return nullptr;
-	}
-	// /Package/Path/Asset.Asset -- UE's package-plus-object form.
-	const FString Path = FString::Printf(TEXT("/HapbeatSDK/HapbeatSamples/Showcase/%s/%s.%s"),
-		Folder, AssetName, AssetName);
-	// LOAD_NoWarn | LOAD_Quiet: a missing Showcase asset is an expected state
-	// (the art is script-generated and optional), and the caller falls back to an
-	// engine primitive -- so it must not print an error on the way past.
-	return StaticLoadObject(Class, nullptr, *Path, nullptr, LOAD_NoWarn | LOAD_Quiet);
-}
-
 namespace
 {
 	/** Mesh bounds size (full extent, cm) plus the index of its longest axis. */

@@ -35,7 +35,8 @@ enum class EHapbeatGainMode : uint8
  *
  * Attach to an actor that has a collider (UPrimitiveComponent). On BeginPlay it
  * binds OnComponentHit or OnComponentBeginOverlap (per TriggerEvent) on the
- * owner's primitive; on EndPlay it unbinds. For Hit the primitive must have
+ * owner's event-capable primitive (root first, then siblings); on EndPlay it
+ * unbinds. For Hit the primitive must have
  * "Simulation Generates Hit Events" (bNotifyRigidBodyCollision) enabled — a hint
  * is logged if it isn't.
  *
@@ -129,7 +130,7 @@ private:
 	/** Tag-filter + Fixed/VelocityScaled dispatch shared by both handlers. Speed is cm/s (0 if unknown). */
 	void HandleCollision(AActor* OtherActor, float ImpactSpeed);
 
-	/** Resolve the owner primitive to bind (root if it is a primitive, else the first primitive component). */
+	/** Resolve the owner primitive that can emit TriggerEvent (root first, then sibling primitives). */
 	UPrimitiveComponent* ResolveOwnerPrimitive() const;
 
 	/**

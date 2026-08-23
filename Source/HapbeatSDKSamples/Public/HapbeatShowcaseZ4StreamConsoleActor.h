@@ -11,6 +11,7 @@ class UHapbeatEventMap;
 class UHapbeatAddressOverridePanelComponent;
 class UHapbeatTriggerComponent;
 class UHapbeatParameterBinding;
+class UHapbeatSubsystem;
 class USoundBase;
 class UStaticMeshComponent;
 class SWidget;
@@ -62,13 +63,9 @@ class SWidget;
  * touched a slider. Each slider therefore hands focus back to the game viewport
  * on OnMouseCaptureEnd (see CreateSliderPanel).
  *
- * IMPORTANT v1 caveat: the runtime supports a SINGLE active stream session with
- * REPLACE semantics (see unreal-sdk-v1-design.md Sec 3.5); Unity's mixer instead
- * truly overlaps concurrent sources. Firing the haptic tick WHILE the loop is
- * playing would replace (permanently stop) the loop, so the haptic tick is
- * skipped while the loop streams -- the gain/pan change itself is still felt in
- * the loop, and the tick's SFX still plays. Local stream mixing is the real fix
- * and is scheduled as its own phase.
+ * The runtime locally mixes compatible StreamClip sources into one wire stream,
+ * matching Unity: slider detents can therefore add their one-shot haptic tick
+ * while the loop continues, without opening a second STREAM_BEGIN session.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ4StreamConsoleActor : public AActor, public IHapbeatShowcaseZone
@@ -97,6 +94,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
 	void DebugToggleStream();
 
+	/** Verification aid: move the real Gain slider path, including detent tick emission. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void DebugSetGainForVerification(float NewValue);
+
 	/**
 	 * Detent spacing for both sliders, in slider units. One tick event per
 	 * crossed multiple of this value -- Unity HapbeatTickEmitter /
@@ -121,6 +122,8 @@ private:
 	void BindInput();
 
 	void HandleToggleKey(); // Space
+	UHapbeatSubsystem* GetHapbeatSubsystem() const;
+	bool ShouldWaitForUnicastDevice(UHapbeatSubsystem* Subsystem) const;
 
 	/** Build the two sliders and add them to the viewport; removed again in EndPlay. */
 	void CreateSliderPanel();
@@ -216,8 +219,8 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> TickClip;
 
-	/** Optional imported detent SFX (S_z4_ui_tick); null = silent. */
-	UPROPERTY(Transient)
+	/** Shipped detent SFX, constructor-loaded before Play. */
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Stream Console")
 	TObjectPtr<USoundBase> TickSound;
 
 	/** The viewport-hosted slider panel, owned for this zone's lifetime. */
@@ -230,4 +233,7 @@ private:
 
 	/** Counts down to 0 to throttle the HUD refresh. */
 	float HudRefreshTimer = 0.0f;
+
+	/** Space was pressed before any PONG; start only after a unicast destination is known. */
+	bool bWaitingForUnicastDevice = false;
 };

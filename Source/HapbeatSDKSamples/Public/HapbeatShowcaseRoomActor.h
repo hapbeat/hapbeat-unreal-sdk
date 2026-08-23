@@ -20,9 +20,9 @@ class UStaticMeshComponent;
  * its own at that origin -- the walls then read as this zone's walls no matter
  * which one you switch to, and nothing has to move when you do.
  *
- * Everything is an engine Cube scaled into place, so the room needs no imported
- * art to exist; MI_Floor / MI_Wall are applied when the Showcase's optional
- * generated materials are present.
+ * Everything is an engine Cube scaled into place. Shipped MI_Floor / MI_Wall
+ * are constructor-assigned, so the saved level already has its final look
+ * before Play and BeginPlay performs no synchronous art loads.
  */
 UCLASS(meta = (DisplayName = "Hapbeat Showcase Room"))
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseRoomActor : public AActor
@@ -32,16 +32,10 @@ class HAPBEATSDKSAMPLES_API AHapbeatShowcaseRoomActor : public AActor
 public:
 	AHapbeatShowcaseRoomActor();
 
-protected:
-	virtual void BeginPlay() override;
-
 private:
 	/** One Cube-based slab of the room (floor or wall), attached to Root. Constructor-time only. */
 	UStaticMeshComponent* MakeSlab(USceneComponent* Root, const TCHAR* Name,
 		const FVector& CentreCm, const FVector& SizeCm);
-
-	/** Apply MI_Floor / MI_Wall when that optional generated content is present. */
-	void ApplyShowcaseMaterials();
 
 	/** Walking surface: top face exactly at Z = 0, which is what every zone's spawn height assumes. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Showcase")

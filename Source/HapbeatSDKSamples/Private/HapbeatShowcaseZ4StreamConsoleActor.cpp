@@ -3,19 +3,24 @@
 
 #include "HapbeatAddressOverridePanelComponent.h"
 #include "HapbeatClip.h"
+#include "HapbeatConfig.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatParameterBinding.h"
 #include "HapbeatSampleLibrary.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatTriggerComponent.h"
+#include "HapbeatSubsystem.h"
 
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
+#include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/GameViewportClient.h"
 #include "InputCoreTypes.h" // EKeys::*
 #include "Kismet/GameplayStatics.h" // PlaySound2D
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Styling/CoreStyle.h" // FCoreStyle::Get().GetBrush("WhiteBrush")
@@ -50,6 +55,7 @@ AHapbeatShowcaseZ4StreamConsoleActor::AHapbeatShowcaseZ4StreamConsoleActor()
 	GainBinding->OutputParameter = EHapbeatBindingOutput::StreamGain;
 	GainBinding->OutputMin = 0.0f;
 	GainBinding->OutputMax = 1.0f;
+	GainBinding->TargetTrigger = LoopTrigger;
 
 	// PanBinding: External source, input -1..1 Linear -> output -1..1 (StreamPan).
 	// Matches ShowcaseEventMap.md's Z4_stream_loop binding #2 exactly.
@@ -61,6 +67,7 @@ AHapbeatShowcaseZ4StreamConsoleActor::AHapbeatShowcaseZ4StreamConsoleActor()
 	PanBinding->OutputParameter = EHapbeatBindingOutput::StreamPan;
 	PanBinding->OutputMin = -1.0f;
 	PanBinding->OutputMax = 1.0f;
+	PanBinding->TargetTrigger = LoopTrigger;
 
 	// The SDK's address panel, in a strip across the top of the screen so it
 	// cannot cover the sliders this zone is really about. Unity's Z4 persists the
@@ -91,13 +98,14 @@ AHapbeatShowcaseZ4StreamConsoleActor::AHapbeatShowcaseZ4StreamConsoleActor()
 	{
 		EventMapOverride = DefaultEventMap.Object;
 	}
+	static ConstructorHelpers::FObjectFinder<USoundBase> DetentSound(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z4_ui_tick.S_z4_ui_tick"));
+	TickSound = DetentSound.Object;
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::BeginPlay()
 {
 	Super::BeginPlay();
-
-	TickSound = FHapbeatSampleLibrary::LoadShowcaseAsset<USoundBase>(TEXT("Sounds"), TEXT("S_z4_ui_tick"));
 
 	BuildEventMap();
 	BindInput();
@@ -143,6 +151,7 @@ void AHapbeatShowcaseZ4StreamConsoleActor::OnZoneActivated()
 
 void AHapbeatShowcaseZ4StreamConsoleActor::OnZoneDeactivated()
 {
+	bWaitingForUnicastDevice = false;
 	if (LoopTrigger != nullptr)
 	{
 		LoopTrigger->Stop();
@@ -363,12 +372,50 @@ void AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey()
 	const bool bPlaying = Pb != nullptr && Pb->IsActive();
 	if (bPlaying)
 	{
+		bWaitingForUnicastDevice = false;
 		LoopTrigger->Stop();
+	}
+	else if (bWaitingForUnicastDevice)
+	{
+		bWaitingForUnicastDevice = false; // a second Space cancels the pending start
 	}
 	else
 	{
+		UHapbeatSubsystem* Subsystem = GetHapbeatSubsystem();
+		if (ShouldWaitForUnicastDevice(Subsystem))
+		{
+			bWaitingForUnicastDevice = true;
+			if (Subsystem != nullptr)
+			{
+				Subsystem->Ping();
+			}
+			UE_LOG(LogHapbeatShowcaseZ4, Log,
+				TEXT("Z4 stream waiting for a PONG so the session starts as unicast, not broadcast fallback."));
+			return;
+		}
 		LoopTrigger->Fire();
 	}
+}
+
+UHapbeatSubsystem* AHapbeatShowcaseZ4StreamConsoleActor::GetHapbeatSubsystem() const
+{
+	const UGameInstance* GameInstance = GetGameInstance();
+	return GameInstance != nullptr ? GameInstance->GetSubsystem<UHapbeatSubsystem>() : nullptr;
+}
+
+bool AHapbeatShowcaseZ4StreamConsoleActor::ShouldWaitForUnicastDevice(UHapbeatSubsystem* Subsystem) const
+{
+#if WITH_EDITOR
+	// Unattended verification explicitly drops every Hapbeat datagram before
+	// SendTo, so there can be no PONG to wait for. Keep packaged behavior exact.
+	if (FParse::Param(FCommandLine::Get(), TEXT("HapbeatNoNetwork")))
+	{
+		return false;
+	}
+#endif
+	const UHapbeatConfig* Config = GetDefault<UHapbeatConfig>();
+	return Config != nullptr && Config->bStreamUnicast
+		&& (Subsystem == nullptr || Subsystem->GetAliveDeviceCount() == 0);
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::DebugToggleStream()
@@ -376,6 +423,11 @@ void AHapbeatShowcaseZ4StreamConsoleActor::DebugToggleStream()
 	// Deliberately the key handler itself, not a copy of it: a capture that went
 	// around it could pass while the space bar was broken.
 	HandleToggleKey();
+}
+
+void AHapbeatShowcaseZ4StreamConsoleActor::DebugSetGainForVerification(float NewValue)
+{
+	OnGainSliderChanged(NewValue);
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::OnGainSliderChanged(float NewValue)
@@ -430,23 +482,19 @@ void AHapbeatShowcaseZ4StreamConsoleActor::FireTick()
 		UGameplayStatics::PlaySound2D(this, TickSound);
 	}
 
-	// v1 single-active-stream REPLACE model: firing the tick StreamClip while
-	// the loop is streaming would permanently steal (kill) the loop session.
-	// Unity's runtime mixes the two; v1 has no mixing, so prefer keeping the
-	// loop alive and skip the detent tick during streaming (documented
-	// limitation — the gain/pan change itself is still audible in the loop).
-	if (LoopTrigger != nullptr)
-	{
-		if (UHapbeatStreamPlayback* LoopPb = LoopTrigger->GetActivePlayback())
-		{
-			if (LoopPb->IsActive())
-			{
-				return;
-			}
-		}
-	}
+	// The SDK mixes this one-shot into the loop's existing wire session. Its
+	// per-source handle finishes independently; the loop keeps running.
 	if (TickTrigger != nullptr)
 	{
+		UHapbeatSubsystem* Subsystem = GetHapbeatSubsystem();
+		if (ShouldWaitForUnicastDevice(Subsystem))
+		{
+			if (Subsystem != nullptr)
+			{
+				Subsystem->Ping();
+			}
+			return; // this Showcase zone never silently broadcasts a stream tick
+		}
 		TickTrigger->Fire();
 	}
 }
@@ -454,6 +502,20 @@ void AHapbeatShowcaseZ4StreamConsoleActor::FireTick()
 void AHapbeatShowcaseZ4StreamConsoleActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	if (bWaitingForUnicastDevice)
+	{
+		if (UHapbeatSubsystem* Subsystem = GetHapbeatSubsystem();
+			Subsystem != nullptr && Subsystem->GetAliveDeviceCount() > 0)
+		{
+			bWaitingForUnicastDevice = false;
+			if (LoopTrigger != nullptr)
+			{
+				UE_LOG(LogHapbeatShowcaseZ4, Log, TEXT("Z4 PONG received; starting loop with a unicast snapshot."));
+				LoopTrigger->Fire();
+			}
+		}
+	}
 
 	// The Showcase switcher draws a shared Slate HUD covering the key guide, the
 	// zone's own state and the device footer, so a zone under it prints none of
@@ -483,9 +545,10 @@ void AHapbeatShowcaseZ4StreamConsoleActor::Tick(float DeltaSeconds)
 		bStreaming = Pb != nullptr && Pb->IsActive();
 	}
 	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
-		FString::Printf(TEXT("Gain=%.2f Pan=%.2f Streaming=%s"),
-			GainValue, PanValue, bStreaming ? TEXT("Yes") : TEXT("No")),
-		bStreaming ? FColor::Green : FColor::Silver, HudRefreshIntervalSeconds * 2.0f);
+		FString::Printf(TEXT("Gain=%.2f Pan=%.2f Streaming=%s"), GainValue, PanValue,
+			bWaitingForUnicastDevice ? TEXT("Waiting for unicast device") : (bStreaming ? TEXT("Yes") : TEXT("No"))),
+		bStreaming ? FColor::Green : (bWaitingForUnicastDevice ? FColor::Orange : FColor::Silver),
+		HudRefreshIntervalSeconds * 2.0f);
 	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudRefreshIntervalSeconds * 2.0f);
 }
 

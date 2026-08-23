@@ -8,6 +8,7 @@
 class UCurveFloat;
 class UHapbeatSubsystem;
 class UHapbeatStreamPlayback;
+class UHapbeatTriggerComponent;
 
 /**
  * Input source kind for a parameter binding. Picks which value is read from the
@@ -75,12 +76,11 @@ enum class EHapbeatBindingOutput : uint8
  * to control both at once. The source must be in StreamClip mode for there to be
  * an active playback to modulate.
  *
- * UE counterpart of Hapbeat.HapbeatParameterBinding (Unity SDK). v1 streams a
- * SINGLE active session, and this binding only writes to it when that session
- * was started by a trigger on ITS OWN actor (or one attached to it) — see
- * OwnsPlayback. That is the UE form of Unity's linked-preset owner-entry scope:
- * without it, every binding in the level modulates whichever stream happens to
- * be playing.
+ * UE counterpart of Hapbeat.HapbeatParameterBinding (Unity SDK). Assign
+ * TargetTrigger when an actor owns multiple stream triggers; then this binding
+ * controls that trigger's per-source playback while sibling sources are mixed
+ * into the same wire session. With no target, the legacy owner-scoped
+ * first-active-source lookup remains available.
  */
 UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent))
 class HAPBEATSDK_API UHapbeatParameterBinding : public UActorComponent
@@ -127,6 +127,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Output",
 		meta = (Tooltip = "Output value when the input is at InputMax."))
 	float OutputMax = 1.0f;
+
+	/** Specific StreamClip trigger to modulate when this actor owns more than one. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Output",
+		meta = (UseComponentPicker, Tooltip = "Specific StreamClip trigger to modulate. Recommended when the actor has more than one stream trigger."))
+	TObjectPtr<UHapbeatTriggerComponent> TargetTrigger = nullptr;
 
 	// ---- API ----
 
@@ -181,8 +186,8 @@ private:
 	 * matches too, since there is nothing to scope it against.
 	 *
 	 * The UE counterpart of Unity's linked-preset owner-entry scope: without it
-	 * every binding in the level writes to the single active session, and a
-	 * binding in one zone silently overwrites another zone's stream every frame.
+	 * an unassigned binding could write to the wrong source in the shared mixer,
+	 * and a binding in one zone could overwrite another zone's stream every frame.
 	 */
 	bool OwnsPlayback(const UHapbeatStreamPlayback* Playback) const;
 

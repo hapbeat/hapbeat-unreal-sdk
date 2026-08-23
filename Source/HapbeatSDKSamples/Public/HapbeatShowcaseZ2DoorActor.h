@@ -86,7 +86,7 @@ enum class EHapbeatZ2DoorState : uint8
  * Kit deployment is needed.
  *
  * Each transition also plays its S_z2_door_* one-shot when the Showcase's
- * optional imported art is present -- the audio counterpart of the haptic
+ * shipped Showcase art is assigned -- the audio counterpart of the haptic
  * event, fired at the same instant Unity's Animation Event calls
  * SoundPlayer.Play("door_open") etc. (the transition start).
  */
@@ -167,9 +167,8 @@ private:
 	void ResetDoorState();
 
 	/**
-	 * Swap the primitive slab / frame for the imported SM_Door, SM_DoorFrame and
-	 * SM_DoorHandle, and load the six door SFX. Each piece is independent: a
-	 * missing one simply keeps its primitive, or is skipped.
+	 * Constructor-only assignment of shipped meshes/material/SFX. This keeps the
+	 * actor complete before Play and avoids BeginPlay synchronous loads.
 	 */
 	void ApplyShowcaseAssets();
 
@@ -224,19 +223,18 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> RattleClip;
 
-	// Optional imported SFX (S_z2_door_*), resolved at BeginPlay. Null = silent,
-	// which is the correct behaviour when the Showcase art was never generated.
-	UPROPERTY(Transient)
+	// Shipped SFX hard references, assigned on the native CDO.
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Door")
 	TObjectPtr<USoundBase> OpenSound;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Door")
 	TObjectPtr<USoundBase> CloseSound;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Door")
 	TObjectPtr<USoundBase> SlamSound;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Door")
 	TObjectPtr<USoundBase> LockSound;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Door")
 	TObjectPtr<USoundBase> UnlockSound;
-	UPROPERTY(Transient)
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Door")
 	TObjectPtr<USoundBase> RattleSound;
 
 	// ---- Constructor-created default subobjects: the editable scene ----

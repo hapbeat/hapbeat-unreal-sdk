@@ -39,6 +39,15 @@ void UHapbeatStreamPlayback::Stop()
 	GetMirror()->bStopped.store(true, std::memory_order_relaxed);
 }
 
+bool UHapbeatStreamPlayback::IsStopped() const
+{
+	// The worker marks an individual one-shot complete through the atomic mirror;
+	// read it here so Blueprint/game-thread polling does not incorrectly report
+	// that source active while sibling sources keep the shared session alive.
+	return bStopped || (Mirror.IsValid()
+		&& Mirror->bStopped.load(std::memory_order_relaxed));
+}
+
 void UHapbeatStreamPlayback::SetOwnerActor(AActor* InOwner)
 {
 	// Not mirrored: the origin is only ever read on the game thread (by the

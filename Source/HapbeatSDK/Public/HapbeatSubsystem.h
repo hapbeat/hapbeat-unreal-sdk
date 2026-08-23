@@ -241,11 +241,12 @@ public:
 	 * sample by the handle's Gain x Pan before sending, so STREAM_BEGIN carries
 	 * gain = 1.0 (the device must not re-apply gain).
 	 *
-	 * Single active session, REPLACE semantics: a new call first stops any active
-	 * stream (STREAM_END) then starts a fresh one (STREAM_BEGIN). Paced by a
-	 * DEDICATED background thread (FHapbeatStreamRunnable, since the 2026-07-25
-	 * thread migration) rather than the game thread, so frame hitches (GC /
-	 * render / physics) cannot starve the device's ring buffer.
+	 * Compatible calls (same sample rate, wire channel count and resolved target)
+	 * join one local mixer and therefore share a single STREAM_BEGIN/END session.
+	 * Each returned handle still has independent gain, pan, loop and stop state.
+	 * An incompatible call is rejected rather than interrupting sources already
+	 * playing. The mixer is paced by a DEDICATED background thread, so frame
+	 * hitches (GC / render / physics) cannot starve the device's ring buffer.
 	 *
 	 * @param Clip         The PCM16 clip (mono or stereo). Null / empty => warn + nullptr.
 	 * @param BaselineGain Frozen author gain (entry.gain x manifest.intensity). 0..2.
@@ -265,7 +266,7 @@ public:
 		const FString& Target = TEXT(""), bool bLoop = false, float InitialPan = 0.0f);
 
 	/**
-	 * Stop the active stream: signal the stream thread to send STREAM_END, JOIN
+	 * Stop every source in the active stream session: signal the stream thread to send STREAM_END, JOIN
 	 * it (blocks briefly — the thread notices within one ~10ms pacing tick),
 	 * then mark the handle stopped and unregister the watchdog ticker. No-op if
 	 * nothing is streaming.
@@ -369,9 +370,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
 	bool IsStreaming() const { return StreamRunnable != nullptr; }
 
-	/** Handle to the active stream playback, or nullptr if nothing is streaming. */
+	/** First active local source, or nullptr. Hold StreamClip's return value for source-specific control. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
-	UHapbeatStreamPlayback* GetActivePlayback() const { return ActivePlayback; }
+	UHapbeatStreamPlayback* GetActivePlayback() const;
 
 	/** Fires when a device first becomes reachable (alive count 0 -> positive). */
 	UPROPERTY(BlueprintAssignable, Category = "Hapbeat")
@@ -429,12 +430,12 @@ private:
 	void CancelPendingSends();
 
 	/**
-	 * Everything StreamClip does once the handle exists: replace any running
-	 * session, ensure the socket, resolve the target, snapshot the unicast
-	 * destinations and spin up the stream thread. Split out of StreamClip so the
+	 * Everything StreamClip does once the handle exists: join a compatible active
+	 * session or create a new one, ensure the socket, resolve the target, snapshot
+	 * the unicast destinations and spin up the stream thread. Split out so the
 	 * delayed path can create the handle NOW and start the session LATER on the
 	 * very same handle. Returns false if the session could not be started
-	 * (ActivePlayback is left cleared in that case).
+	 * (the playback is not retained in ActivePlaybacks in that case).
 	 */
 	bool StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPlayback* Playback, const FString& Target, bool bLoop);
 
@@ -649,13 +650,12 @@ private:
 	//     (see FHapbeatStreamRunnable's class doc for the full threading contract) ---
 
 	/**
-	 * The active stream handle. A UPROPERTY so it is a GC root while streaming
-	 * (the caller may not retain it). Cleared when the stream ends. Its
-	 * Gain/Pan/bStopped are mirrored (GetMirror()) for the stream thread to
-	 * read — this UObject itself is never touched off the game thread.
+	 * Active local source handles. UPROPERTY roots every source while the shared
+	 * wire session is alive; finished one-shots are pruned by TickStream while a
+	 * looping sibling continues. The worker only touches their atomic mirrors.
 	 */
 	UPROPERTY()
-	TObjectPtr<UHapbeatStreamPlayback> ActivePlayback = nullptr;
+	TArray<TObjectPtr<UHapbeatStreamPlayback>> ActivePlaybacks;
 
 	/**
 	 * The active stream's dedicated FRunnable + thread. Null when not

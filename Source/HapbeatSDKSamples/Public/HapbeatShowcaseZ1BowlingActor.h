@@ -77,9 +77,9 @@ public:
 	virtual void OnZoneActivated() override;
 	virtual void OnZoneDeactivated() override;
 
-	/** Ball launch speed, cm/s. 800 = Unity BallLauncher._launchSpeed 8 m/s. */
+	/** Ball launch speed, cm/s. Raised slightly above Unity's 8 m/s so the Showcase throw reads more clearly. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling", meta = (ClampMin = "0.0"))
-	float LaunchSpeed = 800.0f;
+	float LaunchSpeed = 1000.0f;
 
 	/** Finished pin height, cm. Unity's rack reads 78 cm tall (bowling_pin.obj at instance scale 0.51/0.68/0.51). */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling", meta = (ClampMin = "1.0"))
@@ -126,9 +126,6 @@ private:
 
 	/** Cache the ball child actor, tag it and start it simulating. */
 	void SetUpBall();
-
-	/** Swap in the imported lane / ball materials when that optional content is present; no-op otherwise. */
-	void ApplyShowcaseAssets();
 
 	/** EnableInput on the first PlayerController found, then bind LMB / Space. Warns (no-op) if none exists. */
 	void BindInput();
@@ -188,6 +185,10 @@ private:
 	// EM_Showcase asset supplies the clip.
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatClip> PinHitClip;
+
+	/** Shipped impact SFX, hard-referenced so Play does not synchronously find/load it. */
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Bowling")
+	TObjectPtr<USoundBase> PinHitSoundAsset;
 
 	// ---- Constructor-created default subobjects: the editable scene ----
 
@@ -262,8 +263,7 @@ public:
 	TObjectPtr<UHapbeatCollisionTriggerComponent> HitTrigger;
 
 	/**
-	 * Impact SFX, assigned by the zone (S_z1_pin_hit when that optional content
-	 * is present, null otherwise = silent). Played with the same
+	 * Impact SFX, assigned by the zone from its shipped hard reference. Played with the same
 	 * velocity-to-volume curve as Unity's CollisionAudio on BowlingPin.
 	 */
 	UPROPERTY(Transient)
@@ -366,20 +366,11 @@ public:
 protected:
 	/**
 	 * Enables physics simulation, deferred from the constructor so the sphere is
-	 * fully registered first (same reason as AHapbeatShowcaseZ1PinActor), and
-	 * applies the ball's own material.
+	 * fully registered first (same reason as AHapbeatShowcaseZ1PinActor).
 	 */
 	virtual void BeginPlay() override;
 
 private:
-	/**
-	 * Swap in the imported ball material when that optional content is present.
-	 * Done by the ball ITSELF, in its own BeginPlay: the zone used to reach in
-	 * and paint it, which meant the ball looked right only when it was spawned
-	 * by that zone and in that order.
-	 */
-	void ApplyShowcaseAssets();
-
 	/** Root: the physics body and the collider. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<USphereComponent> Body;

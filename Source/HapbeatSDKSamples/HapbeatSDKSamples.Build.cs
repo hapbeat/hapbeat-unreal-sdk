@@ -14,6 +14,7 @@ public class HapbeatSDKSamples : ModuleRules
 			"Engine",
 			"InputCore", // EKeys::* for the samples' legacy InputComponent->BindKey wiring
 			"Projects",  // IPluginManager (resolve this plugin's Content dir for raw WAV loads)
+			"PhysicsCore", // UPhysicalMaterial for editor-adjustable Z5 projectile bounce
 			"Slate",     // SHapbeatShowcaseHud: the Showcase key guide, drawn as a widget so it has
 			"SlateCore", // real columns -- and as code, so the samples ship with no UI .uasset
 

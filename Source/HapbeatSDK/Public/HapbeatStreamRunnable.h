@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HAL/CriticalSection.h"
 #include "HAL/Runnable.h"
 #include "HapbeatStreamGainMirror.h"
 #include <atomic>
@@ -11,8 +12,9 @@ class FSocket;
 class FInternetAddr;
 
 /**
- * Dedicated background thread that paces and sends ONE StreamClip session's
- * STREAM_DATA chunks. Replaces the old game-thread FTSTicker-driven model
+ * Dedicated background thread that paces and sends one wire StreamClip session.
+ * Compatible overlapping local sources are mixed into that session before each
+ * STREAM_DATA chunk is sent. Replaces the old game-thread FTSTicker-driven model
  * (see the FHapbeatStreamer class doc / dev-notes/unreal-sdk-v1-design.md §5):
  * frame hitches (GC / render / physics spikes) on the game thread used to
  * starve the device ring buffer and cause irregular, audible dropouts — a
@@ -90,9 +92,37 @@ public:
 	/** True once Run() has returned (STREAM_END already sent). Game-thread poll. */
 	bool IsFinished() const { return bFinished.load(std::memory_order_acquire); }
 
+	/** Format/target equality required to join this wire session (Unity parity). */
+	bool IsCompatible(int32 InSampleRate, int32 InChannels, const FString& InTarget) const;
+
+	/**
+	 * Queue a compatible source from the game thread. Returns false once the
+	 * worker has atomically closed admission for natural session completion.
+	 */
+	bool AddSource(
+		TArray<uint8>&& InPcm16,
+		bool bInLoop,
+		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror);
+
 private:
+	struct FPendingSource
+	{
+		TArray<uint8> Pcm16;
+		bool bLoop = false;
+		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
+
+		FPendingSource(TArray<uint8>&& InPcm16, bool bInLoop,
+			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
+			: Pcm16(MoveTemp(InPcm16)), bLoop(bInLoop), Mirror(InMirror)
+		{
+		}
+	};
+
 	/** Send one packet to every unicast target, or broadcast if none are set. Worker-thread only. */
 	void SendRaw(const TArray<uint8>& Packet);
+
+	/** Worker-thread: drain game-thread additions, or close admission if the session is empty. */
+	bool DrainPendingSourcesOrClose();
 
 	// --- construction-time immutable inputs (never written after the ctor) ---
 	FSocket* Socket = nullptr;
@@ -130,13 +160,19 @@ private:
 	/** Set by Run() as its last statement; polled by the game-thread watchdog. */
 	std::atomic<bool> bFinished{false};
 
-	// Staged at construction (game thread), consumed once by Init() to build
-	// NextSeqFn/Streamer on the worker thread.
+	// Session compatibility values. Immutable after construction.
 	TFunction<uint16()> NextSeqFn;
-	TArray<uint8> PendingPcm16;
-	int32 PendingSampleRate = 0;
-	int32 PendingChannels = 0;
-	FString PendingTarget;
-	bool bPendingLoop = false;
-	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
+	int32 SessionSampleRate = 0;
+	int32 SessionChannels = 0;
+	FString SessionTarget;
+	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InitialMirror;
+
+	/**
+	 * The only cross-thread structural state. AddSource and the worker's final
+	 * empty check take the same lock, so an accepted source can never land after
+	 * STREAM_END; it is either drained or rejected and started as a new session.
+	 */
+	mutable FCriticalSection SourceMutex;
+	TArray<FPendingSource> PendingSources;
+	bool bAcceptingSources = true;
 };

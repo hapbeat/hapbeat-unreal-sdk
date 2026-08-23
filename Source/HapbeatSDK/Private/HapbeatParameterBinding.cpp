@@ -3,6 +3,7 @@
 
 #include "HapbeatSubsystem.h"
 #include "HapbeatStreamPlayback.h"
+#include "HapbeatTriggerComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Curves/CurveFloat.h"
@@ -142,20 +143,16 @@ float UHapbeatParameterBinding::ComputeOutput(float Raw)
 
 void UHapbeatParameterBinding::WriteToActivePlayback(float Out)
 {
-	UHapbeatSubsystem* Sub = ResolveSubsystem();
-	if (Sub == nullptr)
+	UHapbeatStreamPlayback* Pb = nullptr;
+	if (TargetTrigger != nullptr)
 	{
-		return;
+		Pb = TargetTrigger->GetActivePlayback();
 	}
-
-	// v1 is single-active-stream, so there is one GetActivePlayback() to look at
-	// -- but "one stream" is exactly why the binding must NOT write to it
-	// unconditionally: every binding in the level would otherwise modulate
-	// whatever happens to be playing, and a slider binding in one zone would
-	// overwrite another zone's loop gain every frame. Unity scopes a binding to
-	// the playback started by its own linked owner entry; OwnsPlayback below is
-	// the UE equivalent of that scope.
-	UHapbeatStreamPlayback* Pb = Sub->GetActivePlayback();
+	else
+	{
+		UHapbeatSubsystem* Sub = ResolveSubsystem();
+		Pb = Sub != nullptr ? Sub->GetActivePlayback() : nullptr;
+	}
 	if (Pb == nullptr || !Pb->IsActive() || !OwnsPlayback(Pb))
 	{
 		return;

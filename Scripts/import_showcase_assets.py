@@ -33,6 +33,13 @@ SND_PKG = SHOWCASE + '/Sounds'
 # Quaternius parts) leave the parameter alone and get white * Tint.
 WHITE = '/Engine/EngineResources/WhiteSquareTexture'
 
+# Unity exposes this semantic endpoint as a RodTip Transform. Bounds cannot tell
+# the thin tip from the thick handle, so the UE mesh carries the same marker as
+# a Static Mesh socket. UE keeps the OBJ source coordinates in this render mesh;
+# its x100 unit conversion is represented by the fitted component scale.
+ROD_TIP_SOCKET = 'RodTip'
+ROD_TIP_LOCAL = unreal.Vector(0.0, 7.000275, 0.0)
+
 
 # ---------------------------------------------------------------- source table
 
@@ -287,6 +294,21 @@ def import_meshes():
         if not os.path.isfile(path):
             raise RuntimeError('missing source mesh ' + path)
 
+        # A designer may move RodTip visually in the Static Mesh Editor. Keep
+        # that authored endpoint if this script later replaces the mesh asset;
+        # when there is no previous socket, the source-model default below is
+        # used instead.
+        preserved_rod_tip_local = None
+        if asset_name == 'SM_FishingRod':
+            existing = unreal.EditorAssetLibrary.load_asset(
+                '{}/SM_FishingRod'.format(MESH_PKG))
+            existing_socket = (existing.find_socket(ROD_TIP_SOCKET)
+                               if existing is not None else None)
+            if existing_socket is not None:
+                location = existing_socket.get_editor_property('relative_location')
+                preserved_rod_tip_local = unreal.Vector(
+                    location.x, location.y, location.z)
+
         nodes = SPLIT_MESHES.get(filename)
         split = nodes is not None
         stem = os.path.splitext(filename)[0]
@@ -302,6 +324,16 @@ def import_meshes():
         for mesh in meshes:
             if mesh is None:
                 continue
+            if mesh.get_name() == 'SM_FishingRod' and mesh.find_socket(ROD_TIP_SOCKET) is None:
+                mesh.modify()
+                socket = unreal.StaticMeshSocket(outer=mesh)
+                socket.set_editor_property('socket_name', ROD_TIP_SOCKET)
+                socket.set_editor_property(
+                    'relative_location', preserved_rod_tip_local or ROD_TIP_LOCAL)
+                mesh.add_socket(socket)
+                unreal.EditorAssetLibrary.save_loaded_asset(mesh)
+                unreal.log('[Hapbeat] SM_FishingRod socket {} at {}'.format(
+                    ROD_TIP_SOCKET, preserved_rod_tip_local or ROD_TIP_LOCAL))
             # get_bounding_box() is the imported extent in cm (StaticMesh.h:1822).
             # Multiplying by the recorded Unity instance scale predicts the
             # on-screen size the zone actor gets, which is the number to eyeball

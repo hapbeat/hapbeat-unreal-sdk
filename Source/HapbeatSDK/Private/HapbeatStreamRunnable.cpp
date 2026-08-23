@@ -1,9 +1,12 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatStreamRunnable.h"
 
+#include "HapbeatNetworkSafety.h"
+
 #include "HapbeatStreamer.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/ScopeLock.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h" // transitively defines FInternetAddr (IPAddress.h)
 
@@ -73,13 +76,12 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	, SendAheadSeconds(InSendAheadSeconds)
 	, BroadcastIp(InBroadcastIp.IsEmpty() ? FString(TEXT("255.255.255.255")) : InBroadcastIp)
 	, NextSeqFn(MoveTemp(InNextSeq))
-	, PendingPcm16(MoveTemp(InPcm16))
-	, PendingSampleRate(InSampleRate)
-	, PendingChannels(InChannels)
-	, PendingTarget(InTarget)
-	, bPendingLoop(bInLoop)
-	, Mirror(InMirror)
+	, SessionSampleRate(InSampleRate)
+	, SessionChannels(InChannels)
+	, SessionTarget(InTarget)
+	, InitialMirror(InMirror)
 {
+	PendingSources.Emplace(MoveTemp(InPcm16), bInLoop, InMirror);
 }
 
 FHapbeatStreamRunnable::~FHapbeatStreamRunnable() = default;
@@ -135,12 +137,10 @@ bool FHapbeatStreamRunnable::Init()
 	// allocation, and every byte of mutable state it subsequently owns, belongs
 	// to this thread from the moment it exists (single-writer, no locks).
 	Streamer = MakeUnique<FHapbeatStreamer>(
-		MoveTemp(PendingPcm16),
-		PendingSampleRate,
-		PendingChannels,
-		PendingTarget,
-		bPendingLoop,
-		Mirror,
+		SessionSampleRate,
+		SessionChannels,
+		SessionTarget,
+		InitialMirror,
 		NextSeqFn,
 		[this](const TArray<uint8>& Packet) { SendRaw(Packet); },
 		SendAheadSeconds);
@@ -173,6 +173,15 @@ uint32 FHapbeatStreamRunnable::Run()
 			break;
 		}
 
+		// Additions and the final empty decision share SourceMutex. If this returns
+		// false, admission was closed while holding that lock, so no game-thread
+		// AddSource can be accepted behind the worker's back after STREAM_END.
+		if (!DrainPendingSourcesOrClose())
+		{
+			Streamer->SendEnd();
+			break;
+		}
+
 		const double IterationStart = FPlatformTime::Seconds();
 		Streamer->Tick(IterationStart);
 
@@ -196,11 +205,60 @@ void FHapbeatStreamRunnable::Stop()
 	// Just flags the request; Run() notices it (and sends STREAM_END) at the
 	// top of its next loop iteration, or promptly mid-wait (PreciseWaitUntil
 	// polls this flag too, instead of sleeping out a stale pacing target).
+	{
+		FScopeLock Lock(&SourceMutex);
+		bAcceptingSources = false;
+	}
 	bStopRequested.store(true, std::memory_order_relaxed);
+}
+
+bool FHapbeatStreamRunnable::IsCompatible(
+	int32 InSampleRate, int32 InChannels, const FString& InTarget) const
+{
+	return InSampleRate == SessionSampleRate
+		&& InChannels == SessionChannels
+		&& InTarget == SessionTarget;
+}
+
+bool FHapbeatStreamRunnable::AddSource(
+	TArray<uint8>&& InPcm16,
+	bool bInLoop,
+	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
+{
+	FScopeLock Lock(&SourceMutex);
+	if (!bAcceptingSources || bStopRequested.load(std::memory_order_relaxed))
+	{
+		return false;
+	}
+	PendingSources.Emplace(MoveTemp(InPcm16), bInLoop, InMirror);
+	return true;
+}
+
+bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
+{
+	FScopeLock Lock(&SourceMutex);
+	for (FPendingSource& Pending : PendingSources)
+	{
+		Streamer->AddSource(MoveTemp(Pending.Pcm16), Pending.bLoop, Pending.Mirror);
+	}
+	PendingSources.Reset();
+
+	if (Streamer->HasSources())
+	{
+		return true;
+	}
+
+	bAcceptingSources = false;
+	return false;
 }
 
 void FHapbeatStreamRunnable::SendRaw(const TArray<uint8>& Packet)
 {
+	if (HapbeatIsNetworkSuppressedForEditor())
+	{
+		return;
+	}
+
 	// Worker-thread only. Socket is guaranteed valid for this object's entire
 	// lifetime (see the class doc's threading contract).
 	if (Socket == nullptr)

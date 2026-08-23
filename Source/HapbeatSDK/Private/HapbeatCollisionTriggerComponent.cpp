@@ -256,11 +256,38 @@ UPrimitiveComponent* UHapbeatCollisionTriggerComponent::ResolveOwnerPrimitive() 
 	{
 		return nullptr;
 	}
-	// Prefer the root component when it is itself a primitive (the actor's own
-	// collider), else the first primitive component on the actor.
-	if (UPrimitiveComponent* Root = Cast<UPrimitiveComponent>(Owner->GetRootComponent()))
+	// Prefer the root when it can actually produce the configured event. An actor
+	// may use a non-colliding visual primitive as its serialized root while a
+	// sibling primitive owns the collider (the Showcase target is one example).
+	// Binding the visual in that case looks valid but can never fire.
+	auto SupportsConfiguredEvent = [this](const UPrimitiveComponent* Primitive)
+	{
+		if (Primitive == nullptr || Primitive->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+		{
+			return false;
+		}
+		return TriggerEvent == EHapbeatCollisionEvent::Hit
+			? Primitive->BodyInstance.bNotifyRigidBodyCollision != 0
+			: Primitive->GetGenerateOverlapEvents();
+	};
+
+	UPrimitiveComponent* Root = Cast<UPrimitiveComponent>(Owner->GetRootComponent());
+	if (SupportsConfiguredEvent(Root))
 	{
 		return Root;
 	}
-	return Owner->FindComponentByClass<UPrimitiveComponent>();
+
+	TInlineComponentArray<UPrimitiveComponent*> Primitives(Owner);
+	for (UPrimitiveComponent* Primitive : Primitives)
+	{
+		if (SupportsConfiguredEvent(Primitive))
+		{
+			return Primitive;
+		}
+	}
+
+	// Preserve the warning path in BeginPlay when nothing is configured to emit
+	// the selected event: return the conventional primitive so the diagnostic can
+	// name exactly what needs fixing.
+	return Root != nullptr ? Root : Owner->FindComponentByClass<UPrimitiveComponent>();
 }

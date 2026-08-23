@@ -252,14 +252,15 @@ void UHapbeatTriggerComponent::PreSeedBindings()
 	{
 		return;
 	}
-	// v1 is single-active-stream, so every binding on this actor targets the one
-	// active playback. EvaluateNow() makes each write its current value before the
-	// streamer's first chunk goes out.
+	// Evaluate only bindings explicitly aimed at this trigger (or legacy
+	// unassigned bindings). This matters once sibling one-shots are mixed into a
+	// loop: firing the tick trigger must not pre-seed the loop's slider bindings.
 	TArray<UHapbeatParameterBinding*> Bindings;
 	Owner->GetComponents<UHapbeatParameterBinding>(Bindings);
 	for (UHapbeatParameterBinding* Binding : Bindings)
 	{
-		if (Binding != nullptr)
+		if (Binding != nullptr
+			&& (Binding->TargetTrigger == nullptr || Binding->TargetTrigger == this))
 		{
 			Binding->EvaluateNow();
 		}

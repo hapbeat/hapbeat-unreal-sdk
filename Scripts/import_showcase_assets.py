@@ -116,7 +116,10 @@ MATERIAL_INSTANCES = [
     ('MI_TargetBase',      'T_Colormap',                  (1.0, 0.8941, 0.7686, 1.0),    1.0),
     ('MI_TargetLight',     'T_Colormap',                  (1.0, 0.9365, 0.0, 1.0),       1.0),
     ('MI_TargetHeavy',     'T_Colormap',                  (1.0, 0.0, 0.0995, 1.0),       1.0),
-    ('MI_BowlingBall',     None,                          (0.1, 0.1, 0.15, 1.0),         0.3),
+    # Near-black and glossy: a bowling ball is polished, and the previous
+    # 0.1/0.1/0.15 at roughness 0.3 read as pale lilac plastic in PIE rather
+    # than as a ball.
+    ('MI_BowlingBall',     None,                          (0.02, 0.02, 0.03, 1.0),       0.25),
     # No map: bowling_pin.obj ships with the shared colormap, which read grey on
     # a pin that should be white. Flat white with a little sheen instead.
     ('MI_BowlingPin',      None,                          (1.0, 1.0, 1.0, 1.0),          0.6),

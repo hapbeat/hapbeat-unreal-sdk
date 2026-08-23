@@ -14,10 +14,11 @@ Output: Saved/Screenshots/WindowsEditor/showcase_z<k>.png, one per zone, plus
 one or more suffixed shots for the zones whose interesting state only exists
 after something has been done to them -- or cannot be seen from the zone's own
 spawn point: showcase_z1b (the pin rack, from 1.5 m away), showcase_z2b (door
-open), showcase_z3b (the shark and the rod, looking down), showcase_z4b (the
-stream loop running), showcase_z5b (a light and a heavy projectile nose-on) and
-showcase_z5c (the same two broadside, which is the shot that shows whether the
-nose points the way they fly).
+open), showcase_z3b (the rod, the line and the shark, from 2 m back),
+showcase_z4b (the stream loop running), showcase_z5b (a light and a heavy
+projectile nose-on), showcase_z5c (the same two from straight above, which is
+the shot that shows whether the nose points the way they fly) and showcase_z5d
+(the charge bar past its heavy threshold, i.e. in its high colour).
 
 THE SHOTS INCLUDE THE UI. `HighResShot` re-renders the SCENE at an arbitrary
 resolution and never composites Slate, so the HUD, Z4's slider panel and Z5's
@@ -109,18 +110,41 @@ def act_spawn_projectiles(world):
         zone.spawn_projectile_preview(True, 0.0)
 
 
-def act_spawn_projectiles_side_on(world):
+def act_spawn_projectiles_top_down(world):
     """
-    Z5: the same two, turned 90 degrees.
+    Z5: the same two, seen from directly above.
 
     Nose-on says nothing about which way a projectile points -- a missile aimed
-    at the camera and one aimed away look identical. Broadside, the nose is at
-    one end of the silhouette and the answer is in the picture.
+    at the camera and one aimed away look identical, and turning them broadside
+    only trades that ambiguity for another (a roll about the long axis is
+    invisible edge-on). From straight above, the projectile is laid out flat
+    against the floor: the nose is at one end of the silhouette, the shot
+    direction runs UP the image, and both questions are answered in one picture.
+
+    The player is moved 4 m above the zone and pitched almost straight down
+    (-89, not -90: at exactly -90 the yaw stops meaning anything and which way
+    "up the image" points is undefined). The previews are then placed from that
+    same view, so they land in frame.
+    """
+    place_player_in_zone(world, unreal.HapbeatShowcaseZ5ChargeShotActor,
+                         unreal.Vector(150.0, 0.0, 400.0), yaw=0.0, pitch=-89.0)
+    for zone in unreal.GameplayStatics.get_all_actors_of_class(
+            world, unreal.HapbeatShowcaseZ5ChargeShotActor):
+        zone.spawn_projectile_preview(False, 0.0)
+        zone.spawn_projectile_preview(True, 0.0)
+
+
+def act_charge_bar_heavy(world):
+    """
+    Z5: park the charge bar above the heavy threshold.
+
+    The bar changes colour there, and that colour change is the only on-screen
+    feedback for "this shot will be a heavy one" -- so it is worth a picture of
+    its own. 0.9 is clear of the 0.7 threshold rather than on top of it.
     """
     for zone in unreal.GameplayStatics.get_all_actors_of_class(
             world, unreal.HapbeatShowcaseZ5ChargeShotActor):
-        zone.spawn_projectile_preview(False, 90.0)
-        zone.spawn_projectile_preview(True, 90.0)
+        zone.debug_set_charge_for_capture(0.9)
 
 
 def act_stand_at_pin_rack(world):
@@ -135,11 +159,18 @@ def act_stand_at_pin_rack(world):
                          unreal.Vector(450.0, 0.0, 0.0), yaw=0.0, pitch=-15.0)
 
 
-def act_look_down_at_shark(world):
-    """Z3: tip the view down onto the shark and the held rod."""
-    character = find_character(world)
-    if character is not None:
-        character.set_view_pitch_for_capture(-20.0)
+def act_stand_back_from_shark(world):
+    """
+    Z3: stand 2 m back from the zone origin, looking down at the rig.
+
+    The zone's own spawn puts the camera almost on top of the shark, where the
+    rod fills the frame and the line disappears off the bottom of it. From here
+    the rod tip, the whole line and the shark are all in one shot, which is what
+    this capture is for -- the line hanging from the wrong end of the rod is
+    exactly the kind of thing it has to be able to show.
+    """
+    place_player_in_zone(world, unreal.HapbeatShowcaseZ3FishingActor,
+                         unreal.Vector(-200.0, 0.0, 0.0), yaw=0.0, pitch=-25.0)
 
 
 def place_player_in_zone(world, zone_class, zone_relative_offset, yaw, pitch):
@@ -166,13 +197,16 @@ def place_player_in_zone(world, zone_class, zone_relative_offset, yaw, pitch):
 FOLLOW_UPS = {
     1: [{'suffix': 'b', 'action': act_stand_at_pin_rack, 'settle': 1.0}],
     2: [{'suffix': 'b', 'action': act_open_door, 'settle': 2.5}],
-    3: [{'suffix': 'b', 'action': act_look_down_at_shark, 'settle': 1.0}],
+    3: [{'suffix': 'b', 'action': act_stand_back_from_shark, 'settle': 1.0}],
     # Z4's loop is running as soon as the toggle returns; the wait is only there
     # so the panel has repainted. Check the log for "Stream begin ... loop=1" to
     # tell a running loop from a panel that merely looks the same.
     4: [{'suffix': 'b', 'action': act_toggle_stream, 'settle': 1.0}],
     5: [{'suffix': 'b', 'action': act_spawn_projectiles, 'settle': 1.0},
-        {'suffix': 'c', 'action': act_spawn_projectiles_side_on, 'settle': 1.0}],
+        {'suffix': 'c', 'action': act_spawn_projectiles_top_down, 'settle': 1.0},
+        # The bar repaints on the next Slate tick; half a second is only so the
+        # shot cannot race it.
+        {'suffix': 'd', 'action': act_charge_bar_heavy, 'settle': 0.5}],
 }
 
 # Give up waiting for PIE rather than spin forever in an unattended run.

@@ -94,6 +94,14 @@ void UHapbeatTriggerComponent::FireInternal(float Multiplier)
 	// Single-trigger fire: honor the entry's own loop flag and keep the resulting
 	// StreamClip handle for live modulation / Stop().
 	DispatchEntry(Subsystem, Entry, Multiplier, /*bForceNonLoop=*/false, /*bStorePlayback=*/true);
+
+	// Everything cosmetic that must happen "when the haptic fires" hangs off this
+	// one broadcast, past every gate above, so a listener does not re-derive its
+	// own threshold / cooldown and drift out of step with the haptic.
+	OnFired.Broadcast(FireContextOther.Get(), FireContextSpeed);
+	// Consumed: a later plain Fire() must not report the last collision partner.
+	FireContextOther.Reset();
+	FireContextSpeed = 0.0f;
 }
 
 void UHapbeatTriggerComponent::DispatchEntry(UHapbeatSubsystem* Subsystem, const FHapbeatEventEntry& Entry,
@@ -182,6 +190,15 @@ void UHapbeatTriggerComponent::DispatchEntry(UHapbeatSubsystem* Subsystem, const
 		if (bStorePlayback)
 		{
 			StoredPlayback = Handle;
+		}
+		if (Handle != nullptr)
+		{
+			// Record WHO started this stream, before anything can read it: a
+			// UHapbeatParameterBinding only writes to a playback its own actor
+			// started (see UHapbeatParameterBinding::OwnsPlayback), and the
+			// pre-seed below is the first such read. The handle exists even on
+			// the delayed path, so this is set for both.
+			Handle->SetOwnerActor(GetOwner());
 		}
 		// Pre-seed any ParameterBinding on this actor so the FIRST chunks already
 		// carry its value (else the stream plays at full baseline for up to one

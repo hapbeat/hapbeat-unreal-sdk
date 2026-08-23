@@ -51,6 +51,20 @@ void IHapbeatShowcaseZone::SetZoneSceneActive(AActor* ZoneActor, bool bActive)
 		// swallow the next zone's projectiles.
 		Actor->SetActorEnableCollision(bActive);
 		Actor->SetActorTickEnabled(bActive);
+		// The ACTOR's tick is not the whole story: a UActorComponent ticks on its
+		// own schedule, so a hidden zone's Hapbeat components kept running. A
+		// UHapbeatParameterBinding doing that writes to the single active stream
+		// every frame -- which is how Z4's gain / pan sliders ended up modulating
+		// Z3's hook loop while Z4 was not even on screen. (The binding now also
+		// refuses a stream it did not start, see UHapbeatParameterBinding::
+		// OwnsPlayback; this stops the work from happening at all.)
+		for (UActorComponent* Component : Actor->GetComponents())
+		{
+			if (IsValid(Component))
+			{
+				Component->SetComponentTickEnabled(bActive);
+			}
+		}
 	}
 
 	// Input last, and only on the zone actor itself: every zone binds its keys

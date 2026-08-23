@@ -53,7 +53,13 @@ namespace
 	 */
 	const FVector RodTipFallbackCm(60.0f, 44.0f, 175.0f);
 
-	constexpr float SharkMassKg = 1.0f;
+	/**
+	 * The cadence FishingController.cs's per-tick constants were authored at
+	 * (Unity's default fixed timestep, 50 Hz). UE ticks at a variable rate, so a
+	 * "per tick" fraction has to be re-expressed against this to mean the same
+	 * thing at any frame rate.
+	 */
+	constexpr float UnityReferenceHz = 50.0f;
 }
 
 // =============================================================================
@@ -122,9 +128,6 @@ void AHapbeatShowcaseZ3FishingActor::BeginPlay()
 	SetUpLineVisual();
 	BuildEventMapAndHaptics();
 	BindInput();
-
-	PrevRodTipWorldPos = GetRodTipWorldLocation();
-	TimeToNextWanderImpulse = FMath::FRandRange(WanderIntervalMinSeconds, WanderIntervalMaxSeconds);
 }
 
 void AHapbeatShowcaseZ3FishingActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -161,7 +164,18 @@ void AHapbeatShowcaseZ3FishingActor::SetUpShark()
 		return;
 	}
 	Shark->ApplySharkSize(SharkSizeCm);
-	Shark->SetDamping(SwimLinearDamping, SwimAngularDamping);
+	Shark->SnapToTransform(GetSharkRestWorldTransform());
+
+	// Tick order for one frame of hooked play: THIS actor moves the shark ->
+	// the shark measures the speed that move gave it -> the binding turns that
+	// speed into stream gain. Each link is a prerequisite of the next; without
+	// them the binding can read the previous frame's speed, which is a frame of
+	// lag on every pull.
+	Shark->AddTickPrerequisiteActor(this);
+	if (Shark->HookVelocityBinding != nullptr)
+	{
+		Shark->HookVelocityBinding->AddTickPrerequisiteActor(Shark);
+	}
 }
 
 void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
@@ -191,15 +205,8 @@ void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 	Shark->HookSequence->EntryId = HookLoopId;
 	Shark->HookSequence->StartEntryId = HookStartId;
 	Shark->HookSequence->StopEntryId = HookReleaseId;
-
-	// Read this zone actor's manual velocity edits (UpdateHookedLinePhysics /
-	// UpdateSharkWander, both run from OUR Tick) before the binding's own
-	// TickComponent samples the shark's velocity the same frame -- a same-frame
-	// ordering nicety, not a correctness requirement.
-	if (Shark->HookVelocityBinding != nullptr)
-	{
-		Shark->HookVelocityBinding->AddTickPrerequisiteActor(this);
-	}
+	// The tick ordering the binding depends on is set up in SetUpShark, with the
+	// rest of the shark's wiring.
 }
 
 UHapbeatEventMap* AHapbeatShowcaseZ3FishingActor::BuildFallbackEventMap()
@@ -269,9 +276,6 @@ void AHapbeatShowcaseZ3FishingActor::TryDeferredMount()
 	}
 	bMountAttempted = true;
 	MountRodOnCharacter();
-	// The tip just moved from the fallback anchor to the player's hand; without
-	// this the next frame would read that jump as an enormous rod-tip velocity.
-	PrevRodTipWorldPos = GetRodTipWorldLocation();
 }
 
 void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
@@ -308,18 +312,9 @@ void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
 	Character->MountItem(RodMesh, MountPose,
 		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_DefaultMaterial")));
 	MountedCharacter = Character;
-
-	// Where the line hangs from, in the MOUNT component's space: the far end of
-	// the rod's longest axis once fitted and aligned. Which local axis that is
-	// depends on how the source model was authored, so it is read from the bounds
-	// rather than assumed.
-	// The SAME rotation the mesh was mounted with (alignment plus the optional
-	// flip), so flipping the rod moves the line's anchor to the end that is now
-	// in front instead of leaving it behind the player's head.
-	const FRotator FittedRotation = (FlipRotation * AlignRotation.Quaternion()).Rotator();
-	RodTipLocalOffset = !RodTipLocalOffsetOverride.IsNearlyZero()
-		? RodTipLocalOffsetOverride
-		: FHapbeatSampleLibrary::ComputeFittedTipOffset(RodMesh, Scale, FittedRotation);
+	// Where the line hangs from is NOT computed here: GetRodTipWorldLocation
+	// reads it off the mounted rod's finished world bounds every time, so it
+	// cannot disagree with the pose the rod was actually given.
 }
 
 void AHapbeatShowcaseZ3FishingActor::UnmountRod()
@@ -340,10 +335,46 @@ FVector AHapbeatShowcaseZ3FishingActor::GetRodTipWorldLocation() const
 	{
 		if (const UStaticMeshComponent* Mount = Character->GetHandMount())
 		{
-			// The mount's transform already carries the fit scale, and
-			// RodTipLocalOffset is the tip AFTER that scale, so the offset is
-			// rotated and translated but must not be scaled a second time.
-			return Mount->GetComponentLocation() + Mount->GetComponentQuat().RotateVector(RodTipLocalOffset);
+			if (!RodTipLocalOffsetOverride.IsNearlyZero())
+			{
+				// Hand-authored tip, in the mount's own space. The mount transform
+				// already carries the fit scale and the override is stated after
+				// it, so the offset is rotated and translated but not re-scaled.
+				return Mount->GetComponentLocation()
+					+ Mount->GetComponentQuat().RotateVector(RodTipLocalOffsetOverride);
+			}
+
+			// Derived tip: of the rod's eight WORLD bounding-box corners, the one
+			// furthest along the mount's forward axis.
+			//
+			// WHY NOT A LOCAL OFFSET FROM THE MESH BOUNDS (what this used to do):
+			// that offset had to be built from the same fit scale, alignment
+			// rotation and flip the mesh was mounted with, and any of them being
+			// re-derived slightly differently -- or a negative scale, or the mesh
+			// being swapped -- put the line's anchor somewhere along the rod
+			// instead of at its end. The finished bounds are the rod as it
+			// actually is on screen, so nothing about how it got there matters.
+			const FVector Forward = Mount->GetForwardVector();
+			const FBoxSphereBounds Bounds = Mount->Bounds;
+			const FVector Centre = Bounds.Origin;
+			const FVector Extent = Bounds.BoxExtent;
+
+			FVector BestCorner = Centre;
+			float BestProjection = -MAX_flt;
+			for (int32 CornerIndex = 0; CornerIndex < 8; ++CornerIndex)
+			{
+				const FVector Corner = Centre + FVector(
+					(CornerIndex & 1) ? Extent.X : -Extent.X,
+					(CornerIndex & 2) ? Extent.Y : -Extent.Y,
+					(CornerIndex & 4) ? Extent.Z : -Extent.Z);
+				const float Projection = static_cast<float>(FVector::DotProduct(Corner - Centre, Forward));
+				if (Projection > BestProjection)
+				{
+					BestProjection = Projection;
+					BestCorner = Corner;
+				}
+			}
+			return BestCorner;
 		}
 	}
 	return RodTipAnchor != nullptr ? RodTipAnchor->GetComponentLocation() : GetActorLocation();
@@ -367,23 +398,14 @@ void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 	}
 	bHooked = bNewHooked;
 
-	UCapsuleComponent* Body = Shark->GetBody();
-	if (Body == nullptr)
-	{
-		return;
-	}
-
 	if (bHooked)
 	{
-		Shark->SetDamping(AttachedLinearDamping, AttachedAngularDamping);
-
 		// Instant "hooked!" snap to tether range -- parity with
 		// FishingController.cs's Attach(): "_object.position = rodTip.position +
-		// Vector3.down * maxLineLength". ETeleportType::ResetPhysics re-syncs the
-		// simulating body's transform cleanly instead of fighting the solver.
-		const FVector SnapPos = GetRodTipWorldLocation() + FVector::DownVector * MaxLineLength;
-		Body->SetWorldLocation(SnapPos, false, nullptr, ETeleportType::ResetPhysics);
-		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		// Vector3.down * maxLineLength".
+		FTransform SnapTransform = Shark->GetActorTransform();
+		SnapTransform.SetLocation(GetRodTipWorldLocation() + FVector::DownVector * MaxLineLength);
+		Shark->SnapToTransform(SnapTransform);
 
 		if (Shark->HookSequence != nullptr)
 		{
@@ -392,11 +414,10 @@ void AHapbeatShowcaseZ3FishingActor::SetHooked(bool bNewHooked)
 	}
 	else
 	{
-		Shark->SetDamping(SwimLinearDamping, SwimAngularDamping);
 		// Unity FishingController.Detach() snaps the object back to its rest pose,
 		// so every hook starts from the same place instead of from wherever the
-		// last one left it drifting.
-		Shark->ResetToTransform(GetSharkRestWorldTransform());
+		// last one left it.
+		Shark->SnapToTransform(GetSharkRestWorldTransform());
 
 		if (Shark->HookSequence != nullptr)
 		{
@@ -409,15 +430,12 @@ void AHapbeatShowcaseZ3FishingActor::OnZoneActivated()
 {
 	if (Shark != nullptr)
 	{
-		Shark->SetPhysicsRunning(true);
-		Shark->SetDamping(SwimLinearDamping, SwimAngularDamping);
-		Shark->ResetToTransform(GetSharkRestWorldTransform());
+		Shark->SnapToTransform(GetSharkRestWorldTransform());
 	}
 	bHooked = false;
 	// The rod goes back into the player's hand: the zone hands it back on the way
 	// out, so it has to be re-mounted on the way in.
 	bMountAttempted = false;
-	PrevRodTipWorldPos = GetRodTipWorldLocation();
 }
 
 void AHapbeatShowcaseZ3FishingActor::OnZoneDeactivated()
@@ -427,13 +445,9 @@ void AHapbeatShowcaseZ3FishingActor::OnZoneDeactivated()
 		Shark->HookSequence->Stop();
 	}
 	bHooked = false;
-	if (Shark != nullptr)
-	{
-		// A hidden zone has its collision off, so a still-simulating shark would
-		// drift (or be pulled) somewhere unrecoverable.
-		Shark->SetPhysicsRunning(false);
-	}
 	UnmountRod();
+	// Nothing to stop simulating: the shark is kinematic and only moves while
+	// this zone's Tick moves it, which the switcher has already disabled.
 }
 
 void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
@@ -449,10 +463,9 @@ void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
 
 	ElapsedTimeSeconds += DeltaSeconds;
 	UpdateRodTip(DeltaSeconds);
-	UpdateSharkWander(DeltaSeconds);
 	if (bHooked)
 	{
-		UpdateHookedLinePhysics(DeltaSeconds);
+		UpdateHookedLineFollow(DeltaSeconds);
 	}
 	UpdateLineVisual();
 	RefreshHud(DeltaSeconds);
@@ -471,127 +484,49 @@ void AHapbeatShowcaseZ3FishingActor::UpdateRodTip(float DeltaSeconds)
 			FMath::Sin(ElapsedTimeSeconds * 0.33f) * RodTipSwayAmplitude * 0.35f);
 		RodTipAnchor->SetRelativeLocation(RodTipFallbackCm + Sway);
 	}
-
-	// Measured from the tip's world motion either way, so a hand-held rod feeds
-	// the tension model exactly as a swaying anchor does.
-	const FVector CurWorldPos = GetRodTipWorldLocation();
-	RodTipVelocity = DeltaSeconds > KINDA_SMALL_NUMBER
-		? (CurWorldPos - PrevRodTipWorldPos) / DeltaSeconds
-		: FVector::ZeroVector;
-	PrevRodTipWorldPos = CurWorldPos;
 }
 
-void AHapbeatShowcaseZ3FishingActor::UpdateSharkWander(float DeltaSeconds)
+void AHapbeatShowcaseZ3FishingActor::UpdateHookedLineFollow(float DeltaSeconds)
 {
-	if (!bEnableSharkWander)
-	{
-		// Unity's shark does nothing until it is pulled; that is the default here too.
-		return;
-	}
-	UCapsuleComponent* Body = Shark->GetBody();
-	if (Body == nullptr)
-	{
-		return;
-	}
-
-	// Discrete, occasional kick -- a fixed real-time cadence (not frame-rate
-	// scaled: a "burst" should feel the same regardless of framerate, and the
-	// interval itself is already real-time based via the DeltaSeconds countdown).
-	TimeToNextWanderImpulse -= DeltaSeconds;
-	if (TimeToNextWanderImpulse <= 0.0f)
-	{
-		FVector RandDir = FMath::VRand();
-		RandDir.Z *= 0.3f; // mostly horizontal, gentle vertical bob only
-		RandDir.Normalize();
-		Body->AddImpulse(RandDir * WanderImpulseSpeed, NAME_None, /*bVelChange=*/true);
-		TimeToNextWanderImpulse = FMath::FRandRange(WanderIntervalMinSeconds, WanderIntervalMaxSeconds);
-	}
-
-	// Continuous (per-tick) correction -- expressed as an acceleration and
-	// integrated by DeltaSeconds so it stays frame-rate independent.
-	if (!bHooked)
-	{
-		const FVector Home = GetSharkRestWorldTransform().GetLocation();
-		const FVector ToHome = Home - Body->GetComponentLocation();
-		const float DistFromHome = ToHome.Size();
-		if (DistFromHome > HomeLeashRadius)
-		{
-			const FVector Dir = ToHome / FMath::Max(DistFromHome, KINDA_SMALL_NUMBER);
-			Body->AddImpulse(Dir * HomeLeashAccel * DeltaSeconds, NAME_None, /*bVelChange=*/true);
-		}
-	}
-}
-
-void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
-{
-	UCapsuleComponent* Body = Shark->GetBody();
-	if (Body == nullptr)
+	const UCapsuleComponent* Body = Shark->GetBody();
+	if (Body == nullptr || DeltaSeconds <= KINDA_SMALL_NUMBER)
 	{
 		return;
 	}
 
 	const FVector RodTipPos = GetRodTipWorldLocation();
 	const FVector SharkPos = Body->GetComponentLocation();
-	const FVector ToShark = SharkPos - RodTipPos;
-	const float Dist = ToShark.Size();
+	const float Dist = FVector::Dist(SharkPos, RodTipPos);
 
 	if (Dist < MaxLineLength)
 	{
-		return; // slack: the shark's own physics applies unmodified
-		        // (FishingController.cs FixedUpdate, "糸が slack: 物理任せ... 何もしない")
+		// Slack line: the target IS where the shark already is, so it stays put.
+		// (FishingController.cs FixedUpdate, "糸が slack: 何もしない" -- there the
+		// shark's own physics carried on; here there is no physics to carry on.)
+		return;
 	}
 
-	const FVector Dir = ToShark / FMath::Max(Dist, KINDA_SMALL_NUMBER);
+	// Taut: the shark belongs one line-length straight below the rod tip. Same
+	// point Attach() snaps to, so hooking and pulling agree on where the fish
+	// hangs.
+	const FVector Target = RodTipPos + FVector::DownVector * MaxLineLength;
 
-	// FishingController.FixedUpdate() applies these corrections once per Unity
-	// physics tick (a fixed ~50 Hz cadence) with no additional dt scaling -- so
-	// its 3 additive terms are each implicitly "per 1/50 s". UE's Tick runs at a
-	// variable cadence, so the ONE term that is a literal port of a Unity-tuned
-	// constant (rod-tip inertia, below) is expressed as an acceleration
-	// (constant x UnityReferenceHz) and integrated by DeltaSeconds: summed over
-	// any 1 real second this reproduces the same total velocity change as 50
-	// discrete Unity ticks would, regardless of UE's actual frame rate. The
-	// spring pull-back and radial damping are NOT literal ports (see the class
-	// comment) so they are authored directly in per-second units.
-	constexpr float UnityReferenceHz = 50.0f;
+	// Unity closes half the remaining distance PER PHYSICS TICK. Applied per
+	// FRAME that would be a different pull at every frame rate, so it is
+	// converted: keeping (1 - lerp) of the distance per tick means keeping
+	// (1 - lerp)^(ticks elapsed) of it over this frame.
+	const float Keep = FMath::Clamp(1.0f - LineFollowLerpPerTick, 0.0f, 1.0f);
+	const float Alpha = 1.0f - FMath::Pow(Keep, DeltaSeconds * UnityReferenceHz);
 
-	FVector Velocity = Body->GetPhysicsLinearVelocity();
-
-	// 1) Rod-tip inertia transfer -- FishingController.cs:
-	//    "_object.linearVelocity += rodTipVel * _rodInertiaFactor" (capped rodTipVel).
-	FVector CappedRodTipVel = RodTipVelocity;
-	const float RodTipSpeed = CappedRodTipVel.Size();
-	if (RodTipSpeed > MaxTransferSpeed)
-	{
-		CappedRodTipVel *= (MaxTransferSpeed / RodTipSpeed);
-	}
-	Velocity += CappedRodTipVel * RodInertiaFactor * UnityReferenceHz * DeltaSeconds;
-
-	// 2) Hooke's-law restoring force pulling the shark back toward the
-	//    max-length sphere -- the velocity-domain replacement for Unity's
-	//    per-tick position Lerp ("Vector3.Lerp(pos, snapPos, 0.5f)"): F = -k *
-	//    overshoot, applied as a mass-independent velocity change scaled by
-	//    DeltaSeconds (semi-implicit Euler spring integration).
-	const float Overshoot = Dist - MaxLineLength;
-	Velocity += -Dir * Overshoot * LineSpringStiffness * DeltaSeconds;
-
-	// 3) Radial damping: remove part of the outward velocity component so the
-	//    shark doesn't keep fighting the tether -- FishingController.cs:
-	//    "linearVelocity -= dir*radialSpeed*0.7f". Clamped to never remove MORE
-	//    than the current outward speed (defensive against a large DeltaSeconds
-	//    flipping the direction of travel).
-	const float RadialSpeed = Velocity | Dir; // FVector::operator| is the dot product
-	if (RadialSpeed > 0.0f)
-	{
-		const float DampAmount = FMath::Min(RadialSpeed, RadialSpeed * RadialDampingFactor * DeltaSeconds);
-		Velocity -= Dir * DampAmount;
-	}
-
-	Body->SetPhysicsLinearVelocity(Velocity);
+	FTransform NewTransform = Shark->GetActorTransform();
+	// Written, NOT teleported: this is ordinary motion and the velocity estimate
+	// must see it (that speed is what drives the hook loop's gain).
+	NewTransform.SetLocation(FMath::Lerp(SharkPos, Target, Alpha));
+	Shark->SetActorTransform(NewTransform, /*bSweep=*/false);
 
 	// Auto-release when the line is overstretched. Unity has no such rule (you
 	// let go when you let go), so this is opt-in.
-	if (bEnableLineBreak && Overshoot > BreakDistance)
+	if (bEnableLineBreak && (Dist - MaxLineLength) > BreakDistance)
 	{
 		SetHooked(false);
 	}
@@ -746,22 +681,22 @@ FTransform AHapbeatShowcaseZ3FishingActor::GetPlayerSpawnRelative() const
 
 AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	// Ticks to publish its own velocity (see Tick), which is the only way a
+	// kinematic body can report one.
+	PrimaryActorTick.bCanEverTick = true;
 
 	Body = CreateDefaultSubobject<UCapsuleComponent>(TEXT("Body"));
 	RootComponent = Body;
 	Body->SetMobility(EComponentMobility::Movable);
+	// Kinematic: query-only, never simulated. The zone writes the pose, so a
+	// solver would only fight it -- and QueryOnly still answers the overlap /
+	// trace tests anything else in the level might do against the shark.
 	Body->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
-	// Unity's FishingObject Rigidbody is 1 kg; without the override UE would
-	// derive a mass from the capsule's volume, which changes how the line feels.
-	Body->SetMassOverrideInKg(NAME_None, SharkMassKg, /*bNewOverrideMass=*/true);
-	// A hanging creature, not a sinking prop: Unity's FishingController turns
-	// gravity ON at Attach, but the shark here is held by the line the whole time
-	// and gravity only fights the tether, so it stays off and the damping +
-	// spring do the work.
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	// The FLAG, not SetSimulatePhysics(): that call on an unregistered component
+	// is order-dependent and logs against a BodyInstance that does not exist yet.
+	Body->BodyInstance.bSimulatePhysics = false;
 	Body->SetEnableGravity(false);
-	// SetSimulatePhysics() is deferred to BeginPlay -- calling it on an
-	// unregistered component is order-dependent.
 
 	SharkMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SharkMesh"));
 	SharkMesh->SetupAttachment(Body);
@@ -792,10 +727,35 @@ void AHapbeatShowcaseZ3SharkActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (Body != nullptr)
+	// Seed the velocity estimate from where the shark actually starts, so the
+	// first Tick reports 0 instead of the distance from the world origin.
+	PrevWorldLocation = GetActorLocation();
+	bHasPrevWorldLocation = true;
+}
+
+void AHapbeatShowcaseZ3SharkActor::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (Body == nullptr)
 	{
-		Body->SetSimulatePhysics(true);
+		return;
 	}
+
+	const FVector Current = GetActorLocation();
+	FVector Velocity = FVector::ZeroVector;
+	if (bHasPrevWorldLocation && DeltaSeconds > KINDA_SMALL_NUMBER)
+	{
+		Velocity = (Current - PrevWorldLocation) / DeltaSeconds;
+	}
+	PrevWorldLocation = Current;
+	bHasPrevWorldLocation = true;
+
+	// USceneComponent::ComponentVelocity is what GetComponentVelocity() returns,
+	// and is the ONLY velocity a non-simulating body has to offer. The gain
+	// binding reads it (see UHapbeatParameterBinding VelocityMagnitude), so this
+	// assignment is what makes a thrashing shark feel like one.
+	Body->ComponentVelocity = Velocity;
 }
 
 void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
@@ -827,16 +787,60 @@ void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
 	SharkMesh->SetStaticMesh(Mesh);
 
 	// SM_Shark comes in with four slots named after the source .mtl
-	// (Shark_Main / Shark_Dark / Shark_Light / Eyes); match on the name, and fall
-	// back to the .obj's declaration order if an importer renamed them.
-	FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMesh, TEXT("Dark"), 0,
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Dark")));
-	FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMesh, TEXT("Main"), 1,
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Main")));
-	FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMesh, TEXT("Light"), 2,
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Light")));
-	FHapbeatSampleLibrary::AssignMaterialBySlotName(SharkMesh, TEXT("Eyes"), 3,
-		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Eyes")));
+	// (Shark_Main / Shark_Dark / Shark_Light / Eyes). EVERY slot is filled here,
+	// driven by the slot's own name -- the previous per-name-with-fallback-INDEX
+	// form left slots untouched whenever the importer's naming or ordering did
+	// not match what it assumed, and an untouched slot keeps UE's default
+	// material: the shark read plain white in PIE.
+	UMaterialInterface* SharkMain =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Main"));
+	UMaterialInterface* SharkDark =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Dark"));
+	UMaterialInterface* SharkLight =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Light"));
+	UMaterialInterface* SharkEyes =
+		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_Shark_Eyes"));
+
+	const TArray<FStaticMaterial>& Slots = Mesh->GetStaticMaterials();
+	for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
+	{
+		const FStaticMaterial& Slot = Slots[SlotIndex];
+		const FString SlotName = Slot.MaterialSlotName.ToString()
+			+ TEXT("|") + Slot.ImportedMaterialSlotName.ToString();
+
+		// Kept, not temporary debugging: when a replacement model paints up
+		// wrong, the first question is what its slots are actually called, and
+		// this is the only place that can answer it. Once per shark.
+		UE_LOG(LogHapbeatShowcaseZ3, Log, TEXT("Z3 shark material slot %d: '%s'"), SlotIndex, *SlotName);
+
+		// Substring, not equality: the importer prefixes / suffixes slot names.
+		// Eyes is tested before the body colours only for readability -- the
+		// four .mtl names do not overlap.
+		UMaterialInterface* SlotMaterial = SharkMain;
+		if (SlotName.Contains(TEXT("Eyes")))
+		{
+			SlotMaterial = SharkEyes;
+		}
+		else if (SlotName.Contains(TEXT("Shark_Dark")))
+		{
+			SlotMaterial = SharkDark;
+		}
+		else if (SlotName.Contains(TEXT("Shark_Light")))
+		{
+			SlotMaterial = SharkLight;
+		}
+		else if (SlotName.Contains(TEXT("Shark_Main")))
+		{
+			SlotMaterial = SharkMain;
+		}
+		// Anything else falls through to the body colour: a slot nobody
+		// recognises is still part of the shark, and body blue is a far better
+		// wrong answer than UE's default grey.
+		if (SlotMaterial != nullptr)
+		{
+			SharkMesh->SetMaterial(SlotIndex, SlotMaterial);
+		}
+	}
 
 	// Fit to the finished size (longest axis = the body length), then point that
 	// axis forward IN WORLD TERMS. The actor is pitched by BodyPitchDegrees to
@@ -855,29 +859,18 @@ void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
 		-FHapbeatSampleLibrary::ComputeFittedBoundsCentre(Mesh, Scale, MeshRotation.Rotator()));
 }
 
-void AHapbeatShowcaseZ3SharkActor::SetPhysicsRunning(bool bRunning)
+void AHapbeatShowcaseZ3SharkActor::SnapToTransform(const FTransform& NewTransform)
 {
+	SetActorTransform(NewTransform, /*bSweep=*/false, nullptr, ETeleportType::TeleportPhysics);
+
+	// Re-seeded, not just moved: a teleport is not motion, and left alone the
+	// next Tick would divide the whole jump by one frame and hand the gain
+	// binding a speed of many metres per second -- a full-strength haptic burst
+	// on every hook and every release.
+	PrevWorldLocation = GetActorLocation();
+	bHasPrevWorldLocation = true;
 	if (Body != nullptr)
 	{
-		Body->SetSimulatePhysics(bRunning);
-	}
-}
-
-void AHapbeatShowcaseZ3SharkActor::SetDamping(float Linear, float Angular)
-{
-	if (Body != nullptr)
-	{
-		Body->SetLinearDamping(Linear);
-		Body->SetAngularDamping(Angular);
-	}
-}
-
-void AHapbeatShowcaseZ3SharkActor::ResetToTransform(const FTransform& RestTransform)
-{
-	SetActorTransform(RestTransform, false, nullptr, ETeleportType::ResetPhysics);
-	if (Body != nullptr && Body->IsSimulatingPhysics())
-	{
-		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
-		Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		Body->ComponentVelocity = FVector::ZeroVector;
 	}
 }

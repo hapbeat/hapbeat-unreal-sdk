@@ -31,7 +31,6 @@
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
-#include "Widgets/Notifications/SProgressBar.h"
 #include "Widgets/Text/STextBlock.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ5, Log, All);
@@ -61,14 +60,21 @@ namespace
 	/** Unity ChargeShooter._chargeBarColorLow / _chargeBarColorHigh. */
 	const FLinearColor ChargeBarLowColor(0.3f, 0.6f, 1.0f, 1.0f);
 	const FLinearColor ChargeBarHighColor(1.0f, 0.3f, 0.2f, 1.0f);
+	/** The empty part of the bar: dark enough that either fill colour reads against it. */
+	const FLinearColor ChargeBarTrackColor(0.08f, 0.08f, 0.09f, 0.9f);
 
 	/**
 	 * Per-model correction for the roll / yaw the longest-axis alignment cannot
 	 * decide (see AHapbeatShowcaseZ5ProjectileActor::ProjectileMeshExtraRotation).
-	 * SM_BulletFoam reads a quarter turn off; SM_Missile is already true.
+	 *
+	 * BOTH are now zero: the bullet's -90 degree yaw was added when it looked
+	 * sideways in a nose-on capture, but the alignment already turns it the right
+	 * way and the extra quarter turn is what put it across the shot. Same as the
+	 * missile, which never needed one. Kept as named constants rather than
+	 * dropped, because they are the hook a replacement model gets corrected on.
 	 */
-	const FRotator LightProjectileMeshExtraRotation(0.0f, -90.0f, 0.0f);
-	const FRotator HeavyProjectileMeshExtraRotation(0.0f, 0.0f, 0.0f);
+	const FRotator LightProjectileMeshExtraRotation(FRotator::ZeroRotator);
+	const FRotator HeavyProjectileMeshExtraRotation(FRotator::ZeroRotator);
 
 	/** SpawnProjectilePreview() placement / lifetime (capture aid only). */
 	constexpr float PreviewForwardCm = 150.0f;
@@ -277,14 +283,42 @@ void AHapbeatShowcaseZ5ChargeShotActor::CreateChargeBar()
 					SNew(SBox).WidthOverride(ChargeBarWidthPx).HeightOverride(ChargeBarHeightPx)
 					[
 						SNew(SOverlay)
+						// The track.
 						+ SOverlay::Slot()
 						[
-							SNew(SProgressBar)
-							.Percent_Lambda([this]() { return LastChargeT; })
-							.FillColorAndOpacity_Lambda([this]()
+							SNew(SImage)
+							.Image(WhiteBrush)
+							.ColorAndOpacity(FSlateColor(ChargeBarTrackColor))
+						]
+						// The fill: a plain box whose WIDTH is the charge, drawn
+						// in the low / high colour.
+						//
+						// NOT SProgressBar, which is what this was: its fill is
+						// drawn from the active Slate style's own brush, and
+						// FillColorAndOpacity only TINTS that brush -- against
+						// the editor style's near-white fill the low blue and the
+						// high red both came out as the same pale bar, so the
+						// crossing of the heavy threshold (the one thing the bar
+						// exists to show) was invisible. Drawing the fill here
+						// makes the colour the colour.
+						+ SOverlay::Slot()
+						.HAlign(HAlign_Left)
+						[
+							SNew(SBox)
+							.WidthOverride_Lambda([this]()
 							{
-								return FSlateColor(LastChargeT >= HeavyThreshold ? ChargeBarHighColor : ChargeBarLowColor);
+								return FOptionalSize(ChargeBarWidthPx * FMath::Clamp(LastChargeT, 0.0f, 1.0f));
 							})
+							.HeightOverride(ChargeBarHeightPx)
+							[
+								SNew(SImage)
+								.Image(WhiteBrush)
+								.ColorAndOpacity_Lambda([this]()
+								{
+									return FSlateColor(LastChargeT >= HeavyThreshold
+										? ChargeBarHighColor : ChargeBarLowColor);
+								})
+							]
 						]
 						+ SOverlay::Slot()
 						[
@@ -727,6 +761,13 @@ void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectile(float ChargeT, bool bHea
 	}
 }
 
+void AHapbeatShowcaseZ5ChargeShotActor::DebugSetChargeForCapture(float T)
+{
+	// The displayed value and nothing else -- see the header. The bar reads
+	// LastChargeT every frame, so this is all a capture needs.
+	LastChargeT = FMath::Clamp(T, 0.0f, 1.0f);
+}
+
 void AHapbeatShowcaseZ5ChargeShotActor::SpawnProjectilePreview(bool bHeavy, float YawOffsetDeg)
 {
 	UWorld* World = GetWorld();
@@ -1116,6 +1157,22 @@ void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, boo
 	if (InMesh != nullptr)
 	{
 		ProjectileMesh->SetStaticMesh(InMesh);
+
+		// Paint EVERY slot: a slot left alone keeps UE's default material, which
+		// is how both projectiles read grey-white in PIE. The bullet's source
+		// .mtl is the shared colormap; the missile's is DefaultMaterial (its
+		// map_Kd is DefaultMaterial_Base_Color.png), so they take different
+		// instances -- which one is a property of the MODEL, hence the bHeavy
+		// test rather than a caller argument.
+		if (UMaterialInterface* Material = FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(
+			TEXT("Materials"), bInHeavy ? TEXT("MI_DefaultMaterial") : TEXT("MI_Colormap")))
+		{
+			for (int32 SlotIndex = 0; SlotIndex < ProjectileMesh->GetNumMaterials(); ++SlotIndex)
+			{
+				ProjectileMesh->SetMaterial(SlotIndex, Material);
+			}
+		}
+
 		// Proportional fit (only the length is stated), then the charge multiplier.
 		const FVector BaseScale =
 			FHapbeatSampleLibrary::ComputeAxisFitScale(InMesh, FVector(InBaseLengthCm, 0.0f, 0.0f));

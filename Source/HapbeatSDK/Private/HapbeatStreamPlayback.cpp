@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatStreamPlayback.h"
 
+#include "GameFramework/Actor.h" // AActor: the playback's origin (SetOwnerActor)
+
 void UHapbeatStreamPlayback::Init(float Baseline, float InitialModulator)
 {
 	BaselineGain = Baseline;
@@ -35,6 +37,18 @@ void UHapbeatStreamPlayback::Stop()
 {
 	bStopped = true;
 	GetMirror()->bStopped.store(true, std::memory_order_relaxed);
+}
+
+void UHapbeatStreamPlayback::SetOwnerActor(AActor* InOwner)
+{
+	// Not mirrored: the origin is only ever read on the game thread (by the
+	// parameter bindings), never by the stream thread.
+	OwnerActor = InOwner;
+}
+
+AActor* UHapbeatStreamPlayback::GetOwnerActor() const
+{
+	return OwnerActor.Get();
 }
 
 void UHapbeatStreamPlayback::GetStereoChannelGains(float& OutL, float& OutR) const

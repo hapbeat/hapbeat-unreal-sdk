@@ -11,6 +11,7 @@
 #include "Components/ChildActorComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SphereComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMesh.h"
@@ -34,9 +35,22 @@ namespace
 	const FVector LaneCentreCm(367.2f, 0.0f, 85.0f);
 	const FVector LaneSizeCm(939.381f, 226.485f, 10.0f); // top face therefore at Z = 90
 
-	/** Ball: Unity local (0, 1.295, -1), a 0.4 m sphere. */
-	const FVector BallRestCm(-100.0f, 0.0f, 129.5f);
-	constexpr float BallDiameterCm = 40.0f;
+	/**
+	 * Ball: Unity local X/Y, but sized and seated here rather than converted.
+	 *
+	 * DELIBERATE DEPARTURE FROM UNITY (user call): Unity's ball is a 40 cm
+	 * sphere, which is nearly twice a real one. A regulation bowling ball is
+	 * 21.6 cm across, so this one is 22. Its mass stays Unity's 4 kg -- the
+	 * number the rack's scatter was tuned against.
+	 *
+	 * The rest height follows from the size instead of from Unity's 129.5: the
+	 * lane's top face is at Z = 90 (see LaneCentreCm / LaneSizeCm), so the ball
+	 * sits at 90 + its radius and touches the lane exactly. Keeping the converted
+	 * 129.5 would have left a 22 cm ball hanging 28 cm in the air.
+	 */
+	constexpr float BallDiameterCm = 22.0f;
+	constexpr float LaneTopCm = 90.0f;
+	const FVector BallRestCm(-100.0f, 0.0f, LaneTopCm + BallDiameterCm * 0.5f);
 	constexpr float BallMassKg = 4.0f;
 
 	/**
@@ -155,8 +169,9 @@ void AHapbeatShowcaseZ1BowlingActor::SetUpBall()
 
 	// What every pin's HitTrigger filters on. AddUnique because a child actor is
 	// rebuilt with its component and this runs once per play session either way.
+	// The ball paints itself in its own BeginPlay; the zone only tags it and
+	// starts it simulating.
 	Ball->Tags.AddUnique(ContactTag);
-	Ball->ApplyShowcaseAssets();
 	Ball->SetPhysicsRunning(true);
 }
 
@@ -173,8 +188,8 @@ void AHapbeatShowcaseZ1BowlingActor::ApplyShowcaseAssets()
 			LaneMesh->SetMaterial(0, LaneMaterial);
 		}
 	}
-	// The ball's own material is applied by the ball actor, which owns that mesh
-	// now (SetUpBall -> AHapbeatShowcaseZ1BallActor::ApplyShowcaseAssets).
+	// The ball's own material is applied by the ball actor, in its own BeginPlay
+	// (AHapbeatShowcaseZ1BallActor::ApplyShowcaseAssets) -- it owns that mesh.
 }
 
 void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
@@ -493,9 +508,16 @@ void AHapbeatShowcaseZ1PinActor::BeginPlay()
 	{
 		PinBody->SetSimulatePhysics(true);
 		PinBody->SetNotifyRigidBodyCollision(true); // required for OnComponentHit to fire
-		// The haptic side is already handled by HitTrigger; this is only the SFX,
-		// which Unity keeps in its own CollisionAudio component for the same reason.
-		PinBody->OnComponentHit.AddDynamic(this, &AHapbeatShowcaseZ1PinActor::HandlePinHit);
+	}
+
+	// The impact SFX rides on the TRIGGER's own fire event, not on a second
+	// subscription to OnComponentHit. Two subscribers meant two sets of
+	// thresholds and two cooldowns filtering the same physics stream, so the
+	// click and the haptic drifted apart -- one firing on contacts the other had
+	// rejected. One gate now: if the pin was felt, it is heard.
+	if (HitTrigger != nullptr)
+	{
+		HitTrigger->OnFired.AddDynamic(this, &AHapbeatShowcaseZ1PinActor::HandleHapticFired);
 	}
 }
 
@@ -589,41 +611,22 @@ void AHapbeatShowcaseZ1PinActor::SetPhysicsRunning(bool bRunning)
 	}
 }
 
-void AHapbeatShowcaseZ1PinActor::HandlePinHit(UPrimitiveComponent* HitComponent, AActor* OtherActor,
-	UPrimitiveComponent* OtherComponent, FVector NormalImpulse, const FHitResult& Hit)
+void AHapbeatShowcaseZ1PinActor::HandleHapticFired(AActor* /*Other*/, float Speed)
 {
-	if (HitSound == nullptr || HitComponent == nullptr)
+	if (HitSound == nullptr)
 	{
 		return;
 	}
 
-	const UWorld* World = GetWorld();
-	const float Now = World != nullptr ? World->GetTimeSeconds() : 0.0f;
-	if (Now - LastHitSoundTime < HitSoundCooldownSeconds)
-	{
-		return;
-	}
-
-	// Closing speed between the two bodies -- UE's counterpart of Unity's
-	// Collision.relativeVelocity. UE reports the hit after the solver has already
-	// resolved it, so this reads slightly lower than Unity's pre-impact value;
-	// the velocity-to-volume curve is a feel mapping, so that is acceptable.
-	FVector RelativeVelocity = HitComponent->GetPhysicsLinearVelocity();
-	if (OtherComponent != nullptr && OtherComponent->IsSimulatingPhysics())
-	{
-		RelativeVelocity -= OtherComponent->GetPhysicsLinearVelocity();
-	}
-	const float Speed = RelativeVelocity.Size();
-	if (Speed < HitSoundMinSpeed)
-	{
-		return;
-	}
-
+	// No threshold and no cooldown of its own: the trigger already decided this
+	// is a real, new contact (VelocityThreshold, the enter-only contact filter
+	// and its Cooldown), and the sound's job is only to say how hard it was.
+	// Speed is the closing speed the trigger measured, so a below-range hit
+	// still clicks -- quietly, at HitSoundMinVolume.
 	const float Alpha = FMath::Clamp(
 		(Speed - HitSoundMinSpeed) / (HitSoundMaxSpeed - HitSoundMinSpeed), 0.0f, 1.0f);
 	const float Volume = FMath::Lerp(HitSoundMinVolume, 1.0f, Alpha);
 	UGameplayStatics::PlaySoundAtLocation(this, HitSound, GetActorLocation(), Volume);
-	LastHitSoundTime = Now;
 }
 
 // =============================================================================
@@ -634,37 +637,56 @@ AHapbeatShowcaseZ1BallActor::AHapbeatShowcaseZ1BallActor()
 {
 	PrimaryActorTick.bCanEverTick = false;
 
+	// The SPHERE is the root, not the mesh -- see the header. The ball is spawned
+	// by a UChildActorComponent, which overwrites its child actor's root transform
+	// with the slot's own (scale 1), so any scale put on the root is thrown away
+	// at spawn time: the 0.22 sphere read correctly in the editor and came up as
+	// the engine's full 100 cm one in PIE. Size therefore lives on the sphere's
+	// RADIUS and on the mesh CHILD's scale, which the slot never touches.
+	Body = CreateDefaultSubobject<USphereComponent>(TEXT("Body"));
+	RootComponent = Body;
+	Body->SetMobility(EComponentMobility::Movable);
+	Body->SetSphereRadius(BallDiameterCm * 0.5f);
+	Body->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
+	// Unity's ball is a 4 kg Rigidbody; without an override UE would derive the
+	// mass from the sphere's volume and density, which is not the same number and
+	// changes how hard the rack scatters.
+	Body->SetMassOverrideInKg(NAME_None, BallMassKg, /*bNewOverrideMass=*/true);
+	// The pins listen for Hit events, which are only reported when the bodies
+	// involved are set to generate them. Flag-only here -- it needs no registered
+	// body, unlike SetSimulatePhysics below.
+	Body->BodyInstance.bNotifyRigidBodyCollision = true;
+	// SetSimulatePhysics() is deferred to BeginPlay (see AHapbeatShowcaseZ1PinActor's
+	// header note): before the component is registered it is order-dependent and
+	// can log a spurious "no physics body" warning.
+
 	BallMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("BallMesh"));
-	RootComponent = BallMesh;
+	BallMesh->SetupAttachment(Body);
 	BallMesh->SetMobility(EComponentMobility::Movable);
 	if (UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")))
 	{
 		BallMesh->SetStaticMesh(SphereMesh);
 	}
-	BallMesh->SetRelativeScale3D(FVector(BallDiameterCm / 100.0f)); // engine Sphere is 100 cm across
-	BallMesh->SetCollisionProfileName(UCollisionProfile::PhysicsActor_ProfileName);
-	// Unity's ball is a 4 kg Rigidbody; without an override UE would derive the
-	// mass from the sphere's volume and density, which is not the same number and
-	// changes how hard the rack scatters.
-	BallMesh->SetMassOverrideInKg(NAME_None, BallMassKg, /*bNewOverrideMass=*/true);
-	// The pins listen for Hit events, which are only reported when the bodies
-	// involved are set to generate them. Flag-only here -- it needs no registered
-	// body, unlike SetSimulatePhysics below.
-	BallMesh->BodyInstance.bNotifyRigidBodyCollision = true;
-	// SetSimulatePhysics() is deferred to BeginPlay (see AHapbeatShowcaseZ1PinActor's
-	// header note): before the component is registered it is order-dependent and
-	// can log a spurious "no physics body" warning.
+	// A CHILD's relative transform, which the parent UChildActorComponent leaves
+	// alone. Engine Sphere is 100 cm across, so this fits it to the collider.
+	BallMesh->SetRelativeLocation(FVector::ZeroVector);
+	BallMesh->SetRelativeScale3D(FVector(BallDiameterCm / 100.0f));
+	// No collision on the visual: the sphere is the collider, and a second one
+	// inside it would fight the solver.
+	BallMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 }
 
 void AHapbeatShowcaseZ1BallActor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (BallMesh != nullptr)
+	if (Body != nullptr)
 	{
-		BallMesh->SetSimulatePhysics(true);
-		BallMesh->SetNotifyRigidBodyCollision(true);
+		Body->SetSimulatePhysics(true);
+		Body->SetNotifyRigidBodyCollision(true);
 	}
+
+	ApplyShowcaseAssets();
 }
 
 void AHapbeatShowcaseZ1BallActor::ApplyShowcaseAssets()
@@ -676,7 +698,15 @@ void AHapbeatShowcaseZ1BallActor::ApplyShowcaseAssets()
 	if (UMaterialInterface* BallMaterial =
 		FHapbeatSampleLibrary::LoadShowcaseAsset<UMaterialInterface>(TEXT("Materials"), TEXT("MI_BowlingBall")))
 	{
-		BallMesh->SetMaterial(0, BallMaterial);
+		// EVERY slot, not just slot 0: painting only the first left the ball on
+		// the engine's default material (it read pale lilac in PIE), the same
+		// trap the pin's own multi-slot assignment already documents. A sphere
+		// normally has one slot, so this is usually one assignment -- but it
+		// costs nothing and does not depend on that being true.
+		for (int32 SlotIndex = 0; SlotIndex < BallMesh->GetNumMaterials(); ++SlotIndex)
+		{
+			BallMesh->SetMaterial(SlotIndex, BallMaterial);
+		}
 	}
 }
 
@@ -686,29 +716,29 @@ void AHapbeatShowcaseZ1BallActor::ResetToTransform(const FTransform& RestTransfo
 	// downrange -- or one that rolled off the lane -- comes back clean rather
 	// than carrying stale velocity into the next launch.
 	SetActorTransform(RestTransform, false, nullptr, ETeleportType::ResetPhysics);
-	if (BallMesh != nullptr && BallMesh->IsSimulatingPhysics())
+	if (Body != nullptr && Body->IsSimulatingPhysics())
 	{
-		BallMesh->SetPhysicsLinearVelocity(FVector::ZeroVector);
-		BallMesh->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		Body->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
 	}
 }
 
 void AHapbeatShowcaseZ1BallActor::LaunchWithVelocity(const FVector& Velocity)
 {
-	if (BallMesh == nullptr)
+	if (Body == nullptr)
 	{
 		return;
 	}
 	// bVelChange=true adds straight to velocity (mass-independent), matching
 	// Unity BallLauncher.Launch()'s `_ball.linearVelocity = dir * _launchSpeed;`
 	// assignment onto a ball the caller has just zeroed.
-	BallMesh->AddImpulse(Velocity, NAME_None, /*bVelChange=*/true);
+	Body->AddImpulse(Velocity, NAME_None, /*bVelChange=*/true);
 }
 
 void AHapbeatShowcaseZ1BallActor::SetPhysicsRunning(bool bRunning)
 {
-	if (BallMesh != nullptr)
+	if (Body != nullptr)
 	{
-		BallMesh->SetSimulatePhysics(bRunning);
+		Body->SetSimulatePhysics(bRunning);
 	}
 }

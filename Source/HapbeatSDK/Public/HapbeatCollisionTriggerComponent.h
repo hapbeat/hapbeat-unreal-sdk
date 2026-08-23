@@ -81,6 +81,36 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Collision")
 	FRuntimeFloatCurve VelocityCurve;
 
+	/**
+	 * Report only the START of a contact, the way Unity's OnCollisionEnter does.
+	 *
+	 * Chaos reports OnComponentHit for a CONTINUING touch, not just for the
+	 * moment of impact: a ball rolling along a wall, or a pin leaning on its
+	 * neighbour, keeps producing hits every frame. Unity's OnCollisionEnter fires
+	 * once and stays quiet until the two bodies have separated, and every gain /
+	 * threshold value in this SDK was authored against that behaviour.
+	 *
+	 * With this on, hits from the same OTHER COMPONENT that keep arriving inside
+	 * ContactSeparationSeconds of each other count as one contact and are
+	 * dropped. Turn it off for a trigger that genuinely wants a continuous
+	 * stream of contact events. Hit mode only -- BeginOverlap is already an
+	 * enter-only event.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Collision")
+	bool bEnterOnly = true;
+
+	/**
+	 * The quiet gap that ends a contact, in seconds (bEnterOnly only). A hit from
+	 * the same component within this long of the previous one is the same touch
+	 * continuing; a longer gap makes the next hit a new one.
+	 *
+	 * INDEPENDENT of Cooldown: this is per other-component and is about what
+	 * counts as one contact, while Cooldown is a per-trigger rate limit across
+	 * all contacts. A trigger can sensibly use both.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Collision", meta = (ClampMin = "0.0"))
+	float ContactSeparationSeconds = 0.2f;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -101,6 +131,21 @@ private:
 
 	/** Resolve the owner primitive to bind (root if it is a primitive, else the first primitive component). */
 	UPrimitiveComponent* ResolveOwnerPrimitive() const;
+
+	/**
+	 * Enter-only gate (see bEnterOnly). Returns true when this hit continues a
+	 * contact already in progress and must be dropped. Always stamps the
+	 * component's last-contact time, so a touch that keeps producing hits keeps
+	 * the gate closed until it actually stops.
+	 */
+	bool IsContinuingContact(UPrimitiveComponent* OtherComp);
+
+	/**
+	 * Last hit time per other-component, for IsContinuingContact. Weak keys: the
+	 * other actor may be destroyed while its entry is still in here, and this map
+	 * must not be what keeps it alive. Pruned in IsContinuingContact.
+	 */
+	TMap<TWeakObjectPtr<UPrimitiveComponent>, double> LastContactTime;
 
 	/** The primitive we bound delegates on (kept so EndPlay can unbind the exact instance). */
 	UPROPERTY(Transient)

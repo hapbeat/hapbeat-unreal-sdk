@@ -139,13 +139,6 @@ public:
 	static FRotator ComputeShortestAxisToDirectionRotation(const UStaticMesh* Mesh, const FVector& WorldDirection);
 
 	/**
-	 * The tip of Mesh's longest axis (its positive end), expressed in the space
-	 * of a component carrying Scale and Rotation -- i.e. where a fishing line
-	 * hangs from once the rod has been fitted and turned. Zero for a null mesh.
-	 */
-	static FVector ComputeFittedTipOffset(const UStaticMesh* Mesh, const FVector& Scale, const FRotator& Rotation);
-
-	/**
 	 * Where Mesh's bounds centre lands once Scale and Rotation are applied.
 	 * Negate it to sit the mesh's centre on its component's origin (a physics
 	 * body's collider centre, for instance). Zero for a null mesh.
@@ -177,16 +170,6 @@ public:
 	 * (90,0,0) -> Pitch -90, (0,0,90) -> Roll -90, plus a composite case.
 	 */
 	static FRotator UnityEulerToUERotator(const FVector& UnityEulerDeg);
-
-	/**
-	 * Assign a Showcase material to one slot of a mesh component, preferring the
-	 * slot whose NAME contains SlotNameSubstring (imported OBJ slots keep their
-	 * .mtl names) and falling back to FallbackSlotIndex when no name matches --
-	 * importers are free to reorder slots, so name-first is the stable wiring and
-	 * the index is only a last resort. No-op when either argument is null.
-	 */
-	static void AssignMaterialBySlotName(UStaticMeshComponent* MeshComponent, const TCHAR* SlotNameSubstring,
-		int32 FallbackSlotIndex, UMaterialInterface* Material);
 
 	/**
 	 * Show (or update in place) one line of a persistent on-screen HUD, e.g. a

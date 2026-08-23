@@ -76,9 +76,11 @@ enum class EHapbeatBindingOutput : uint8
  * an active playback to modulate.
  *
  * UE counterpart of Hapbeat.HapbeatParameterBinding (Unity SDK). v1 streams a
- * SINGLE active session, so the binding writes to the subsystem's single
- * GetActivePlayback() directly — the Unity per-event-id / linked-preset scoping
- * (which only matters with multiple concurrent streams) is intentionally dropped.
+ * SINGLE active session, and this binding only writes to it when that session
+ * was started by a trigger on ITS OWN actor (or one attached to it) — see
+ * OwnsPlayback. That is the UE form of Unity's linked-preset owner-entry scope:
+ * without it, every binding in the level modulates whichever stream happens to
+ * be playing.
  */
 UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent))
 class HAPBEATSDK_API UHapbeatParameterBinding : public UActorComponent
@@ -171,6 +173,18 @@ private:
 
 	/** Apply Out to the subsystem's active playback (StreamGain => ApplyGainModulation, StreamPan => SetPan). */
 	void WriteToActivePlayback(float Out);
+
+	/**
+	 * True when the active playback is one THIS binding may write: started by a
+	 * trigger on our owner, or on an actor attached to / attached under it. A
+	 * playback with no recorded origin (started straight from the subsystem)
+	 * matches too, since there is nothing to scope it against.
+	 *
+	 * The UE counterpart of Unity's linked-preset owner-entry scope: without it
+	 * every binding in the level writes to the single active session, and a
+	 * binding in one zone silently overwrites another zone's stream every frame.
+	 */
+	bool OwnsPlayback(const UHapbeatStreamPlayback* Playback) const;
 
 	/** GetWorld()->GetGameInstance()->GetSubsystem<UHapbeatSubsystem>(), null-guarded (same idiom as the triggers). */
 	UHapbeatSubsystem* ResolveSubsystem() const;

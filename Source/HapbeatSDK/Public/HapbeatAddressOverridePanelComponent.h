@@ -6,6 +6,7 @@
 #include "HapbeatAddressOverridePanelComponent.generated.h"
 
 class SHapbeatAddressOverridePanel;
+class SWidget;
 class UWidgetComponent;
 
 /**
@@ -49,6 +50,31 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat",
 		meta = (Tooltip = "Event id fired by the panel's Test button. Leave empty to use the SDK's standard sample event."))
 	FString TestEventId;
+
+	// ---- Viewport placement (Show() only) ----
+	//
+	// A viewport widget is stretched over the WHOLE screen unless something
+	// constrains it, which is right for a config screen the app opens on its own
+	// and wrong for a panel that shares the screen with gameplay UI: it covers
+	// the rest of the interface and, worse, swallows the clicks meant for it.
+	// These four say where the panel sits and how big it is; the area around it
+	// is left click-through.
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Placement",
+		meta = (Tooltip = "Horizontal placement in the viewport."))
+	TEnumAsByte<EHorizontalAlignment> ViewportHAlign = HAlign_Center;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Placement",
+		meta = (Tooltip = "Vertical placement in the viewport."))
+	TEnumAsByte<EVerticalAlignment> ViewportVAlign = VAlign_Center;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Placement",
+		meta = (Tooltip = "Screen-edge padding, in pixels, applied to the placement above."))
+	FMargin ViewportPadding = FMargin(0.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat|Placement",
+		meta = (Tooltip = "Panel size in pixels. X = fixed width (0 = fit the content). Y = MINIMUM height (the panel still grows if its content needs more, so a value that is too small cannot clip the buttons)."))
+	FVector2D ViewportSize = FVector2D::ZeroVector;
 
 	/** Add the panel to the viewport. */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
@@ -101,6 +127,13 @@ private:
 	TSharedRef<SHapbeatAddressOverridePanel> CreatePanel();
 
 	TSharedPtr<SHapbeatAddressOverridePanel> PanelWidget;
+
+	/**
+	 * The placement wrapper actually added to the viewport (Show() only). It is
+	 * what has to be handed back to RemoveViewportWidgetContent, so it is kept
+	 * separately from the panel itself.
+	 */
+	TSharedPtr<SWidget> ViewportContent;
 
 	/**
 	 * True while the panel lives on AttachedWidgetComponent rather than in the

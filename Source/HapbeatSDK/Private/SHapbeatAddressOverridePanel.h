@@ -47,6 +47,8 @@ private:
 	FText GetPlayerLabel() const;
 	FText GetGroupLabel() const;
 	FText GetStatusLabel() const;
+	/** "Saved on this device: ..." -- what the next run would start with (persisted, not applied). */
+	FText GetSavedLabel() const;
 	FSlateColor GetStatusColor() const;
 	bool IsPlayerEditable() const;
 	bool IsGroupEditable() const;

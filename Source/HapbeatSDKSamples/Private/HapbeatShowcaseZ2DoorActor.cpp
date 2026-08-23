@@ -35,14 +35,16 @@ namespace
 
 	/**
 	 * The hinge, in the FBX's frame: the leaf's +X edge
-	 * (bounds origin -0.4 + extent 66.5 ~ +66.2). THE HINGE IS THE SIDE OPPOSITE
-	 * THE HANDLE -- SM_DoorHandle is modelled at native x ~ -39.3, i.e. on the -X
-	 * half of the leaf, so hanging the leaf off its -X edge (what the previous
-	 * version did) would have put the handle on top of the hinge. The leaf is then
-	 * placed back at -66.2 within the hinge, which returns it to the shared origin
-	 * the frame is at.
+	 * (bounds origin -0.4 + extent 66.5 ~ +66.1). THE HINGE IS THE SIDE OPPOSITE
+	 * THE KNOB, and SM_DoorHandle is authored at native x ~ -39.3, i.e. on the -X
+	 * half -- so the hinge belongs on +X. Every mesh keeps its authored position
+	 * (the three were modelled against one shared origin), which is what fixes the
+	 * knob: the previous version gave DoorHandleMesh the leaf's own hinge offset a
+	 * second time and pushed the knob out to native x ~ +27.6, onto the hinge side.
+	 * The leaf is placed at -66.1 within the hinge, which returns it to that shared
+	 * origin; the knob then rides the leaf at a relative zero.
 	 */
-	constexpr float HingeNativeXCm = 66.2f;
+	constexpr float HingeNativeXCm = 66.1f;
 
 	/** Fallback slab, used only when SM_Door is missing: the FBX leaf's own size. */
 	const FVector FallbackLeafSizeCm(133.0f, 11.5f, 298.0f); // native X width / Y thickness / Z height
@@ -162,8 +164,8 @@ void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 			DoorLeafMesh->SetStaticMesh(LeafMesh);
 			DoorLeafMesh->SetRelativeScale3D(FVector::OneVector);
 			DoorLeafMesh->SetRelativeRotation(FRotator::ZeroRotator);
-			// Back to the shared origin: the hinge sits at native X = +66.2, so the
-			// leaf sits at -66.2 within it.
+			// Back to the shared origin: the hinge sits at native X = +66.1, so the
+			// leaf sits at -66.1 within it, i.e. exactly where the FBX authored it.
 			DoorLeafMesh->SetRelativeLocation(FVector(-HingeNativeXCm, 0.0f, 0.0f));
 			DoorLeafMesh->SetVisibility(true);
 			if (DoorMaterial != nullptr)
@@ -196,16 +198,16 @@ void AHapbeatShowcaseZ2DoorActor::ApplyShowcaseAssets()
 	{
 		if (DoorHandleMesh != nullptr)
 		{
-			// A child of the leaf, so it rides the swing -- and offset back to the
-			// shared origin the same way the leaf was, since the leaf component is
-			// itself 66.2 cm off it (hence the opposite sign of the leaf's own
-			// offset). Its own geometry -- the handle is modelled at native
-			// x ~ -39.3, the far side of the leaf from the hinge -- then puts it
-			// on the door.
+			// A child of the leaf, so it rides the swing -- and at a RELATIVE ZERO,
+			// because the leaf is already back at the shared origin and the knob's
+			// own geometry sits where it was authored (native x ~ -39.3, the -X
+			// half, opposite the hinge at +66.1). Re-applying the leaf's hinge
+			// offset here -- what the previous version did -- moved the knob to
+			// native x ~ +27.6, onto the hinge side, which is what PIE showed.
 			DoorHandleMesh->SetStaticMesh(HandleMesh);
 			DoorHandleMesh->SetRelativeScale3D(FVector::OneVector);
 			DoorHandleMesh->SetRelativeRotation(FRotator::ZeroRotator);
-			DoorHandleMesh->SetRelativeLocation(FVector(HingeNativeXCm, 0.0f, 0.0f));
+			DoorHandleMesh->SetRelativeLocation(FVector::ZeroVector);
 			DoorHandleMesh->SetVisibility(true);
 			if (DoorMaterial != nullptr)
 			{
@@ -482,11 +484,15 @@ void AHapbeatShowcaseZ2DoorActor::SetDoorYaw(float Degrees)
 	// the whole zone) with the leaf.
 	if (DoorHinge != nullptr)
 	{
-		// The assembly's base yaw MINUS the swing, so that a positive Degrees still
-		// means "open towards the player". The leaf hangs at native -66.2 inside a
-		// hinge yawed 90 degrees, i.e. at assembly -Y; turning that arm by -Degrees
-		// sweeps its tip towards -X, the side the player stands on. (With the hinge
-		// on the old -X edge the arm pointed the other way and the sign was +.)
+		// The assembly's base yaw MINUS the swing, so that a positive Degrees means
+		// "open towards the player". Derivation: the hinge sits at the leaf's +X
+		// end, so the leaf hangs at -66.1 inside it -- the arm points along the
+		// hinge's local -X. The hinge's resting yaw is +90, which maps local -X to
+		// assembly -Y (local angle 180 + 90 = 270). Yaw is counter-clockwise, so
+		// ADDING Degrees would sweep the free end towards +X (270 + 90 = 360),
+		// away from the player, who stands on -X; subtracting sweeps it to 180,
+		// i.e. -X, the player's side. Open / Close / Slam / Rattle all feed this
+		// one convention, so they stay consistent with the sign.
 		DoorHinge->SetRelativeRotation(FRotator(0.0f, AssemblyYawDegrees - Degrees, 0.0f));
 	}
 }

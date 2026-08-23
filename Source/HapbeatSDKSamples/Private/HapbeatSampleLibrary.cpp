@@ -259,23 +259,6 @@ FRotator FHapbeatSampleLibrary::ComputeShortestAxisToDirectionRotation(const USt
 	return FQuat::FindBetweenNormals(AxisVector(ShortestAxis), Direction).Rotator();
 }
 
-FVector FHapbeatSampleLibrary::ComputeFittedTipOffset(const UStaticMesh* Mesh, const FVector& Scale,
-	const FRotator& Rotation)
-{
-	FVector Size;
-	int32 LongestAxis = 0;
-	if (!GetMeshSize(Mesh, Size, LongestAxis))
-	{
-		return FVector::ZeroVector;
-	}
-	const FBoxSphereBounds Bounds = Mesh->GetBounds();
-	FVector TipLocal = Bounds.Origin;
-	TipLocal[LongestAxis] += Bounds.BoxExtent[LongestAxis];
-	// Component space applies scale first, then rotation (FTransform's order),
-	// so the tip has to be walked through the same two steps.
-	return Rotation.RotateVector(TipLocal * Scale);
-}
-
 FVector FHapbeatSampleLibrary::ComputeFittedBoundsCentre(const UStaticMesh* Mesh, const FVector& Scale,
 	const FRotator& Rotation)
 {
@@ -312,37 +295,6 @@ FRotator FHapbeatSampleLibrary::UnityEulerToUERotator(const FVector& UnityEulerD
 		UnityColumnToUEVector(0),
 		UnityColumnToUEVector(1),
 		FVector::ZeroVector).Rotator();
-}
-
-void FHapbeatSampleLibrary::AssignMaterialBySlotName(UStaticMeshComponent* MeshComponent,
-	const TCHAR* SlotNameSubstring, int32 FallbackSlotIndex, UMaterialInterface* Material)
-{
-	if (MeshComponent == nullptr || Material == nullptr)
-	{
-		return;
-	}
-
-	int32 SlotIndex = INDEX_NONE;
-	if (SlotNameSubstring != nullptr)
-	{
-		const TArray<FName> SlotNames = MeshComponent->GetMaterialSlotNames();
-		for (int32 Index = 0; Index < SlotNames.Num(); ++Index)
-		{
-			if (SlotNames[Index].ToString().Contains(SlotNameSubstring))
-			{
-				SlotIndex = Index;
-				break;
-			}
-		}
-	}
-	if (SlotIndex == INDEX_NONE)
-	{
-		SlotIndex = FallbackSlotIndex;
-	}
-	if (SlotIndex >= 0 && SlotIndex < MeshComponent->GetNumMaterials())
-	{
-		MeshComponent->SetMaterial(SlotIndex, Material);
-	}
 }
 
 void FHapbeatSampleLibrary::ShowHudLine(int32 LineKey, const FString& Text, FColor Color, float Duration)

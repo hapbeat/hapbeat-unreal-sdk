@@ -105,6 +105,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
 	void SpawnProjectilePreview(bool bHeavy, float YawOffsetDeg = 0.0f);
 
+	/**
+	 * CAPTURE AID, not gameplay: park the charge bar at T (0..1) so it can be
+	 * photographed part-way -- above HeavyThreshold, the shot that shows the bar
+	 * has actually changed colour.
+	 *
+	 * Writes the displayed value only. It starts no charge, fires nothing and is
+	 * overwritten by the next real charge frame, so it cannot be mistaken for a
+	 * way to charge the blaster from script. Held (there is no charge running to
+	 * update it) until something else moves it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Showcase")
+	void DebugSetChargeForCapture(float T);
+
 	/** Charge fraction (0..1) at/above which a shot / hit counts as "heavy". Mirrors Unity's _heavyThreshold (default 0.7). */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float HeavyThreshold = 0.7f;

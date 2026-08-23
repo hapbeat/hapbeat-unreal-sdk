@@ -72,13 +72,24 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 						[this](int32 Delta) { StepGroup(Delta); })
 				]
 
-			// One status line, never two: the panel must not change size when
-			// the edit becomes pending, or the buttons move under the cursor.
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f)
+			// Both status lines are ALWAYS present -- neither appears or
+			// disappears with the state. A line that came and went would change
+			// the panel's height and move the buttons under the cursor.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 2.0f)
 				[
 					SNew(STextBlock)
 					.Text(this, &SHapbeatAddressOverridePanel::GetStatusLabel)
 					.ColorAndOpacity(this, &SHapbeatAddressOverridePanel::GetStatusColor)
+				]
+
+			// What the NEXT run on this machine would start with, which is not
+			// necessarily what is applied now -- showing both is the whole point
+			// at an install, where "did this seat's binding actually stick?" is
+			// the question being answered.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
+				[
+					SNew(STextBlock)
+					.Text(this, &SHapbeatAddressOverridePanel::GetSavedLabel)
 				]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
@@ -229,6 +240,22 @@ FText SHapbeatAddressOverridePanel::GetStatusLabel() const
 	const FString Resolved = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, EditingPlayer, EditingGroup);
 	return FText::Format(LOCTEXT("StatusFormat", "{0}  ->  {1}"),
 		FText::FromString(PreviewTarget), FText::FromString(Resolved));
+}
+
+FText SHapbeatAddressOverridePanel::GetSavedLabel() const
+{
+	int32 SavedPlayer = -1;
+	int32 SavedGroup = -1;
+	if (!UHapbeatSubsystem::TryGetPersistedAddressOverride(SavedPlayer, SavedGroup))
+	{
+		return LOCTEXT("SavedNone", "Saved on this device: none");
+	}
+	// "off" rather than -1, matching the stepper labels, so the two never have
+	// to be read as different vocabularies.
+	const FText PlayerText = SavedPlayer < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(SavedPlayer);
+	const FText GroupText = SavedGroup < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(SavedGroup);
+	return FText::Format(LOCTEXT("SavedFormat", "Saved on this device: player={0}  group={1}"),
+		PlayerText, GroupText);
 }
 
 FSlateColor SHapbeatAddressOverridePanel::GetStatusColor() const

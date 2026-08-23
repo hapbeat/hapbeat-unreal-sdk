@@ -13,6 +13,7 @@ class UHapbeatCollisionTriggerComponent;
 class UHapbeatEventMap;
 class UMaterialInterface;
 class USoundBase;
+class USphereComponent;
 class UStaticMesh;
 class UStaticMeshComponent;
 class AHapbeatShowcaseZ1PinActor;
@@ -195,9 +196,11 @@ private:
 	TObjectPtr<UStaticMeshComponent> LaneMesh;
 
 	/**
-	 * Unity Z1_Bowling/Ball: 40 cm sphere on its mark at (-100, 0, 129.5) cm,
-	 * 4 kg. A child actor so it can carry ContactTag without the lane (a
-	 * component of THIS actor) carrying it too -- see the class comment.
+	 * The ball on its mark, 100 cm behind the zone origin. 22 cm across (a real
+	 * bowling ball, NOT Unity's 40 cm -- see BallRestCm in the .cpp) and 4 kg,
+	 * seated on the lane's top face. A child actor so it can carry ContactTag
+	 * without the lane (a component of THIS actor) carrying it too -- see the
+	 * class comment.
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Bowling")
 	TObjectPtr<UChildActorComponent> BallSlot;
@@ -291,24 +294,23 @@ protected:
 
 private:
 	/**
-	 * Impact SFX driver -- the UE counterpart of Unity's CollisionAudio
-	 * component, with its numbers converted to cm/s: play below-threshold hits
-	 * not at all, map 50..500 cm/s onto volume 0.2..1.0, and swallow repeats
-	 * inside 0.05 s so a pin rattling against its neighbour does not machine-gun.
+	 * Impact SFX -- the UE counterpart of Unity's CollisionAudio component,
+	 * bound to HitTrigger's OnFired rather than to the physics callback.
+	 *
+	 * The trigger has already applied every gate (a real, newly started contact
+	 * above its velocity threshold and past its cooldown), so this only maps the
+	 * impact speed onto a volume: 50..500 cm/s -> 0.2..1.0. It has no threshold
+	 * or cooldown of its own, and cannot disagree with what was felt.
 	 */
 	UFUNCTION()
-	void HandlePinHit(UPrimitiveComponent* HitComponent, AActor* OtherActor, UPrimitiveComponent* OtherComponent,
-		FVector NormalImpulse, const FHitResult& Hit);
+	void HandleHapticFired(AActor* Other, float Speed);
 
 	// Unity CollisionAudio: _minVelocity 0.5 m/s, _maxVelocity 5 m/s,
-	// _minVolume 0.2, _cooldown 0.05 s. Velocities x100 for UE's cm/s.
+	// _minVolume 0.2. Velocities x100 for UE's cm/s. Its _cooldown 0.05 s is
+	// gone -- the trigger's own Cooldown is now the only rate limit.
 	static constexpr float HitSoundMinSpeed = 50.0f;
 	static constexpr float HitSoundMaxSpeed = 500.0f;
 	static constexpr float HitSoundMinVolume = 0.2f;
-	static constexpr float HitSoundCooldownSeconds = 0.05f;
-
-	/** World seconds of the last impact sound, for the cooldown above. */
-	float LastHitSoundTime = -1000.0f;
 
 	/** Root: the physics body and the primitive HitTrigger binds to. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
@@ -320,13 +322,25 @@ private:
 };
 
 /**
- * The bowling ball -- a sphere with the physics body, and nothing else.
+ * The bowling ball -- a sphere collider root that carries the physics body,
+ * plus a non-colliding mesh child for the look.
  *
  * It exists as an actor purely so it can carry
  * AHapbeatShowcaseZ1BowlingActor::ContactTag: the pins' triggers filter on the
  * tag of the OTHER ACTOR, and the zone actor that would otherwise own the ball
  * also owns the lane, which must not fire anything. See the zone's class
  * comment.
+ *
+ * WHY A SPHERE ROOT AND NOT THE MESH -- the same structure the pin uses, and
+ * here for a second, harder reason: NEVER SCALE THE ROOT OF A CHILD ACTOR.
+ * UChildActorComponent overwrites its child actor's root transform with the
+ * COMPONENT's transform every time the child is (re)created, so a
+ * SetRelativeScale3D on the root is silently replaced by the slot's scale of 1.
+ * A mesh root scaled to 0.22 therefore read 0.22 in an editor dump but came up
+ * as the engine's full 100 cm sphere in PIE -- a ball filling the view, and
+ * (with its material applied from outside) untinted besides. Sizing lives on
+ * the sphere's RADIUS and on the MESH CHILD's relative scale, neither of which
+ * the parent component touches.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ1BallActor : public AActor
@@ -336,12 +350,9 @@ class HAPBEATSDKSAMPLES_API AHapbeatShowcaseZ1BallActor : public AActor
 public:
 	AHapbeatShowcaseZ1BallActor();
 
-	/** The sphere: the physics body, the collider and the look in one. */
+	/** Look only -- no collision, so it never competes with the sphere. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UStaticMeshComponent> BallMesh;
-
-	/** Swap in the imported ball material when that optional content is present. */
-	void ApplyShowcaseAssets();
 
 	/** Teleport back to its mark and clear the body's momentum (Unity BallLauncher.ResetPose). */
 	void ResetToTransform(const FTransform& RestTransform);
@@ -354,8 +365,22 @@ public:
 
 protected:
 	/**
-	 * Enables physics simulation, deferred from the constructor so the mesh is
-	 * fully registered first (same reason as AHapbeatShowcaseZ1PinActor).
+	 * Enables physics simulation, deferred from the constructor so the sphere is
+	 * fully registered first (same reason as AHapbeatShowcaseZ1PinActor), and
+	 * applies the ball's own material.
 	 */
 	virtual void BeginPlay() override;
+
+private:
+	/**
+	 * Swap in the imported ball material when that optional content is present.
+	 * Done by the ball ITSELF, in its own BeginPlay: the zone used to reach in
+	 * and paint it, which meant the ball looked right only when it was spawned
+	 * by that zone and in that order.
+	 */
+	void ApplyShowcaseAssets();
+
+	/** Root: the physics body and the collider. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
+	TObjectPtr<USphereComponent> Body;
 };

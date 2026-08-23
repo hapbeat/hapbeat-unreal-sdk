@@ -70,12 +70,19 @@ float UHapbeatParameterBinding::ReadSourceValue(float DeltaTime)
 	case EHapbeatBindingSource::VelocityMagnitude:
 	{
 		// Physics velocity lives on UPrimitiveComponent (Unity reads Rigidbody;
-		// the UE analogue is a simulating primitive root). 0 when the root is a
-		// plain USceneComponent or isn't simulating — same as Unity's null/zero.
+		// the UE analogue is a simulating primitive root).
 		// Non-const: GetPhysicsLinearVelocity/AngularVelocity are (oddly) declared
 		// non-const on UPrimitiveComponent.
 		UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Root);
-		return Prim ? static_cast<float>(Prim->GetPhysicsLinearVelocity().Size()) : 0.0f;
+		if (Prim != nullptr && Prim->IsSimulatingPhysics())
+		{
+			return static_cast<float>(Prim->GetPhysicsLinearVelocity().Size());
+		}
+		// Not simulating: fall back to the component's REPORTED velocity, which a
+		// kinematic body sets itself (USceneComponent::ComponentVelocity). Without
+		// this a code-moved body reads 0 forever even while it visibly moves --
+		// the physics velocity of a non-simulating body never leaves zero.
+		return Root != nullptr ? static_cast<float>(Root->GetComponentVelocity().Size()) : 0.0f;
 	}
 	case EHapbeatBindingSource::AngularVelocityMagnitude:
 	{
@@ -141,13 +148,15 @@ void UHapbeatParameterBinding::WriteToActivePlayback(float Out)
 		return;
 	}
 
-	// v1 is single-active-stream, so the binding writes to the subsystem's one
-	// GetActivePlayback() directly. Unity scopes a binding to the playback of its
-	// own event id (linked-preset owner-entry filter) because a GameObject can
-	// host several concurrent streams; with a single active session there is
-	// nothing to disambiguate, so that scoping is N/A here and intentionally dropped.
+	// v1 is single-active-stream, so there is one GetActivePlayback() to look at
+	// -- but "one stream" is exactly why the binding must NOT write to it
+	// unconditionally: every binding in the level would otherwise modulate
+	// whatever happens to be playing, and a slider binding in one zone would
+	// overwrite another zone's loop gain every frame. Unity scopes a binding to
+	// the playback started by its own linked owner entry; OwnsPlayback below is
+	// the UE equivalent of that scope.
 	UHapbeatStreamPlayback* Pb = Sub->GetActivePlayback();
-	if (Pb == nullptr || !Pb->IsActive())
+	if (Pb == nullptr || !Pb->IsActive() || !OwnsPlayback(Pb))
 	{
 		return;
 	}
@@ -164,6 +173,37 @@ void UHapbeatParameterBinding::WriteToActivePlayback(float Out)
 		Pb->SetPan(Out);
 		break;
 	}
+}
+
+bool UHapbeatParameterBinding::OwnsPlayback(const UHapbeatStreamPlayback* Playback) const
+{
+	if (Playback == nullptr)
+	{
+		return false;
+	}
+	const AActor* Origin = Playback->GetOwnerActor();
+	if (Origin == nullptr)
+	{
+		// Unattributed (or the origin has since been destroyed): nothing started
+		// it through a trigger -- a Blueprint "Play Hapbeat Event" node, or a
+		// sample calling the subsystem straight. There is no origin to compare
+		// against, so the pre-scope behaviour stands; refusing here would silently
+		// break every binding driven that way.
+		return true;
+	}
+	const AActor* Owner = GetOwner();
+	if (Owner == nullptr)
+	{
+		return false;
+	}
+	if (Owner == Origin)
+	{
+		return true;
+	}
+	// Attachment counts as the same rig: a zone commonly puts the trigger on a
+	// child actor (the shark, a pin) and the binding on the actor above or below
+	// it. IsAttachedTo walks the whole attach chain, so either direction matches.
+	return Owner->IsAttachedTo(Origin) || Origin->IsAttachedTo(Owner);
 }
 
 UHapbeatSubsystem* UHapbeatParameterBinding::ResolveSubsystem() const

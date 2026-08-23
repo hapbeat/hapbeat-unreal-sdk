@@ -101,7 +101,76 @@ void UHapbeatCollisionTriggerComponent::HandleHit(UPrimitiveComponent* HitComp, 
 		Speed = NormalImpulse.Size();
 	}
 
+	// Enter semantics: Chaos keeps reporting a contact that is still touching,
+	// where Unity's OnCollisionEnter reports only its start (see bEnterOnly).
+	if (IsContinuingContact(OtherComp))
+	{
+		if (bVerboseLog)
+		{
+			UE_LOG(LogHapbeat, Log, TEXT("Hit ignored: same contact continuing with '%s' on %s"),
+				*GetNameSafe(OtherComp), *GetNameSafe(GetOwner()));
+		}
+		return;
+	}
+
+	// Context for the OnFired broadcast, so a listener (impact SFX) gets the
+	// partner and the speed without re-deriving them from its own hit callback.
+	FireContextOther = OtherActor;
+	FireContextSpeed = Speed;
+
 	HandleCollision(OtherActor, Speed);
+
+	// Cleared here as well as in FireInternal: a fire rejected by the tag filter,
+	// the velocity threshold or the cooldown never reaches that broadcast, and
+	// the context must not survive into an unrelated later Fire().
+	FireContextOther.Reset();
+	FireContextSpeed = 0.0f;
+}
+
+bool UHapbeatCollisionTriggerComponent::IsContinuingContact(UPrimitiveComponent* OtherComp)
+{
+	if (!bEnterOnly || ContactSeparationSeconds <= 0.0f || OtherComp == nullptr)
+	{
+		return false;
+	}
+
+	// Same clock as the base cooldown (unscaled real time), so pausing or time
+	// dilation cannot turn one touch into a burst of "new" contacts.
+	const double Now = NowUnscaledSeconds();
+	const TWeakObjectPtr<UPrimitiveComponent> Key(OtherComp);
+	double* Previous = LastContactTime.Find(Key);
+	const bool bContinuing = Previous != nullptr
+		&& (Now - *Previous) <= static_cast<double>(ContactSeparationSeconds);
+
+	// Stamped whether or not the hit is passed on: a contact that keeps
+	// producing hits has to keep the gate closed, and only a real gap in the
+	// hits may open it again.
+	if (Previous != nullptr)
+	{
+		*Previous = Now;
+	}
+	else
+	{
+		LastContactTime.Add(Key, Now);
+
+		// Drop what can no longer match -- entries whose component is gone, and
+		// contacts old enough that a fresh hit would count as new anyway. Done on
+		// insert only, and only once the map is big enough to be worth walking,
+		// so an ordinary two-body contact never pays for it.
+		constexpr int32 PruneAtNumEntries = 32;
+		if (LastContactTime.Num() > PruneAtNumEntries)
+		{
+			for (auto It = LastContactTime.CreateIterator(); It; ++It)
+			{
+				if (!It.Key().IsValid()
+					|| (Now - It.Value()) > static_cast<double>(ContactSeparationSeconds))
+				{
+					It.RemoveCurrent();
+				}
+			}
+		}
+	}
+	return bContinuing;
 }
 
 void UHapbeatCollisionTriggerComponent::HandleBeginOverlap(UPrimitiveComponent* OverlappedComp, AActor* OtherActor,
@@ -111,7 +180,13 @@ void UHapbeatCollisionTriggerComponent::HandleBeginOverlap(UPrimitiveComponent* 
 	// (Unity passes 0 for trigger-enter, but the owner's speed is the better
 	// velocity-scaling signal for an overlap-driven hit on this body).
 	const float Speed = OverlappedComp != nullptr ? OverlappedComp->GetPhysicsLinearVelocity().Size() : 0.0f;
+
+	// No enter-only gate here: BeginOverlap already fires once per overlap.
+	FireContextOther = OtherActor;
+	FireContextSpeed = Speed;
 	HandleCollision(OtherActor, Speed);
+	FireContextOther.Reset();
+	FireContextSpeed = 0.0f;
 }
 
 void UHapbeatCollisionTriggerComponent::HandleCollision(AActor* OtherActor, float ImpactSpeed)

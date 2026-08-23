@@ -8,7 +8,7 @@
 
 class UHapbeatClip;
 class UHapbeatEventMap;
-class UHapbeatSubsystem;
+class UHapbeatAddressOverridePanelComponent;
 class UHapbeatTriggerComponent;
 class UHapbeatParameterBinding;
 class USoundBase;
@@ -40,16 +40,16 @@ class SWidget;
  * console model in the scene -- so there is none here either. (The Phase 2
  * version drew a cube pedestal that had no counterpart and nothing to do.)
  *
- * IT ALSO CARRIES THE ADDRESS-OVERRIDE DEMO, under the two sliders. Unity's
- * Z4 has one (Samples~/Showcase/Scripts/AddressOverrideDemo.cs, a subclass of
- * the SDK's own HapbeatAddressOverridePanel) because "which Hapbeat does this
- * build talk to" is a question every multi-seat install has to answer from
- * inside the running app. The UE SDK's equivalent,
- * UHapbeatAddressOverridePanelComponent, draws its panel as a full-screen
- * viewport overlay -- right for a VR config screen, wrong on top of this zone's
- * console -- so the same three controls (Player, Group, Apply / Clear) are
- * rebuilt here against the public UHapbeatSubsystem API and live in the console
- * panel where the zone's other controls are.
+ * IT ALSO CARRIES THE ADDRESS-OVERRIDE DEMO, in its own strip at the TOP of the
+ * screen. Unity's Z4 has one (Samples~/Showcase/Scripts/AddressOverrideDemo.cs,
+ * a subclass of the SDK's own HapbeatAddressOverridePanel) because "which
+ * Hapbeat does this build talk to" is a question every multi-seat install has to
+ * answer from inside the running app. Here it is the SDK's own
+ * UHapbeatAddressOverridePanelComponent, placed top-centre: the zone
+ * demonstrates the shipped panel rather than a second copy of it, and keeping it
+ * off the console panel is what lets the sliders below still be dragged (a
+ * viewport widget covers the whole screen unless it is placed, and an unplaced
+ * one ate every click meant for the sliders).
  *
  * The sliders are Slate built in code (SSlider), added straight to the viewport
  * -- same reasoning as the shared Showcase HUD: no UI .uasset to author, and it
@@ -141,26 +141,6 @@ private:
 	/** Fire TickTrigger (z4_slider_tick) + its SFX for one detent. */
 	void FireTick();
 
-	/** The GameInstance's Hapbeat subsystem, or null outside a live session. */
-	UHapbeatSubsystem* ResolveSubsystem() const;
-
-	/**
-	 * The address-override section of the console panel: two numeric fields and
-	 * the two buttons that commit them. Built separately from the sliders only to
-	 * keep CreateSliderPanel readable -- it is one panel.
-	 */
-	TSharedRef<SWidget> MakeAddressOverrideSection();
-
-	/** Push the staged Player / Group onto the subsystem, persisting them. */
-	void ApplyAddressOverride();
-
-	/** Turn both axes off, forget the saved choice, and re-read the staged values from it. */
-	void ClearAddressOverride();
-
-	/** Staged Player / Group, as shown in the fields. Read from the subsystem at BeginPlay. */
-	int32 EditingOverridePlayer = -1;
-	int32 EditingOverrideGroup = -1;
-
 	/**
 	 * Hand keyboard focus back to the game viewport after a slider drag, so the
 	 * space bar reaches this zone's loop toggle instead of being swallowed by
@@ -188,6 +168,22 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UHapbeatParameterBinding> PanBinding;
+
+	/**
+	 * The SDK's own address-override panel, shown top-centre while this zone is
+	 * the visible one.
+	 *
+	 * It is the SDK component, not a rebuild of the same three controls in this
+	 * actor: the zone is a SAMPLE, and a sample that reimplements the thing it is
+	 * demonstrating teaches the wrong lesson -- and the copy drifts (this one had
+	 * already grown a different set of buttons from the SDK panel's). The panel
+	 * sits in its own strip at the top of the screen rather than inside the
+	 * console panel because the console's sliders are dragged with the mouse, and
+	 * a full-screen overlay -- which is what a viewport widget is unless it is
+	 * placed -- swallowed those drags.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
+	TObjectPtr<UHapbeatAddressOverridePanelComponent> AddressPanel;
 
 	// BeginPlay-time transient data (built fresh each Play session; not serialized).
 

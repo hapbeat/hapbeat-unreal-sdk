@@ -6,6 +6,8 @@
 #include "HapbeatStreamGainMirror.h"
 #include "HapbeatStreamPlayback.generated.h"
 
+class AActor;
+
 /**
  * Handle to an active StreamClip playback. The caller holds this to modulate the
  * stream in real time: write Gain (via ApplyGainModulation) and Pan each frame
@@ -111,6 +113,29 @@ public:
 	void GetStereoChannelGains(float& OutL, float& OutR) const;
 
 	/**
+	 * Remember WHO started this playback -- the actor owning the trigger that
+	 * fired it. Set by UHapbeatTriggerComponent right after the session starts;
+	 * left unset for a playback started straight from the subsystem / Blueprint
+	 * (there is no trigger to attribute it to).
+	 *
+	 * This is what scopes a UHapbeatParameterBinding to the stream it actually
+	 * describes. v1 runs a single active session, so without an origin every
+	 * binding in the level would write to whatever is playing -- a Z4 slider
+	 * binding, ticking in a zone nobody is looking at, silently overwriting the
+	 * gain of the Z3 loop every frame. Unity scopes the same way (a binding is
+	 * linked to its owner entry / preset owner); this is the UE equivalent of
+	 * that LinkedOwnerEntryId scope.
+	 */
+	void SetOwnerActor(AActor* InOwner);
+
+	/**
+	 * The actor whose trigger started this playback, or null when unattributed
+	 * (see SetOwnerActor). Defined in the .cpp because AActor is only
+	 * forward-declared here.
+	 */
+	AActor* GetOwnerActor() const;
+
+	/**
 	 * Thread-safe atomic mirror of Gain/Pan/bStopped for the stream-send thread
 	 * (FHapbeatStreamRunnable) to read WITHOUT ever touching this UObject off
 	 * the game thread. Created on first access. C++-only (not BlueprintCallable
@@ -129,4 +154,12 @@ private:
 
 	/** Lazily created in GetMirror(); every mutator write-throughs to it once created. */
 	TSharedPtr<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
+
+	/**
+	 * Who started this playback (see SetOwnerActor). WEAK on purpose: the handle
+	 * is GC-rooted by the subsystem for the stream's lifetime and would otherwise
+	 * keep a destroyed actor alive; a binding that finds it stale simply stops
+	 * matching, which is the right answer once the origin is gone.
+	 */
+	TWeakObjectPtr<AActor> OwnerActor;
 };

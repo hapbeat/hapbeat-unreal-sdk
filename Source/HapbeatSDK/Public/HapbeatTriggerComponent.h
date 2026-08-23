@@ -12,6 +12,22 @@ class UHapbeatStreamPlayback;
 class UCurveFloat;
 
 /**
+ * Fired on the frame this trigger actually sent a haptic -- after every gate
+ * (enabled / resolved / cooldown / contact filter) has passed, so a listener
+ * never has to reproduce them.
+ *
+ * It exists so the cosmetic half of an impact (SFX, a flash) can hang off the
+ * SAME event as the haptic instead of subscribing to the physics callback
+ * separately and re-deriving its own threshold and cooldown -- two filters that
+ * drift apart and end up clicking when nothing was felt, or the reverse.
+ *
+ * @param Other  The other actor involved, when the subclass knows one (a
+ *               collision partner). Null for a plain Fire() from Blueprint.
+ * @param Speed  Impact speed in cm/s for a collision fire, else 0.
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHapbeatTriggerFired, AActor*, Other, float, Speed);
+
+/**
  * Base Hapbeat trigger component — the "fire side" of the SDK. References a
  * UHapbeatEventMap and a specific entry by stable GUID (FHapbeatEventEntry::Id)
  * so reordering / inserting / duplicating entries cannot silently break wiring.
@@ -100,6 +116,13 @@ public:
 	/** Log every Fire()/Stop() call and early-return reason to the output log. Debugging only. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat")
 	bool bVerboseLog = false;
+
+	/**
+	 * Broadcast on the frame a haptic was actually sent (see FHapbeatTriggerFired).
+	 * Hang the impact SFX / VFX off this, so sound and haptic share one gate.
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "Hapbeat")
+	FHapbeatTriggerFired OnFired;
 
 	// ---- Fire surface (Blueprint / C++ / UnityEvent-equivalent) ----
 
@@ -232,6 +255,17 @@ protected:
 
 	/** Handle to the StreamClip playback started by this trigger (cleared when it stops). */
 	TWeakObjectPtr<UHapbeatStreamPlayback> StoredPlayback;
+
+	/**
+	 * Context for the next OnFired broadcast, set by a subclass that knows who it
+	 * collided with just before it calls Fire() / FireWithGain(). Cleared by
+	 * FireInternal once broadcast, so a later plain Fire() cannot report a stale
+	 * partner. A member rather than a Fire() parameter because the fire surface
+	 * (Fire / FireWithGain / FireScaled / FireWithCurve) is Blueprint-facing and
+	 * must not grow a collision argument nobody outside a collision can supply.
+	 */
+	TWeakObjectPtr<AActor> FireContextOther;
+	float FireContextSpeed = 0.0f;
 
 	/** Unscaled real-time seconds of the last successful fire (valid only when bHasFired). */
 	double LastFireTime = 0.0;

@@ -201,9 +201,9 @@ public:
 	 * Turn the aligned rod 180 degrees about its up axis before the mount pose is
 	 * applied. Longest-axis alignment only decides which AXIS runs forward, not
 	 * which END of it leads, so a model authored the other way round is held
-	 * butt-first. False for SM_FishingRod: its thin physical tip is the positive
-	 * end of the longest (+Y) mesh axis, which the automatic alignment already
-	 * points forward. Kept editable so a replacement mesh can be corrected
+	 * butt-first. False for SM_FishingRod: after applying Unity's camera mount
+	 * pose, its positive local +Y tip points away from the player. Kept editable
+	 * so a replacement mesh can be corrected
 	 * without code; the RodTip socket continues to identify the same physical
 	 * endpoint whichever pose is selected.
 	 */

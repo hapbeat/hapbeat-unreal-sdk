@@ -828,7 +828,12 @@ void AHapbeatShowcaseZ3SharkActor::ApplySharkSize(const FVector& SizeCm)
 	const FQuat AlignToForward =
 		FHapbeatSampleLibrary::ComputeLongestAxisToForwardRotation(Mesh).Quaternion();
 	const FQuat BodyPitch = FRotator(BodyPitchDegrees, 0.0f, 0.0f).Quaternion();
-	const FQuat MeshRotation = BodyPitch.Inverse() * AlignToForward;
+	// SM_Shark's semantic up is local +Y. Longest-axis alignment points its
+	// local +Z length forward but leaves +Y pointing sideways, which makes the
+	// hooked shark look rolled 90 degrees onto its side. UE Roll -90 maps that
+	// local +Y onto world +Z; divide the body's capsule pitch out as before.
+	const FQuat UprightRoll = FRotator(0.0f, 0.0f, -90.0f).Quaternion();
+	const FQuat MeshRotation = BodyPitch.Inverse() * UprightRoll * AlignToForward;
 
 	SharkMesh->SetRelativeScale3D(Scale);
 	SharkMesh->SetRelativeRotation(MeshRotation);

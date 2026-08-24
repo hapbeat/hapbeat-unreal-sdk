@@ -23,6 +23,9 @@
 #include "Materials/MaterialInterface.h"
 #include "Math/RotationMatrix.h" // FRotationMatrix::MakeFromZ, for aiming the line mesh
 #include "UObject/ConstructorHelpers.h"
+#if WITH_EDITOR
+#include "UObject/UnrealType.h" // FPropertyChangedEvent for live PIE rod tuning
+#endif
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatShowcaseZ3, Log, All);
 
@@ -150,6 +153,36 @@ void AHapbeatShowcaseZ3FishingActor::OnConstruction(const FTransform& Transform)
 	Super::OnConstruction(Transform);
 	UpdateStaticVisuals();
 }
+
+#if WITH_EDITOR
+void AHapbeatShowcaseZ3FishingActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	const FName ChangedMember = PropertyChangedEvent.GetMemberPropertyName();
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	const bool bRodMountProperty =
+		ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodMountCameraOffsetCm)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodMountUnityEulerDeg)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodLengthCm)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodMountExtraRotation)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, bFlipRodForward)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodMeshAsset);
+	if (!bRodMountProperty)
+	{
+		return;
+	}
+
+	// OnConstruction updates the editor-only preview. PIE's visible rod is a
+	// separate component on the character and was previously only written when
+	// the player entered Z3, so Details edits appeared to do nothing until the
+	// zone was left and re-entered. Reusing the normal mount path keeps both
+	// representations on the same BuildRodMountPose calculation.
+	if (GetWorld() != nullptr && GetWorld()->IsGameWorld() && MountedCharacter.IsValid())
+	{
+		MountRodOnCharacter();
+	}
+}
+#endif
 
 void AHapbeatShowcaseZ3FishingActor::BeginPlay()
 {
@@ -383,11 +416,19 @@ void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
 	AHapbeatShowcaseCharacter* Character =
 		Cast<AHapbeatShowcaseCharacter>(UGameplayStatics::GetPlayerPawn(this, 0));
 	UStaticMesh* RodMesh = RodMeshAsset;
-	if (Character == nullptr || RodMesh == nullptr)
+	if (Character == nullptr)
 	{
-		// No Showcase character (bare level / default pawn) or no imported rod:
-		// the line hangs from RodTipAnchor, which is what it did before there was
-		// a player at all.
+		// No Showcase character (bare level / default pawn): the line hangs from
+		// RodTipAnchor, which is what it did before there was a player at all.
+		return;
+	}
+	if (RodMesh == nullptr)
+	{
+		// Clearing RodMeshAsset while tuning in PIE must remove the previously
+		// mounted mesh too. Keep the character reference so assigning another mesh
+		// can re-enter this path immediately without leaving and re-entering Z3.
+		Character->UnmountItem();
+		MountedCharacter = Character;
 		return;
 	}
 

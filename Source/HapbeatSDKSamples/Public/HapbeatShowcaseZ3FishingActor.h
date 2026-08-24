@@ -242,6 +242,10 @@ public:
 protected:
 	/** Update editor-visible static visuals; runtime state remains in BeginPlay. */
 	virtual void OnConstruction(const FTransform& Transform) override;
+#if WITH_EDITOR
+	/** Re-apply the mounted rod immediately when its authoring properties change during PIE. */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;

@@ -158,10 +158,20 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 	}
 }
 
+void AHapbeatShowcaseZ1BowlingActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	UpdatePinVisuals();
+}
+
 void AHapbeatShowcaseZ1BowlingActor::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// Apply the same non-runtime visual state used by the editor before wiring
+	// physics, input and haptics below. This keeps PIE identical to the placed
+	// preview without moving the author-owned child-actor slots.
+	UpdatePinVisuals();
 	BuildEventMap();
 	SetUpPins();
 	SetUpBall();
@@ -254,7 +264,19 @@ void AHapbeatShowcaseZ1BowlingActor::SetUpPins()
 			Pin->HitTrigger->TagFilter = ContactTag;
 		}
 		Pin->HitSound = PinHitSoundAsset;
-		Pin->ApplyPinSize(PinHeightCm, PinDiameterCm, bFlipPinUp);
+	}
+}
+
+void AHapbeatShowcaseZ1BowlingActor::UpdatePinVisuals()
+{
+	for (UChildActorComponent* Slot : PinSlots)
+	{
+		if (AHapbeatShowcaseZ1PinActor* Pin = Slot != nullptr
+			? Cast<AHapbeatShowcaseZ1PinActor>(Slot->GetChildActor())
+			: nullptr)
+		{
+			Pin->ApplyPinSize(PinHeightCm, PinDiameterCm, bFlipPinUp);
+		}
 	}
 }
 

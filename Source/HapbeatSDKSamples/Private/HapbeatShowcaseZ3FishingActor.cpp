@@ -32,17 +32,11 @@ namespace
 	// (Unity z, Unity x, Unity y) x 100.
 
 	/**
-	 * The shark, 3 m in front of the player rather than at Unity's own X.
-	 *
-	 * Unity's FishingObject sits at local (0.5, 0.45, -0.018) -- essentially on
-	 * top of the spawn point, which in first person put it under the camera and
-	 * out of frame. UE's spawn is 2 m back of the zone origin, so +100 cm along X
-	 * places it 3 m ahead of the player, where a cast lands and where it can
-	 * actually be seen. The rest pose follows it, so releasing the fish does not
-	 * teleport it somewhere else.
+	 * The shark's authored rest pose, 3 m in front of the player rather than at
+	 * Unity's own X. SharkSlot is the single source of truth for this pose: the
+	 * same component transform is previewed in the editor, used when PIE starts,
+	 * and restored after release.
 	 */
-	const FVector SharkStartCm(100.0f, 50.0f, 45.0f);
-	/** Where Detach() puts the shark back: the same spot, at resting height. */
 	const FVector SharkRestCm(100.0f, 50.0f, 35.0f);
 	/** Unity Z3_Fishing/PlayerSpawn: local (0, 1, -2). Z is the player's feet, hence 0. */
 	const FVector PlayerSpawnCm(-200.0f, 0.0f, 0.0f);
@@ -93,10 +87,6 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	LineMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 	LineMesh->SetCastShadow(false);
 
-	SharkRestAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("SharkRestAnchor"));
-	SharkRestAnchor->SetupAttachment(RootComponent);
-	SharkRestAnchor->SetRelativeLocation(SharkRestCm);
-
 	// The shark as a child actor: an editable relative transform here, and an
 	// actor of its own to carry the sequence + binding (see the class comment).
 	// The pitch lays the body capsule's axis along the shark's length.
@@ -104,8 +94,22 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	SharkSlot->SetupAttachment(RootComponent);
 	SharkSlot->SetMobility(EComponentMobility::Movable);
 	SharkSlot->SetChildActorClass(AHapbeatShowcaseZ3SharkActor::StaticClass());
-	SharkSlot->SetRelativeLocation(SharkStartCm);
+	SharkSlot->SetRelativeLocation(SharkRestCm);
 	SharkSlot->SetRelativeRotation(FRotator(AHapbeatShowcaseZ3SharkActor::BodyPitchDegrees, 0.0f, 0.0f));
+
+#if WITH_EDITORONLY_DATA
+	// A placed map has no player HandMount. Show the exact fitted pose at the
+	// authored spawn eye position instead, but keep this component out of PIE and
+	// packaged games; the real HandMount remains the sole runtime rod.
+	RodPreviewMesh = CreateEditorOnlyDefaultSubobject<UStaticMeshComponent>(TEXT("RodPreviewMesh"));
+	if (RodPreviewMesh != nullptr)
+	{
+		RodPreviewMesh->SetupAttachment(RootComponent);
+		RodPreviewMesh->SetMobility(EComponentMobility::Movable);
+		RodPreviewMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+		RodPreviewMesh->SetCastShadow(false);
+	}
+#endif
 
 	// Default to the Showcase Event Map that ships with the plugin, so this zone
 	// runs against the same authored asset a real project would edit -- gains and
@@ -131,12 +135,27 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	{
 		LineMesh->SetMaterial(0, LineBaseMaterial);
 	}
+
+#if WITH_EDITORONLY_DATA
+	// Placed native actors loaded from a saved map can reuse their serialized
+	// construction result. Seed the editor-only component on the CDO as well as
+	// updating it from OnConstruction, so the preview is present on first open
+	// after a clean rebuild and still reacts to Details edits.
+	UpdateRodPreviewVisual();
+#endif
+}
+
+void AHapbeatShowcaseZ3FishingActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	UpdateStaticVisuals();
 }
 
 void AHapbeatShowcaseZ3FishingActor::BeginPlay()
 {
 	Super::BeginPlay();
 
+	UpdateStaticVisuals();
 	SetUpShark();
 	SetUpLineVisual();
 	BuildEventMapAndHaptics();
@@ -154,15 +173,9 @@ void AHapbeatShowcaseZ3FishingActor::EndPlay(const EEndPlayReason::Type EndPlayR
 
 FTransform AHapbeatShowcaseZ3FishingActor::GetSharkRestWorldTransform() const
 {
-	// Position from the rest anchor, orientation from the slot's authored pitch
-	// (which is what lays the body capsule along the shark).
-	const FVector Location = SharkRestAnchor != nullptr
-		? SharkRestAnchor->GetComponentLocation()
-		: GetActorLocation();
-	const FQuat Rotation = SharkSlot != nullptr
-		? SharkSlot->GetComponentQuat()
-		: GetActorQuat();
-	return FTransform(Rotation, Location);
+	// The ChildActorComponent remains at its authored transform while physics
+	// moves the child actor, so it is also the stable reset pose.
+	return SharkSlot != nullptr ? SharkSlot->GetComponentTransform() : GetActorTransform();
 }
 
 void AHapbeatShowcaseZ3FishingActor::SetUpShark()
@@ -176,7 +189,6 @@ void AHapbeatShowcaseZ3FishingActor::SetUpShark()
 			TEXT("Z3 Fishing: the Shark child actor is missing; this zone will do nothing."));
 		return;
 	}
-	Shark->ApplySharkSize(SharkSizeCm);
 	Shark->SnapToTransform(GetSharkRestWorldTransform());
 	if (UCapsuleComponent* Body = Shark->GetBody())
 	{
@@ -190,6 +202,81 @@ void AHapbeatShowcaseZ3FishingActor::SetUpShark()
 		Shark->HookVelocityBinding->AddTickPrerequisiteActor(this);
 	}
 }
+
+void AHapbeatShowcaseZ3FishingActor::UpdateStaticVisuals()
+{
+	if (AHapbeatShowcaseZ3SharkActor* ChildShark = SharkSlot != nullptr
+		? Cast<AHapbeatShowcaseZ3SharkActor>(SharkSlot->GetChildActor())
+		: nullptr)
+	{
+		// The ChildActorComponent owns this actor's placement. Only its internal
+		// mesh/capsule fit belongs to this helper.
+		ChildShark->ApplySharkSize(SharkSizeCm);
+	}
+
+#if WITH_EDITORONLY_DATA
+	UpdateRodPreviewVisual();
+#endif
+}
+
+FTransform AHapbeatShowcaseZ3FishingActor::BuildRodMountPose() const
+{
+	UStaticMesh* RodMesh = RodMeshAsset;
+	if (RodMesh == nullptr)
+	{
+		return FTransform::Identity;
+	}
+
+	const FVector Scale = FHapbeatSampleLibrary::ComputeAxisFitScale(
+		RodMesh, FVector(RodLengthCm, 0.0f, 0.0f));
+	const FRotator AlignRotation = FHapbeatSampleLibrary::ComputeLongestAxisToForwardRotation(RodMesh);
+	const FRotator MountRotation =
+		FHapbeatSampleLibrary::UnityEulerToUERotator(RodMountUnityEulerDeg) + RodMountExtraRotation;
+	const FQuat FlipRotation = bFlipRodForward ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) : FQuat::Identity;
+
+	FTransform MountPose;
+	MountPose.SetLocation(RodMountCameraOffsetCm);
+	MountPose.SetRotation(MountRotation.Quaternion() * FlipRotation * AlignRotation.Quaternion());
+	MountPose.SetScale3D(Scale);
+	return MountPose;
+}
+
+#if WITH_EDITORONLY_DATA
+void AHapbeatShowcaseZ3FishingActor::UpdateRodPreviewVisual()
+{
+	if (RodPreviewMesh == nullptr)
+	{
+		return;
+	}
+
+	// GetWorld() is null while the CDO/default subobject is being built. That is
+	// still an editor-preview default; game worlds are the only place this must
+	// be hidden.
+	const bool bEditorPreview = GetWorld() == nullptr || !GetWorld()->IsGameWorld();
+	RodPreviewMesh->SetVisibility(bEditorPreview);
+	RodPreviewMesh->SetHiddenInGame(true);
+	RodPreviewMesh->SetStaticMesh(RodMeshAsset);
+	if (HeldItemMaterial != nullptr)
+	{
+		RodPreviewMesh->SetMaterial(0, HeldItemMaterial);
+	}
+
+	if (RodMeshAsset == nullptr)
+	{
+		return;
+	}
+
+	// ShowcaseCharacter's capsule centre is 88 cm above the feet and its camera
+	// is 72 cm above that centre: Unity's authored eye position is therefore
+	// exactly 160 cm above PlayerSpawn.
+	constexpr float PreviewEyeHeightCm = 160.0f;
+	const FTransform MountPose = BuildRodMountPose();
+	FTransform PreviewPose = MountPose;
+	PreviewPose.SetLocation(GetPlayerSpawnRelative().GetLocation()
+		+ FVector(0.0f, 0.0f, PreviewEyeHeightCm) + MountPose.GetLocation());
+	RodPreviewMesh->SetRelativeTransform(PreviewPose);
+}
+#endif
 
 void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 {
@@ -304,24 +391,7 @@ void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
 		return;
 	}
 
-	// Fit and align first, because the mount pose is the pose of the FITTED mesh:
-	// the rod is turned so its longest axis runs forward (+X), then scaled to
-	// Unity's 389 cm length, and only then placed where CameraFollowMount says.
-	const FVector Scale = FHapbeatSampleLibrary::ComputeAxisFitScale(RodMesh, FVector(RodLengthCm, 0.0f, 0.0f));
-	const FRotator AlignRotation = FHapbeatSampleLibrary::ComputeLongestAxisToForwardRotation(RodMesh);
-	const FRotator MountRotation =
-		FHapbeatSampleLibrary::UnityEulerToUERotator(RodMountUnityEulerDeg) + RodMountExtraRotation;
-	// In the aligned mesh's own space: alignment picks the axis, this picks which
-	// end of it leads (see bFlipRodForward).
-	const FQuat FlipRotation = bFlipRodForward ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) : FQuat::Identity;
-
-	FTransform MountPose;
-	MountPose.SetLocation(RodMountCameraOffsetCm);
-	// Align first, then the camera-relative mount rotation on top of it.
-	MountPose.SetRotation(MountRotation.Quaternion() * FlipRotation * AlignRotation.Quaternion());
-	MountPose.SetScale3D(Scale);
-
-	Character->MountItem(RodMesh, MountPose, HeldItemMaterial);
+	Character->MountItem(RodMesh, BuildRodMountPose(), HeldItemMaterial);
 	MountedCharacter = Character;
 	// Where the line hangs from is NOT guessed here: GetRodTipWorldLocation reads
 	// the explicit RodTip socket (Unity uses an explicit RodTip Transform too),

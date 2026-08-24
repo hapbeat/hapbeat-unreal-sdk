@@ -111,6 +111,8 @@ public:
 	static const FName ContactTag;
 
 protected:
+	/** Keep the pin child actors' visual fit in sync while authoring and in PIE. */
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -123,6 +125,9 @@ private:
 
 	/** Hand each child pin actor its EventMap / entry / SFX and remember the pose Space returns it to. */
 	void SetUpPins();
+
+	/** Apply only the authored mesh fit; never changes a pin slot's authored transform. */
+	void UpdatePinVisuals();
 
 	/** Cache the ball child actor, tag it and start it simulating. */
 	void SetUpBall();

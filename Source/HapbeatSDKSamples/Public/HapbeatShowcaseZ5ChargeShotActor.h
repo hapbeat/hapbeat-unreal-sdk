@@ -204,6 +204,8 @@ public:
 	float ProjectileFriction = 0.2f;
 
 protected:
+	/** Keep the target child actor's local mesh fit in sync while authoring and in PIE. */
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -243,6 +245,9 @@ private:
 
 	/** Hand the child target board its size, materials, SFX and the two EventMap entries (light / heavy). */
 	void SetUpTarget();
+
+	/** Apply only the target mesh's local fit; preserves the author-owned Target slot transform. */
+	void UpdateTargetVisual();
 
 	void HandleChargeBegin();   // left mouse down
 	void HandleChargeRelease(); // left mouse up
@@ -432,6 +437,9 @@ public:
 	void ApplyShowcaseAssets(const FVector& SizeCm, const FVector& FaceDirection,
 		UMaterialInterface* InBaseMaterial, UMaterialInterface* InLightFlash, UMaterialInterface* InHeavyFlash,
 		USoundBase* InLightSound, USoundBase* InHeavySound);
+
+	/** Apply only the local mesh scale/rotation/location from size, facing and bFlipTargetFacing. */
+	void UpdateTargetVisual(const FVector& SizeCm, const FVector& FaceDirection);
 
 	/** Cancel a flash in progress and put the base material back (leaving the zone). */
 	void ResetLook();

@@ -168,6 +168,12 @@ AHapbeatShowcaseZ5ChargeShotActor::AHapbeatShowcaseZ5ChargeShotActor()
 	TargetHeavySound = TargetHitHeavy.Object;
 }
 
+void AHapbeatShowcaseZ5ChargeShotActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	UpdateTargetVisual();
+}
+
 void AHapbeatShowcaseZ5ChargeShotActor::BeginPlay()
 {
 	Super::BeginPlay();
@@ -178,6 +184,7 @@ void AHapbeatShowcaseZ5ChargeShotActor::BeginPlay()
 	{
 		ChargeWave->bLooping = true;
 	}
+	UpdateTargetVisual();
 	BuildEventMap();
 	SetUpTarget();
 	BindInput();
@@ -573,6 +580,24 @@ void AHapbeatShowcaseZ5ChargeShotActor::SetUpTarget()
 		FaceDirection.IsNearlyZero() ? -FVector::ForwardVector : FaceDirection,
 		TargetBaseMaterial, TargetLightMaterial, TargetHeavyMaterial,
 		TargetLightSound, TargetHeavySound);
+}
+
+void AHapbeatShowcaseZ5ChargeShotActor::UpdateTargetVisual()
+{
+	AHapbeatShowcaseZ5TargetActor* ChildTarget = TargetSlot != nullptr
+		? Cast<AHapbeatShowcaseZ5TargetActor>(TargetSlot->GetChildActor())
+		: nullptr;
+	if (ChildTarget == nullptr)
+	{
+		return;
+	}
+
+	// The ChildActorComponent's transform is the authored board placement. The
+	// mesh receives only its local fit and facing correction.
+	const FVector BoardLocal = TargetSlot->GetRelativeLocation();
+	const FVector FaceDirection = (-BoardLocal).GetSafeNormal();
+	ChildTarget->UpdateTargetVisual(TargetSizeCm,
+		FaceDirection.IsNearlyZero() ? -FVector::ForwardVector : FaceDirection);
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::BindInput()
@@ -1079,25 +1104,7 @@ void AHapbeatShowcaseZ5TargetActor::ApplyShowcaseAssets(const FVector& SizeCm, c
 	{
 		return;
 	}
-	const UStaticMesh* Mesh = TargetMesh->GetStaticMesh();
-	if (Mesh != nullptr)
-	{
-		// Fitted by rank (largest -> 180, then 180, then the 53 cm depth), then
-		// turned so the SHORTEST axis -- the depth -- points at the player, which
-		// is what puts the printed face towards them whichever way the source
-		// model lies.
-		TargetMesh->SetRelativeScale3D(FHapbeatSampleLibrary::ComputeAxisFitScale(Mesh, SizeCm));
-		// ... and then, if asked, turned end for end about up, because aiming the
-		// depth axis at the player says nothing about WHICH of the two faces ends
-		// up forward (see bFlipTargetFacing).
-		const FQuat Aimed =
-			FHapbeatSampleLibrary::ComputeShortestAxisToDirectionRotation(Mesh, FaceDirection).Quaternion();
-		const FQuat Facing = bFlipTargetFacing ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) * Aimed : Aimed;
-		TargetMesh->SetRelativeRotation(Facing);
-		const FVector MeshCentre = FHapbeatSampleLibrary::ComputeFittedBoundsCentre(
-			Mesh, TargetMesh->GetRelativeScale3D(), Facing.Rotator());
-		TargetMesh->SetRelativeLocation(-MeshCentre);
-	}
+	UpdateTargetVisual(SizeCm, FaceDirection);
 
 	if (BaseMaterial != nullptr)
 	{
@@ -1206,6 +1213,32 @@ void AHapbeatShowcaseZ5ProjectileActor::BeginPlay()
 		ProjectileBody->SetSimulatePhysics(true);
 		ProjectileBody->SetEnableGravity(true);
 	}
+}
+
+void AHapbeatShowcaseZ5TargetActor::UpdateTargetVisual(const FVector& SizeCm, const FVector& FaceDirection)
+{
+	if (TargetMesh == nullptr)
+	{
+		return;
+	}
+
+	const UStaticMesh* Mesh = TargetMesh->GetStaticMesh();
+	if (Mesh == nullptr)
+	{
+		return;
+	}
+
+	// Fitted by rank (largest -> face, shortest -> depth), then aimed at the
+	// player. These are mesh-local transforms only: TargetSlot remains the
+	// authoritative authored placement.
+	const FVector Scale = FHapbeatSampleLibrary::ComputeAxisFitScale(Mesh, SizeCm);
+	const FQuat Aimed =
+		FHapbeatSampleLibrary::ComputeShortestAxisToDirectionRotation(Mesh, FaceDirection).Quaternion();
+	const FQuat Facing = bFlipTargetFacing ? FQuat(FRotator(0.0f, 180.0f, 0.0f)) * Aimed : Aimed;
+	TargetMesh->SetRelativeScale3D(Scale);
+	TargetMesh->SetRelativeRotation(Facing);
+	TargetMesh->SetRelativeLocation(-FHapbeatSampleLibrary::ComputeFittedBoundsCentre(
+		Mesh, Scale, Facing.Rotator()));
 }
 
 void AHapbeatShowcaseZ5ProjectileActor::Configure(const FVector& InVelocity, bool bInHeavy, float InScale,

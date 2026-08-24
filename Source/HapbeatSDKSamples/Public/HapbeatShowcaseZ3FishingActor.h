@@ -240,6 +240,8 @@ public:
 	FVector SharkSizeCm = FVector(96.0f, 69.0f, 69.0f);
 
 protected:
+	/** Update editor-visible static visuals; runtime state remains in BeginPlay. */
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -249,6 +251,17 @@ private:
 
 	/** Cache the child shark actor and hand it its size + EventMap wiring. */
 	void SetUpShark();
+
+	/** Apply mesh-only authoring state to the shark and editor-only rod preview. */
+	void UpdateStaticVisuals();
+
+	/** The fitted/aligned camera-local rod pose shared by HandMount and the editor preview. */
+	FTransform BuildRodMountPose() const;
+
+#if WITH_EDITORONLY_DATA
+	/** Pose the rod at the authored PlayerSpawn eye position; never drawn by PIE or packaged games. */
+	void UpdateRodPreviewVisual();
+#endif
 
 	/** Resolve the EventMap (asset or fallback) and push the 3 entry ids onto the shark's sequence component. */
 	void BuildEventMapAndHaptics();
@@ -307,7 +320,7 @@ private:
 
 	void RefreshHud(float DeltaSeconds);
 
-	/** The shark's world rest pose, from SharkRestAnchor. */
+	/** The shark's world rest pose, from the author-owned SharkSlot transform. */
 	FTransform GetSharkRestWorldTransform() const;
 
 	// ---- Constructor-created default subobjects: the editable scene ----
@@ -330,10 +343,6 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing")
 	TObjectPtr<UStaticMeshComponent> LineMesh;
 
-	/** Unity FishingObject_RestPose: where Detach() puts the shark back. */
-	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing")
-	TObjectPtr<USceneComponent> SharkRestAnchor;
-
 	/**
 	 * The shark, as a child actor so it owns the sequence + binding components
 	 * (which must sit on the body they describe -- see the class comment) while
@@ -341,6 +350,12 @@ private:
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing")
 	TObjectPtr<UChildActorComponent> SharkSlot;
+
+#if WITH_EDITORONLY_DATA
+	/** Editor-only stand-in for the character HandMount, based at PlayerSpawn plus its 160 cm eye height. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing|Rod")
+	TObjectPtr<UStaticMeshComponent> RodPreviewMesh;
+#endif
 
 	// ---- haptics data ----
 
@@ -373,7 +388,7 @@ private:
 	TObjectPtr<UHapbeatClip> HookReleaseClip;
 
 	/** Shipped fixed art references; constructor-loaded so BeginPlay does no asset lookup. */
-	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Fishing|Assets")
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Assets")
 	TObjectPtr<UStaticMesh> RodMeshAsset;
 	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Fishing|Assets")
 	TObjectPtr<UMaterialInterface> HeldItemMaterial;

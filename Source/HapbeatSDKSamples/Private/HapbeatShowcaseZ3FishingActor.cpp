@@ -9,12 +9,14 @@
 #include "HapbeatShowcaseCharacter.h"
 
 #include "Components/CapsuleComponent.h"
+#include "Components/BillboardComponent.h"
 #include "Components/ChildActorComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h" // EKeys::LeftMouseButton
@@ -44,11 +46,10 @@ namespace
 	/** Unity Z3_Fishing/PlayerSpawn: local (0, 1, -2). Z is the player's feet, hence 0. */
 	const FVector PlayerSpawnCm(-200.0f, 0.0f, 0.0f);
 
-	/**
-	 * Where the line hangs from with nobody holding the rod: roughly where a
-	 * standing player's hand would be, so the shark still tethers sensibly.
-	 */
-	const FVector RodTipFallbackCm(60.0f, 44.0f, 175.0f);
+	/** Source-mesh local endpoint: the manually movable Marker starts on the thin tip. */
+	const FVector RodTipDefaultMeshLocal(0.0f, 7.000275f, 0.0f);
+	/** Engine Sphere is 100 cm across; absolute 0.08 scale keeps the authoring marker at 8 cm. */
+	constexpr float RodTipMarkerScale = 0.08f;
 
 	/**
 	 * The cadence FishingController.cs's per-tick constants were authored at
@@ -69,10 +70,27 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
-	RodTipAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("RodTipAnchor"));
-	RodTipAnchor->SetupAttachment(RootComponent);
-	RodTipAnchor->SetMobility(EComponentMobility::Movable); // swayed each Tick when bEnableRodTipSway
-	RodTipAnchor->SetRelativeLocation(RodTipFallbackCm);
+	// A non-rendered pivot carries exactly the same component transform as the
+	// character's HandMount. RodTipMarker therefore stays in mesh-local space in
+	// both Editor World and PIE, like Unity's Rod/RodTip child Transform.
+	RodPreviewMount = CreateDefaultSubobject<USceneComponent>(TEXT("RodPreviewMount"));
+	RodPreviewMount->SetupAttachment(RootComponent);
+	RodPreviewMount->SetMobility(EComponentMobility::Movable);
+
+	RodTipMarker = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("RodTipMarker"));
+	RodTipMarker->SetupAttachment(RodPreviewMount);
+	RodTipMarker->SetMobility(EComponentMobility::Movable);
+	RodTipMarker->SetRelativeLocation(RodTipDefaultMeshLocal);
+	RodTipMarker->SetAbsolute(/*bNewAbsoluteLocation=*/false,
+		/*bNewAbsoluteRotation=*/false, /*bNewAbsoluteScale=*/true);
+	RodTipMarker->SetRelativeScale3D(FVector(RodTipMarkerScale));
+	RodTipMarker->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
+	RodTipMarker->SetCastShadow(false);
+	RodTipMarker->SetHiddenInGame(true);
+	if (UStaticMesh* SphereMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")))
+	{
+		RodTipMarker->SetStaticMesh(SphereMesh);
+	}
 
 	// The fishing line as a real mesh, not DrawDebugLine: debug drawing is
 	// compiled out of a Shipping build, and Unity draws this line with a
@@ -107,10 +125,29 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	RodPreviewMesh = CreateEditorOnlyDefaultSubobject<UStaticMeshComponent>(TEXT("RodPreviewMesh"));
 	if (RodPreviewMesh != nullptr)
 	{
-		RodPreviewMesh->SetupAttachment(RootComponent);
+		RodPreviewMesh->SetupAttachment(RodPreviewMount);
 		RodPreviewMesh->SetMobility(EComponentMobility::Movable);
 		RodPreviewMesh->SetCollisionProfileName(UCollisionProfile::NoCollision_ProfileName);
 		RodPreviewMesh->SetCastShadow(false);
+	}
+
+	// Unlike the red sphere, an editor sprite remains easy to find when the
+	// current marker starts behind the floor or rod. Move RodTipMarker, not this
+	// child icon; it exists only as a viewport locator.
+	RodTipMarkerIcon = CreateEditorOnlyDefaultSubobject<UBillboardComponent>(TEXT("RodTipMarkerIcon"));
+	if (RodTipMarkerIcon != nullptr)
+	{
+		RodTipMarkerIcon->SetupAttachment(RodTipMarker);
+		RodTipMarkerIcon->SetAbsolute(/*bNewAbsoluteLocation=*/false,
+			/*bNewAbsoluteRotation=*/false, /*bNewAbsoluteScale=*/true);
+		RodTipMarkerIcon->SetRelativeScale3D(FVector(0.5f));
+		RodTipMarkerIcon->bIsScreenSizeScaled = true;
+		if (!IsRunningCommandlet())
+		{
+			static ConstructorHelpers::FObjectFinderOptional<UTexture2D> TargetIcon(
+				TEXT("/Engine/EditorResources/S_TargetPoint"));
+			RodTipMarkerIcon->SetSprite(TargetIcon.Get());
+		}
 	}
 #endif
 
@@ -131,21 +168,25 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_DefaultMaterial.MI_DefaultMaterial"));
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> LineMaterial(
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/M_ShowcaseBase.M_ShowcaseBase"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> MarkerMaterial(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_TargetHeavy.MI_TargetHeavy"));
 	RodMeshAsset = RodMesh.Object;
 	HeldItemMaterial = HeldMaterial.Object;
 	LineBaseMaterial = LineMaterial.Object;
+	RodTipMarkerMaterial = MarkerMaterial.Object;
 	if (LineBaseMaterial != nullptr)
 	{
 		LineMesh->SetMaterial(0, LineBaseMaterial);
 	}
+	if (RodTipMarkerMaterial != nullptr)
+	{
+		RodTipMarker->SetMaterial(0, RodTipMarkerMaterial);
+	}
 
-#if WITH_EDITORONLY_DATA
 	// Placed native actors loaded from a saved map can reuse their serialized
-	// construction result. Seed the editor-only component on the CDO as well as
-	// updating it from OnConstruction, so the preview is present on first open
-	// after a clean rebuild and still reacts to Details edits.
+	// construction result. Seed the authoring pivot and editor-only mesh on the
+	// CDO as well as updating them from OnConstruction.
 	UpdateRodPreviewVisual();
-#endif
 }
 
 void AHapbeatShowcaseZ3FishingActor::OnConstruction(const FTransform& Transform)
@@ -167,6 +208,14 @@ void AHapbeatShowcaseZ3FishingActor::PostEditChangeProperty(FPropertyChangedEven
 		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodMountExtraRotation)
 		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, bFlipRodForward)
 		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodMeshAsset);
+
+#if WITH_EDITORONLY_DATA
+	if (ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, bShowRodTipMarkerInPIE)
+		&& RodTipMarker != nullptr && GetWorld() != nullptr && GetWorld()->IsGameWorld())
+	{
+		RodTipMarker->SetHiddenInGame(!bShowRodTipMarkerInPIE);
+	}
+#endif
 	if (!bRodMountProperty)
 	{
 		return;
@@ -189,6 +238,14 @@ void AHapbeatShowcaseZ3FishingActor::BeginPlay()
 	Super::BeginPlay();
 
 	UpdateStaticVisuals();
+#if WITH_EDITORONLY_DATA
+	// PIE is the authoring surface requested for hand-held adjustment. Packaged
+	// games never compile this flag and retain the constructor's hidden marker.
+	if (RodTipMarker != nullptr)
+	{
+		RodTipMarker->SetHiddenInGame(!bShowRodTipMarkerInPIE);
+	}
+#endif
 	SetUpShark();
 	SetUpLineVisual();
 	BuildEventMapAndHaptics();
@@ -238,6 +295,18 @@ void AHapbeatShowcaseZ3FishingActor::SetUpShark()
 
 void AHapbeatShowcaseZ3FishingActor::UpdateStaticVisuals()
 {
+	if (RodTipMarker != nullptr)
+	{
+		RodTipMarker->SetVisibility(true);
+		RodTipMarker->SetAbsolute(/*bNewAbsoluteLocation=*/false,
+			/*bNewAbsoluteRotation=*/false, /*bNewAbsoluteScale=*/true);
+		RodTipMarker->SetWorldScale3D(FVector(RodTipMarkerScale));
+		if (RodTipMarkerMaterial != nullptr)
+		{
+			RodTipMarker->SetMaterial(0, RodTipMarkerMaterial);
+		}
+	}
+
 	if (AHapbeatShowcaseZ3SharkActor* ChildShark = SharkSlot != nullptr
 		? Cast<AHapbeatShowcaseZ3SharkActor>(SharkSlot->GetChildActor())
 		: nullptr)
@@ -246,10 +315,20 @@ void AHapbeatShowcaseZ3FishingActor::UpdateStaticVisuals()
 		// mesh/capsule fit belongs to this helper.
 		ChildShark->ApplySharkSize(SharkSizeCm);
 	}
-
-#if WITH_EDITORONLY_DATA
 	UpdateRodPreviewVisual();
-#endif
+	RefreshLineMeshMetrics();
+
+	// Editor World has no runtime Tick by default and no hooked state. Draw a
+	// stable authoring line from the movable marker to the Shark slot so both the
+	// endpoint and its effect are visible before PIE.
+	if (GetWorld() != nullptr && !GetWorld()->IsGameWorld())
+	{
+		if (LineBaseMaterial != nullptr)
+		{
+			LineMesh->SetMaterial(0, LineBaseMaterial);
+		}
+		UpdateLineVisual();
+	}
 }
 
 FTransform AHapbeatShowcaseZ3FishingActor::BuildRodMountPose() const
@@ -274,28 +353,22 @@ FTransform AHapbeatShowcaseZ3FishingActor::BuildRodMountPose() const
 	return MountPose;
 }
 
-#if WITH_EDITORONLY_DATA
 void AHapbeatShowcaseZ3FishingActor::UpdateRodPreviewVisual()
 {
-	if (RodPreviewMesh == nullptr)
+	if (RodPreviewMount == nullptr)
 	{
 		return;
 	}
 
-	// GetWorld() is null while the CDO/default subobject is being built. That is
-	// still an editor-preview default; game worlds are the only place this must
-	// be hidden.
-	const bool bEditorPreview = GetWorld() == nullptr || !GetWorld()->IsGameWorld();
-	RodPreviewMesh->SetVisibility(bEditorPreview);
-	RodPreviewMesh->SetHiddenInGame(true);
-	RodPreviewMesh->SetStaticMesh(RodMeshAsset);
-	if (HeldItemMaterial != nullptr)
-	{
-		RodPreviewMesh->SetMaterial(0, HeldItemMaterial);
-	}
-
 	if (RodMeshAsset == nullptr)
 	{
+		RodPreviewMount->SetRelativeTransform(FTransform::Identity);
+#if WITH_EDITORONLY_DATA
+		if (RodPreviewMesh != nullptr)
+		{
+			RodPreviewMesh->SetStaticMesh(nullptr);
+		}
+#endif
 		return;
 	}
 
@@ -307,9 +380,23 @@ void AHapbeatShowcaseZ3FishingActor::UpdateRodPreviewVisual()
 	FTransform PreviewPose = MountPose;
 	PreviewPose.SetLocation(GetPlayerSpawnRelative().GetLocation()
 		+ FVector(0.0f, 0.0f, PreviewEyeHeightCm) + MountPose.GetLocation());
-	RodPreviewMesh->SetRelativeTransform(PreviewPose);
-}
+	RodPreviewMount->SetRelativeTransform(PreviewPose);
+
+#if WITH_EDITORONLY_DATA
+	if (RodPreviewMesh != nullptr)
+	{
+		const bool bEditorPreview = GetWorld() == nullptr || !GetWorld()->IsGameWorld();
+		RodPreviewMesh->SetVisibility(bEditorPreview);
+		RodPreviewMesh->SetHiddenInGame(true);
+		RodPreviewMesh->SetStaticMesh(RodMeshAsset);
+		RodPreviewMesh->SetRelativeTransform(FTransform::Identity);
+		if (HeldItemMaterial != nullptr)
+		{
+			RodPreviewMesh->SetMaterial(0, HeldItemMaterial);
+		}
+	}
 #endif
+}
 
 void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 {
@@ -418,8 +505,8 @@ void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
 	UStaticMesh* RodMesh = RodMeshAsset;
 	if (Character == nullptr)
 	{
-		// No Showcase character (bare level / default pawn): the line hangs from
-		// RodTipAnchor, which is what it did before there was a player at all.
+		// No Showcase character (bare level / default pawn): the line remains on
+		// the authored preview pose, so it still has a deterministic endpoint.
 		return;
 	}
 	if (RodMesh == nullptr)
@@ -427,22 +514,39 @@ void AHapbeatShowcaseZ3FishingActor::MountRodOnCharacter()
 		// Clearing RodMeshAsset while tuning in PIE must remove the previously
 		// mounted mesh too. Keep the character reference so assigning another mesh
 		// can re-enter this path immediately without leaving and re-entering Z3.
+		if (RodTipMarker != nullptr && RodPreviewMount != nullptr
+			&& RodTipMarker->GetAttachParent() != RodPreviewMount)
+		{
+			RodTipMarker->AttachToComponent(
+				RodPreviewMount, FAttachmentTransformRules::KeepRelativeTransform);
+		}
 		Character->UnmountItem();
 		MountedCharacter = Character;
 		return;
 	}
 
 	Character->MountItem(RodMesh, BuildRodMountPose(), HeldItemMaterial);
+	if (RodTipMarker != nullptr && Character->GetHandMount() != nullptr
+		&& RodTipMarker->GetAttachParent() != Character->GetHandMount())
+	{
+		// Both parents carry BuildRodMountPose, so retaining the marker's relative
+		// transform moves the exact editor-authored mesh-local point onto the rod.
+		RodTipMarker->AttachToComponent(
+			Character->GetHandMount(), FAttachmentTransformRules::KeepRelativeTransform);
+	}
 	MountedCharacter = Character;
-	// Where the line hangs from is NOT guessed here: GetRodTipWorldLocation reads
-	// the explicit RodTip socket (Unity uses an explicit RodTip Transform too),
-	// with a model-local source-coordinate fallback for old generated assets.
 }
 
 void AHapbeatShowcaseZ3FishingActor::UnmountRod()
 {
 	// The character outlives this zone, so a rod left mounted would follow the
 	// player into the next one.
+	if (RodTipMarker != nullptr && RodPreviewMount != nullptr
+		&& RodTipMarker->GetAttachParent() != RodPreviewMount)
+	{
+		RodTipMarker->AttachToComponent(
+			RodPreviewMount, FAttachmentTransformRules::KeepRelativeTransform);
+	}
 	if (AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
 	{
 		Character->UnmountItem();
@@ -453,22 +557,7 @@ void AHapbeatShowcaseZ3FishingActor::UnmountRod()
 
 FVector AHapbeatShowcaseZ3FishingActor::GetRodTipWorldLocation() const
 {
-	if (const AHapbeatShowcaseCharacter* Character = MountedCharacter.Get())
-	{
-		if (const UStaticMeshComponent* Mount = Character->GetHandMount())
-		{
-			if (!RodTipSocketName.IsNone() && Mount->DoesSocketExist(RodTipSocketName))
-			{
-				return Mount->GetSocketLocation(RodTipSocketName);
-			}
-
-			if (bUseRodTipMeshLocalOffsetFallback)
-			{
-				return Mount->GetComponentTransform().TransformPosition(RodTipMeshLocalOffset);
-			}
-		}
-	}
-	return RodTipAnchor != nullptr ? RodTipAnchor->GetComponentLocation() : GetActorLocation();
+	return RodTipMarker != nullptr ? RodTipMarker->GetComponentLocation() : GetActorLocation();
 }
 
 void AHapbeatShowcaseZ3FishingActor::HandleFirePressed()
@@ -583,6 +672,17 @@ void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+#if WITH_EDITOR
+	if (GetWorld() != nullptr && !GetWorld()->IsGameWorld())
+	{
+		// Component moves do not reliably call the owning actor's property-change
+		// hook. A viewport-only tick keeps the line joined to RodTipMarker while an
+		// artist drags it, without putting authoring logic into packaged gameplay.
+		UpdateLineVisual();
+		return;
+	}
+#endif
+
 	if (Shark == nullptr)
 	{
 		return; // setup failed (see the BeginPlay warning); nothing to simulate
@@ -590,8 +690,6 @@ void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
 
 	TryDeferredMount();
 
-	ElapsedTimeSeconds += DeltaSeconds;
-	UpdateRodTip(DeltaSeconds);
 	if (bHooked)
 	{
 		UpdateHookedLinePhysics(DeltaSeconds);
@@ -599,22 +697,6 @@ void AHapbeatShowcaseZ3FishingActor::Tick(float DeltaSeconds)
 	UpdateLineVisual();
 	RefreshHud(DeltaSeconds);
 }
-
-void AHapbeatShowcaseZ3FishingActor::UpdateRodTip(float DeltaSeconds)
-{
-	// Optional idle sway: a rod held by the player already moves because the view
-	// moves (Unity's only source of rod-tip velocity), so this is only useful for
-	// a zone standing on its own -- hence off by default.
-	if (bEnableRodTipSway && RodTipAnchor != nullptr && !MountedCharacter.IsValid())
-	{
-		const FVector Sway(
-			FMath::Sin(ElapsedTimeSeconds * 0.6f) * RodTipSwayAmplitude,
-			FMath::Cos(ElapsedTimeSeconds * 0.45f) * RodTipSwayAmplitude * 0.6f,
-			FMath::Sin(ElapsedTimeSeconds * 0.33f) * RodTipSwayAmplitude * 0.35f);
-		RodTipAnchor->SetRelativeLocation(RodTipFallbackCm + Sway);
-	}
-}
-
 void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 {
 	UCapsuleComponent* Body = Shark->GetBody();
@@ -674,8 +756,10 @@ void AHapbeatShowcaseZ3FishingActor::UpdateHookedLinePhysics(float DeltaSeconds)
 	}
 }
 
-void AHapbeatShowcaseZ3FishingActor::SetUpLineVisual()
+void AHapbeatShowcaseZ3FishingActor::RefreshLineMeshMetrics()
 {
+	LineMeshLocalLengthCm = 0.0f;
+	LineMeshLocalDiameterCm = 0.0f;
 	if (LineMesh == nullptr)
 	{
 		return;
@@ -687,14 +771,23 @@ void AHapbeatShowcaseZ3FishingActor::SetUpLineVisual()
 	const UStaticMesh* Mesh = LineMesh->GetStaticMesh();
 	if (Mesh == nullptr)
 	{
-		UE_LOG(LogHapbeatShowcaseZ3, Warning,
-			TEXT("Z3 Fishing: no line mesh; the fishing line will not be drawn."));
 		LineMesh->SetVisibility(false);
 		return;
 	}
 	const FBoxSphereBounds Bounds = Mesh->GetBounds();
 	LineMeshLocalLengthCm = Bounds.BoxExtent.Z * 2.0f;
 	LineMeshLocalDiameterCm = FMath::Max(Bounds.BoxExtent.X, Bounds.BoxExtent.Y) * 2.0f;
+}
+
+void AHapbeatShowcaseZ3FishingActor::SetUpLineVisual()
+{
+	RefreshLineMeshMetrics();
+	if (LineMesh == nullptr || LineMesh->GetStaticMesh() == nullptr)
+	{
+		UE_LOG(LogHapbeatShowcaseZ3, Warning,
+			TEXT("Z3 Fishing: no line mesh; the fishing line will not be drawn."));
+		return;
+	}
 
 	// Two dynamic instances of the constructor-loaded Showcase master, so the line
 	// keeps the unhooked-blue / hooked-green distinction the debug line had.
@@ -722,9 +815,12 @@ void AHapbeatShowcaseZ3FishingActor::UpdateLineVisual()
 
 	const FVector RodTipPos = GetRodTipWorldLocation();
 	const UCapsuleComponent* Body = Shark != nullptr ? Shark->GetBody() : nullptr;
-	const FVector EndPos = (bHooked && Body != nullptr)
-		? Body->GetComponentLocation()
-		: RodTipPos + FVector::DownVector * MaxLineLength;
+	const bool bEditorPreview = GetWorld() != nullptr && !GetWorld()->IsGameWorld();
+	const FVector EndPos = bEditorPreview && SharkSlot != nullptr
+		? SharkSlot->GetComponentLocation()
+		: ((bHooked && Body != nullptr)
+			? Body->GetComponentLocation()
+			: RodTipPos + FVector::DownVector * MaxLineLength);
 
 	const FVector Delta = EndPos - RodTipPos;
 	const float Length = Delta.Size();
@@ -754,7 +850,9 @@ void AHapbeatShowcaseZ3FishingActor::UpdateLineVisual()
 	LineMesh->SetWorldLocation((RodTipPos + EndPos) * 0.5f
 		- FHapbeatSampleLibrary::ComputeFittedBoundsCentre(Mesh, Scale, Rotation));
 
-	UMaterialInterface* Wanted = bHooked ? ToRawPtr(LineHookedMaterial) : ToRawPtr(LineSlackMaterial);
+	UMaterialInterface* Wanted = bEditorPreview
+		? ToRawPtr(LineBaseMaterial)
+		: (bHooked ? ToRawPtr(LineHookedMaterial) : ToRawPtr(LineSlackMaterial));
 	if (Wanted != nullptr && LineMesh->GetMaterial(0) != Wanted)
 	{
 		LineMesh->SetMaterial(0, Wanted);

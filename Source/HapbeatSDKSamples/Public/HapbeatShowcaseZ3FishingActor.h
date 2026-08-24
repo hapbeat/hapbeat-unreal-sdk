@@ -8,6 +8,7 @@
 
 class AHapbeatShowcaseCharacter;
 class AHapbeatShowcaseZ3SharkActor;
+class UBillboardComponent;
 class UCapsuleComponent;
 class UChildActorComponent;
 class UHapbeatClip;
@@ -32,18 +33,18 @@ class UStaticMeshComponent;
  * and outward radial velocity is damped. Releasing restores the body's normal
  * damping and rest pose.
  *
- * Without an AHapbeatShowcaseCharacter to hold the rod (the zone dropped into a
- * bare level, or before the pawn is possessed) the line hangs from RodTipAnchor
- * instead, so the zone still works -- there is simply no rod on screen, because
- * Unity has no standing rod prop either.
+ * RodTipMarker is the single authored line endpoint. In the editor it is a
+ * visible, movable child of the rod preview; during PIE it is reattached to the
+ * character's HandMount with the same mesh-local transform. This mirrors
+ * Unity's editable RodTip child Transform without splitting the source of truth
+ * between a Static Mesh socket and a numeric fallback.
  *
  * NO WATER PLANE: the Phase 2 version drew a big blue slab here. Unity's Z3 has
  * nothing of the sort -- the shark hangs in the room -- so it is gone.
  *
- * Two behaviours this zone once had unconditionally (rod-tip sway, line
- * breaking) are UE-side additions Unity does not have, and are off by default --
- * see the bEnable* switches. A third, an idle wander on the shark, went with the
- * simulation and is no longer part of the Unity-parity behaviour.
+ * Line breaking is a UE-side addition Unity does not have and is off by
+ * default. An older fallback-anchor sway was removed when the explicit,
+ * rod-attached marker became the only endpoint.
  *
  * Haptics: a UHapbeatSequenceComponent (3-phase: hook-start one-shot / hook
  * loop / hook-release one-shot) plus a UHapbeatParameterBinding
@@ -146,22 +147,12 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0", EditCondition = "bEnableLineBreak"))
 	float BreakDistance = 60.0f;
 
-	/** Sway amplitude (uu) for the fallback rod anchor's idle motion. Off by default -- see bEnableRodTipSway. */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Line", meta = (ClampMin = "0.0", EditCondition = "bEnableRodTipSway"))
-	float RodTipSwayAmplitude = 40.0f;
-
-	// ---- UE-only extras, all OFF by default ----
+	// ---- UE-only extra, OFF by default ----
 	//
 	// Unity's Z3 is deliberately plainer than this zone grew to be: the rod is
-	// held by the player, the shark just hangs there, and nothing snaps. These
-	// two switches are UE-side additions that used to be always on; they are
-	// kept (they are genuinely nicer to look at when the zone is placed on its
-	// own without a player) but default to false so the shipped Showcase behaves
-	// exactly like Unity's. Turn them on per instance in the details panel.
-
-	/** Procedural sway on the fallback rod anchor. Unity's rod moves only because the player's hand moves. */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Extras")
-	bool bEnableRodTipSway = false;
+	// held by the player, the shark just hangs there, and nothing snaps. This
+	// line-break switch is a UE-side addition that used to be always on. It stays
+	// opt-in so the shipped Showcase behaves exactly like Unity's.
 
 	/** Auto-release when the line is overstretched. Unity has no line-break rule. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Extras")
@@ -203,35 +194,17 @@ public:
 	 * which END of it leads, so a model authored the other way round is held
 	 * butt-first. False for SM_FishingRod: after applying Unity's camera mount
 	 * pose, its positive local +Y tip points away from the player. Kept editable
-	 * so a replacement mesh can be corrected
-	 * without code; the RodTip socket continues to identify the same physical
-	 * endpoint whichever pose is selected.
+	 * so a replacement mesh can be corrected without code; RodTipMarker remains
+	 * a child of the mounted mesh pose whichever direction is selected.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
 	bool bFlipRodForward = false;
 
-	/**
-	 * Static Mesh socket used as the fishing-line endpoint. Add or move this
-	 * socket in SM_FishingRod's Socket Manager when an artist needs to tune the
-	 * endpoint by eye. This is the same explicit-marker arrangement as Unity's
-	 * RodTip Transform and avoids guessing a semantic tip from mesh bounds.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
-	FName RodTipSocketName = FName(TEXT("RodTip"));
-
-	/** Use RodTipMeshLocalOffset when the mesh has no RodTip socket. */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod")
-	bool bUseRodTipMeshLocalOffsetFallback = true;
-
-	/**
-	 * Fallback endpoint in SM_FishingRod's mesh-local coordinates. UE retains
-	 * this OBJ's source coordinates in the render mesh and expresses its x100
-	 * unit conversion in the component fit scale, so the thin physical tip stays
-	 * at local +Y = 7.000275. A replacement mesh should add a socket instead.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod",
-		meta = (EditCondition = "bUseRodTipMeshLocalOffsetFallback"))
-	FVector RodTipMeshLocalOffset = FVector(0.0f, 7.000275f, 0.0f);
+#if WITH_EDITORONLY_DATA
+	/** Show the red RodTipMarker sphere while running PIE. It is never a packaged-game visual. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Rod|Authoring")
+	bool bShowRodTipMarkerInPIE = true;
+#endif
 
 	// ---- Shark ----
 
@@ -243,6 +216,7 @@ protected:
 	/** Update editor-visible static visuals; runtime state remains in BeginPlay. */
 	virtual void OnConstruction(const FTransform& Transform) override;
 #if WITH_EDITOR
+	virtual bool ShouldTickIfViewportsOnly() const override { return true; }
 	/** Re-apply the mounted rod immediately when its authoring properties change during PIE. */
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
@@ -256,16 +230,17 @@ private:
 	/** Cache the child shark actor and hand it its size + EventMap wiring. */
 	void SetUpShark();
 
-	/** Apply mesh-only authoring state to the shark and editor-only rod preview. */
+	/** Apply mesh-only authoring state to the shark, rod preview, marker, and editor line. */
 	void UpdateStaticVisuals();
 
 	/** The fitted/aligned camera-local rod pose shared by HandMount and the editor preview. */
 	FTransform BuildRodMountPose() const;
 
-#if WITH_EDITORONLY_DATA
-	/** Pose the rod at the authored PlayerSpawn eye position; never drawn by PIE or packaged games. */
+	/** Pose the authoring pivot at PlayerSpawn eye height; the preview mesh itself remains editor-only. */
 	void UpdateRodPreviewVisual();
-#endif
+
+	/** Cache the cylinder's source dimensions for both editor and runtime line placement. */
+	void RefreshLineMeshMetrics();
 
 	/** Resolve the EventMap (asset or fallback) and push the 3 entry ids onto the shark's sequence component. */
 	void BuildEventMapAndHaptics();
@@ -280,7 +255,7 @@ private:
 	 * Put SM_FishingRod in the player's hand mount at Unity's CameraFollowMount
 	 * pose, fitted to RodLengthCm and turned so its longest axis points forward.
 	 * No-op when the possessed pawn is not an AHapbeatShowcaseCharacter or the
-	 * mesh is absent -- the line then hangs from RodTipAnchor instead.
+	 * mesh is absent -- RodTipMarker remains on the editor preview pose instead.
 	 */
 	void MountRodOnCharacter();
 
@@ -295,7 +270,7 @@ private:
 	 */
 	void TryDeferredMount();
 
-	/** World position of the rod's tip: the mounted rod's far end, or RodTipAnchor. */
+	/** World position of the one authored RodTipMarker component. */
 	FVector GetRodTipWorldLocation() const;
 
 	void HandleFirePressed();  // left mouse down -- hook
@@ -305,9 +280,6 @@ private:
 	void SetHooked(bool bNewHooked);
 
 	// ---- per-tick simulation ----
-
-	/** Sway the fallback anchor (opt-in). */
-	void UpdateRodTip(float DeltaSeconds);
 
 	/** Apply Unity FishingController.cs's taut-line correction to the simulated shark. */
 	void UpdateHookedLinePhysics(float DeltaSeconds);
@@ -329,20 +301,24 @@ private:
 
 	// ---- Constructor-created default subobjects: the editable scene ----
 
+	/** Derived mount pose shared by the editor preview and runtime HandMount. Do not move directly. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing|Rod")
+	TObjectPtr<USceneComponent> RodPreviewMount;
+
 	/**
-	 * Where the line hangs from when nobody is holding the rod. Invisible: Unity
-	 * has no standing rod prop, so this is a reference point, not a thing to look
-	 * at.
+	 * Unity-style editable child marker. Select this component and move it onto
+	 * the physical rod tip; its relative transform is the runtime line endpoint.
+	 * The sphere is visible in Editor World and PIE, but hidden in packaged games.
 	 */
-	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing")
-	TObjectPtr<USceneComponent> RodTipAnchor;
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing|Rod")
+	TObjectPtr<UStaticMeshComponent> RodTipMarker;
 
 	/**
 	 * The fishing line: a unit cylinder re-stretched between the rod tip and the
 	 * shark every Tick. UE counterpart of the LineRenderer on Unity's rod --
 	 * NOT DrawDebugLine, which the previous version used and which a Shipping
-	 * build compiles away, taking the line with it. Its transform is written
-	 * every frame, so nothing about it is authored in the editor.
+	 * build compiles away, taking the line with it. Runtime writes its transform
+	 * every frame; Editor World writes it from Marker to Shark for authoring.
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing")
 	TObjectPtr<UStaticMeshComponent> LineMesh;
@@ -356,9 +332,13 @@ private:
 	TObjectPtr<UChildActorComponent> SharkSlot;
 
 #if WITH_EDITORONLY_DATA
-	/** Editor-only stand-in for the character HandMount, based at PlayerSpawn plus its 160 cm eye height. */
+	/** Editor-only rod mesh beneath RodPreviewMount; identity-relative so Marker coordinates are mesh-local. */
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing|Rod")
 	TObjectPtr<UStaticMeshComponent> RodPreviewMesh;
+
+	/** Screen-sized TargetPoint icon, so an occluded Marker remains findable in Editor World. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|Fishing|Rod")
+	TObjectPtr<UBillboardComponent> RodTipMarkerIcon;
 #endif
 
 	// ---- haptics data ----
@@ -398,6 +378,8 @@ private:
 	TObjectPtr<UMaterialInterface> HeldItemMaterial;
 	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Fishing|Assets")
 	TObjectPtr<UMaterialInterface> LineBaseMaterial;
+	UPROPERTY(EditDefaultsOnly, Category = "Hapbeat|Fishing|Assets")
+	TObjectPtr<UMaterialInterface> RodTipMarkerMaterial;
 
 	// ---- runtime state ----
 
@@ -412,7 +394,7 @@ private:
 	float OriginalLinearDamping = 0.0f;
 	float OriginalAngularDamping = 0.05f;
 
-	/** The character carrying the rod, when there is one; drives GetRodTipWorldLocation(). */
+	/** The character carrying the rod; RodTipMarker is attached to its HandMount while valid. */
 	TWeakObjectPtr<AHapbeatShowcaseCharacter> MountedCharacter;
 
 	/** True once the deferred mount attempt has been made (successful or not). */
@@ -430,8 +412,6 @@ private:
 
 	float LineMeshLocalLengthCm = 0.0f;
 	float LineMeshLocalDiameterCm = 0.0f;
-
-	float ElapsedTimeSeconds = 0.0f;
 
 	/** Fixed on-screen-message keys, offset into the 300s so they don't collide with other zones' HUD lines. */
 	static constexpr int32 KeyGuideHudLineKey = 300;

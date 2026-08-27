@@ -54,6 +54,7 @@ namespace
 }
 
 FHapbeatStreamRunnable::FHapbeatStreamRunnable(
+	const FGuid& InSourceId,
 	TArray<uint8>&& InPcm16,
 	int32 InSampleRate,
 	int32 InChannels,
@@ -81,7 +82,7 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	, SessionTarget(InTarget)
 	, InitialMirror(InMirror)
 {
-	PendingSources.Emplace(MoveTemp(InPcm16), bInLoop, InMirror);
+	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), bInLoop, InMirror);
 }
 
 FHapbeatStreamRunnable::~FHapbeatStreamRunnable() = default;
@@ -184,6 +185,13 @@ uint32 FHapbeatStreamRunnable::Run()
 
 		const double IterationStart = FPlatformTime::Seconds();
 		Streamer->Tick(IterationStart);
+		TArray<FGuid> Finished;
+		Streamer->DrainFinishedSourceIds(Finished);
+		if (Finished.Num() > 0)
+		{
+			FScopeLock Lock(&SourceMutex);
+			FinishedSourceIds.Append(MoveTemp(Finished));
+		}
 
 		if (!Streamer->IsDone())
 		{
@@ -221,6 +229,7 @@ bool FHapbeatStreamRunnable::IsCompatible(
 }
 
 bool FHapbeatStreamRunnable::AddSource(
+	const FGuid& InSourceId,
 	TArray<uint8>&& InPcm16,
 	bool bInLoop,
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
@@ -230,8 +239,15 @@ bool FHapbeatStreamRunnable::AddSource(
 	{
 		return false;
 	}
-	PendingSources.Emplace(MoveTemp(InPcm16), bInLoop, InMirror);
+	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), bInLoop, InMirror);
 	return true;
+}
+
+void FHapbeatStreamRunnable::DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds)
+{
+	FScopeLock Lock(&SourceMutex);
+	OutSourceIds.Append(MoveTemp(FinishedSourceIds));
+	FinishedSourceIds.Reset();
 }
 
 bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
@@ -239,11 +255,22 @@ bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 	FScopeLock Lock(&SourceMutex);
 	for (FPendingSource& Pending : PendingSources)
 	{
-		Streamer->AddSource(MoveTemp(Pending.Pcm16), Pending.bLoop, Pending.Mirror);
+		Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.bLoop, Pending.Mirror);
 	}
 	PendingSources.Reset();
 
 	if (Streamer->HasSources())
+	{
+		EmptySinceSeconds = -1.0;
+		return true;
+	}
+	const double Now = FPlatformTime::Seconds();
+	if (EmptySinceSeconds < 0.0)
+	{
+		EmptySinceSeconds = Now;
+		return true;
+	}
+	if (Now - EmptySinceSeconds < 0.300)
 	{
 		return true;
 	}

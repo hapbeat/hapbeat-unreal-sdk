@@ -269,7 +269,7 @@ Playback->SetPan(-1.0f);  // -1 = 左, +1 = 右
 Hb->StopStream();  // 停止
 ```
 
-同時に流せるストリームは **1 本**です。新しく `StreamClip` を呼ぶと前のものは停止します。
+`StreamClip` は独立した logical source を返します。同じ PONG-confirmed endpoint を対象にする source は 1 本の 16 kHz stereo PCM16 session に混合され、別 endpoint は exact unicast の別 session になります。endpoint 未解決時は `Deferred(NoResolvedEndpoint)` となり、STREAM packet は送信しません。
 
 ---
 

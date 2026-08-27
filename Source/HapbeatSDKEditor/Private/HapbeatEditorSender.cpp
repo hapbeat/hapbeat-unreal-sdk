@@ -317,6 +317,12 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 			TEXT("[Hapbeat] Editor stream: the entry has no usable clip (import a 16-bit PCM .wav into the Hapbeat Clip asset)."));
 		return;
 	}
+	if (Clip->SampleRate != 16000 || Clip->NumChannels != 2)
+	{
+		UE_LOG(LogHapbeatEditorSender, Warning,
+			TEXT("[Hapbeat] Editor stream requires the StreamHub canonical 16 kHz stereo PCM16 profile."));
+		return;
+	}
 	if (!EnsureSocket())
 	{
 		return;
@@ -340,6 +346,12 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 		}
 	}
 	const bool bHasSnapshot = UnicastIps.Num() > 0;
+	if (!bHasSnapshot)
+	{
+		UE_LOG(LogHapbeatEditorSender, Warning,
+			TEXT("[Hapbeat] Editor stream deferred: no exact PONG endpoint is known; STREAM packets are never broadcast."));
+		return;
+	}
 
 	// Gain rides on the mirror, not STREAM_BEGIN: the runnable scales every sample
 	// by it, and the device applies the BEGIN gain verbatim, so setting both would
@@ -356,6 +368,7 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 	const float SendAhead = Config != nullptr ? Config->StreamSendAheadSeconds : 0.05f;
 
 	StreamRunnable = new FHapbeatStreamRunnable(
+		FGuid::NewGuid(),
 		TArray<uint8>(Clip->Pcm16),
 		Clip->SampleRate,
 		Clip->NumChannels,
@@ -372,11 +385,6 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 
 	StreamThread = FRunnableThread::Create(StreamRunnable, TEXT("HapbeatEditorStream"), 0, TPri_AboveNormal);
 
-	if (!bHasSnapshot)
-	{
-		UE_LOG(LogHapbeatEditorSender, Warning,
-			TEXT("[Hapbeat] Editor stream: no device answered, so this streams as broadcast and will likely drop out. Check the device is powered on and on this network."));
-	}
 }
 
 bool FHapbeatEditorSender::IsStreaming()

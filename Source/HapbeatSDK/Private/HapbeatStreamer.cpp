@@ -22,21 +22,17 @@ FHapbeatStreamer::FHapbeatStreamer(
 	TFunction<uint16()> InNextSeq,
 	TFunction<void(const TArray<uint8>&)> InSend,
 	float InSendAheadSeconds)
-	: SampleRate(FMath::Max(1, InSampleRate))
-	, Channels(FMath::Max(1, InChannels))
+	: SampleRate(16000)
+	, Channels(2)
 	, Target(InTarget)
 	, SendAheadSeconds(InSendAheadSeconds > 0.01f ? InSendAheadSeconds : 0.05f)
 	, NextSeqFn(MoveTemp(InNextSeq))
 	, SendFn(MoveTemp(InSend))
 {
-	SrcBytesPerFrame = 2 * Channels;
-
-	// STREAM_BEGIN fixes the channel count. Preserve the existing UE behaviour:
-	// a mono first source that starts off-centre opens a stereo wire session, so
-	// every compatible mono source can subsequently be panned within it.
-	bUpmixMonoToStereo = Channels == 1
-		&& InInitialMirror->Pan.load(std::memory_order_relaxed) != 0.0f;
-	WireChannels = bUpmixMonoToStereo ? 2 : Channels;
+	// The hub normalizes every source before it reaches a session. Keeping the
+	// wire profile fixed is what lets arbitrary sources join one endpoint mixer.
+	SrcBytesPerFrame = 4;
+	WireChannels = 2;
 	WireBytesPerFrame = 2 * WireChannels;
 
 	const int32 MtuFrames = FMath::Max(1,
@@ -49,11 +45,12 @@ FHapbeatStreamer::FHapbeatStreamer(
 }
 
 void FHapbeatStreamer::AddSource(
+	const FGuid& InSourceId,
 	TArray<uint8>&& InPcm16,
 	bool bInLoop,
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
 {
-	Sources.Emplace(MoveTemp(InPcm16), bInLoop, InMirror);
+	Sources.Emplace(InSourceId, MoveTemp(InPcm16), bInLoop, InMirror);
 }
 
 void FHapbeatStreamer::Start(double NowSeconds)
@@ -71,8 +68,14 @@ void FHapbeatStreamer::Start(double NowSeconds)
 
 void FHapbeatStreamer::FinishSource(int32 SourceIndex)
 {
-	Sources[SourceIndex].Mirror->bStopped.store(true, std::memory_order_relaxed);
+	FinishedSourceIds.Add(Sources[SourceIndex].Id);
 	Sources.RemoveAtSwap(SourceIndex, 1, /*bAllowShrinking=*/false);
+}
+
+void FHapbeatStreamer::DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds)
+{
+	OutSourceIds.Append(MoveTemp(FinishedSourceIds));
+	FinishedSourceIds.Reset();
 }
 
 void FHapbeatStreamer::Tick(double NowSeconds)
@@ -193,10 +196,6 @@ void FHapbeatStreamer::SendEnd()
 	if (bDone)
 	{
 		return;
-	}
-	for (FSource& Source : Sources)
-	{
-		Source.Mirror->bStopped.store(true, std::memory_order_relaxed);
 	}
 	Sources.Empty();
 	bDone = true;

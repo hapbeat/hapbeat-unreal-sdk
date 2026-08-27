@@ -37,19 +37,10 @@ namespace
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
-// Defined in the .cpp (not the header) where FHapbeatStreamRunnable is a
-// complete type. The dtor teardown is a leak guard only — the normal teardown
-// path is Deinitialize() -> StopStream(), which already joins + deletes and
-// nulls both StreamThread and StreamRunnable.
 UHapbeatSubsystem::UHapbeatSubsystem() = default;
 UHapbeatSubsystem::~UHapbeatSubsystem()
 {
-	if (StreamThread != nullptr)
-	{
-		StreamThread->Kill(true); // calls StreamRunnable->Stop() then joins; null-safe if already exited
-		delete StreamThread;
-	}
-	delete StreamRunnable; // null-safe; normally already nullptr via Deinitialize
+	StopStream();
 }
 
 void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -162,6 +153,7 @@ void UHapbeatSubsystem::Deinitialize()
 	}
 
 	DevicePongTimes.Empty();
+	StreamEndpoints.Empty();
 	PendingPings.Empty();
 	PrevAliveCount = -1;
 
@@ -216,6 +208,7 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 	// Unity HapbeatClient.OpenBroadcast.
 	DevicePongTimes.Empty();
 	DeviceAddresses.Empty();
+	StreamEndpoints.Empty();
 	// Outage state belongs to the connection we just replaced.
 	bLoggedSendError = false;
 
@@ -586,13 +579,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::StreamClip(UHapbeatClip* Clip, float 
 	// exists — this public entry point is otherwise unchanged.
 	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(this);
 	Playback->Init(BaselineGain, InitialGain);
-	if (InitialPan != 0.0f)
-	{
-		// BEFORE the session starts, not after: the streamer decides at that
-		// moment whether a mono clip has to be upmixed to stereo to be pannable
-		// at all (see FHapbeatStreamer's bUpmixMonoToStereo).
-		Playback->SetPan(InitialPan);
-	}
+	Playback->SetPan(InitialPan);
 
 	return StartStreamSession(Clip, Playback, Target, bLoop) ? Playback : nullptr;
 }
@@ -625,99 +612,20 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 		}
 	}
 
-	// Resolve the global address override (if any) BEFORE the streamer captures
-	// Target — it stores this string by value and reuses it, unmodified, for
-	// every STREAM_BEGIN it sends (including the loop-wrap path, which reuses
-	// the session rather than re-resolving). Triggers/EventMap entries stay
-	// untouched: only the wire-bound copy is rewritten.
-	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
-
-	// Unity parity: compatible calls join the one wire session and get an
-	// independent playback handle. Format/target mismatches are rejected instead
-	// of killing what is already playing. A runnable that has naturally finished
-	// is joined/cleared first so this call can establish the next session.
-	if (StreamRunnable != nullptr && StreamRunnable->IsFinished())
+	TArray<uint8> CanonicalPcm16;
+	if (!NormalizeClipToCanonical(Clip, CanonicalPcm16))
 	{
-		StopStream();
-	}
-	if (StreamRunnable != nullptr)
-	{
-		if (!StreamRunnable->IsCompatible(Clip->SampleRate, Clip->NumChannels, ResolvedTarget))
-		{
-			UE_LOG(LogHapbeat, Warning,
-				TEXT("StreamClip: rate/channel/target mismatch with active session "
-					"(session source format/target must match); rejecting new source."));
-			return false;
-		}
-
-		if (StreamRunnable->AddSource(
-			TArray<uint8>(Clip->Pcm16), bLoop, Playback->GetMirror()))
-		{
-			ActivePlaybacks.Add(Playback);
-			UE_LOG(LogHapbeat, Log,
-				TEXT("Stream source added: %dHz %dch, baseline=%.3f gain=%.3f, target=%s, loop=%d, active sources=%d"),
-				Clip->SampleRate, Clip->NumChannels, Playback->BaselineGain, Playback->GetGain(),
-				ResolvedTarget.IsEmpty() ? TEXT("all") : *ResolvedTarget, bLoop ? 1 : 0,
-				ActivePlaybacks.Num());
-			return true;
-		}
-
-		// The worker atomically closed admission after our IsFinished() check.
-		// Join its already-ending session, then continue below as a new session.
-		StopStream();
-	}
-
-	// Root the first source before the worker can naturally finish it.
-	ActivePlaybacks.Add(Playback);
-
-	// Snapshot the unicast target list for THIS session before the thread
-	// starts (Unity db6fd31 seeds SetStreamUnicastTargets at the same point).
-	// StreamUnicastTargets (FInternetAddr, used elsewhere by StopStreamWithFlush's
-	// game-thread flush pair) is still built here; extract plain IP strings from
-	// it for the runnable — never hand a TSharedPtr<FInternetAddr> to another
-	// thread (see FHapbeatStreamRunnable's threading contract).
-	RefreshStreamUnicastTargets(ResolvedTarget);
-	TArray<FString> UnicastIps;
-	UnicastIps.Reserve(StreamUnicastTargets.Num());
-	for (const TSharedPtr<FInternetAddr>& Addr : StreamUnicastTargets)
-	{
-		if (Addr.IsValid())
-		{
-			UnicastIps.Add(Addr->ToString(/*bAppendPort=*/false));
-		}
-	}
-
-	// The runnable owns a COPY of the clip bytes (TArray copy ctor -> moved in)
-	// so the source UHapbeatClip is never mutated by the premultiply.
-	StreamRunnable = new FHapbeatStreamRunnable(
-		TArray<uint8>(Clip->Pcm16),
-		Clip->SampleRate,
-		Clip->NumChannels,
-		ResolvedTarget,
-		bLoop,
-		Playback->GetMirror(),
-		[this]() { return NextSeq(); },
-		Socket,
-		Port,
-		MoveTemp(UnicastIps),
-		bStreamTargetsSnapshotted,
-		StreamSendAheadSeconds,
-		// The subnet a device answered on, so a broadcast-mode stream
-		// (bStreamUnicast=false) still reaches it on a multi-homed host.
-		CurrentBroadcastAddr().IsValid() ? CurrentBroadcastAddr()->ToString(false) : FString());
-
-	// AboveNormal: a short, latency-sensitive pacing loop — not TimeCritical
-	// (which risks starving the game/render/audio threads it shares a core
-	// budget with), just enough priority to avoid being starved itself.
-	StreamThread = FRunnableThread::Create(StreamRunnable, TEXT("HapbeatStreamThread"), 0, TPri_AboveNormal);
-	if (StreamThread == nullptr)
-	{
-		UE_LOG(LogHapbeat, Warning, TEXT("StreamClip: failed to create the stream thread; aborting."));
-		delete StreamRunnable;
-		StreamRunnable = nullptr;
-		ActivePlaybacks.RemoveSingleSwap(Playback, /*bAllowShrinking=*/false);
+		UE_LOG(LogHapbeat, Warning, TEXT("StreamClip: could not normalize clip to 16 kHz stereo PCM16; ignoring."));
 		return false;
 	}
+
+	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
+	ActivePlaybacks.Add(Playback);
+	FStreamSource& Source = StreamSources.Add(Playback->Id);
+	Source.CanonicalPcm16 = MoveTemp(CanonicalPcm16);
+	Source.ResolvedTarget = ResolvedTarget;
+	Source.bLoop = bLoop;
+	Source.Playback = Playback;
 
 	// Watchdog: poll for the thread finishing on its own (natural EOF on a
 	// non-loop clip, or the handle's own Stop()) and clean up when it does.
@@ -727,67 +635,270 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 			FTickerDelegate::CreateUObject(this, &UHapbeatSubsystem::TickStream), 0.0f);
 	}
 
-	const TCHAR* Route = !bStreamUnicast ? TEXT("broadcast (configured)")
-		: (!bStreamTargetsSnapshotted ? TEXT("broadcast fallback")
-			: (StreamUnicastTargets.Num() > 0 ? TEXT("unicast") : TEXT("filtered; no destination")));
-	UE_LOG(LogHapbeat, Log, TEXT("Stream begin: %dHz %dch, baseline=%.3f gain=%.3f, target=%s, loop=%d, route=%s"),
-		Clip->SampleRate, Clip->NumChannels, Playback->BaselineGain, Playback->GetGain(),
-		ResolvedTarget.IsEmpty() ? TEXT("all") : *ResolvedTarget, bLoop ? 1 : 0, Route);
+	ReconcileStreamSources();
+	UE_LOG(LogHapbeat, Log, TEXT("Stream source registered: 16000Hz stereo, target=%s, loop=%d"),
+		ResolvedTarget.IsEmpty() ? TEXT("all") : *ResolvedTarget, bLoop ? 1 : 0);
 
 	return true;
 }
 
+bool UHapbeatSubsystem::NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const
+{
+	if (Clip == nullptr || Clip->SampleRate <= 0 || Clip->NumChannels <= 0 || Clip->Pcm16.Num() < Clip->NumChannels * 2)
+	{
+		return false;
+	}
+	const int32 SourceFrames = Clip->Pcm16.Num() / (Clip->NumChannels * 2);
+	const int32 OutputFrames = FMath::Max(1, FMath::CeilToInt(static_cast<float>(SourceFrames) * 16000.0f / Clip->SampleRate));
+	OutPcm16.SetNumUninitialized(OutputFrames * 4);
+	for (int32 OutputFrame = 0; OutputFrame < OutputFrames; ++OutputFrame)
+	{
+		const int32 SourceFrame = FMath::Min(SourceFrames - 1,
+			FMath::FloorToInt(static_cast<float>(OutputFrame) * Clip->SampleRate / 16000.0f));
+		for (int32 Channel = 0; Channel < 2; ++Channel)
+		{
+			const int32 SourceChannel = Clip->NumChannels == 1 ? 0 : FMath::Min(Channel, Clip->NumChannels - 1);
+			const int32 SourceOffset = (SourceFrame * Clip->NumChannels + SourceChannel) * 2;
+			const int32 OutputOffset = (OutputFrame * 2 + Channel) * 2;
+			OutPcm16[OutputOffset] = Clip->Pcm16[SourceOffset];
+			OutPcm16[OutputOffset + 1] = Clip->Pcm16[SourceOffset + 1];
+		}
+	}
+	return true;
+}
+
+void UHapbeatSubsystem::ReconcileStreamSources()
+{
+	const double Now = FPlatformTime::Seconds();
+	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
+	{
+		FStreamSource& Source = Pair.Value;
+		UHapbeatStreamPlayback* Playback = Source.Playback.Get();
+		if (Playback == nullptr || Playback->IsStopped())
+		{
+			continue;
+		}
+		Source.EndpointKeys.Reset();
+		for (const TPair<FString, FStreamEndpoint>& EndpointPair : StreamEndpoints)
+		{
+			const FStreamEndpoint& Endpoint = EndpointPair.Value;
+			if (Now - Endpoint.LastPongSeconds <= AliveTimeoutSeconds()
+				&& !Endpoint.Address.IsEmpty()
+				&& UHapbeatTargetLibrary::AddressMatches(Source.ResolvedTarget, Endpoint.Address))
+			{
+				Source.EndpointKeys.Add(EndpointPair.Key);
+			}
+		}
+		if (Source.EndpointKeys.Num() == 0)
+		{
+			Playback->SetDeferredNoEndpoint();
+			continue;
+		}
+		Playback->SetActive();
+		for (const FString& EndpointKey : Source.EndpointKeys)
+		{
+			FStreamSession* Existing = StreamSessions.Find(EndpointKey);
+			if (Existing != nullptr && Existing->Runnable != nullptr)
+			{
+				if (!Existing->SourceIds.Contains(Pair.Key)
+					&& Existing->Runnable->AddSource(Pair.Key, TArray<uint8>(Source.CanonicalPcm16), Source.bLoop, Playback->GetMirror()))
+				{
+					Existing->SourceIds.Add(Pair.Key);
+				}
+				continue;
+			}
+			const double* EndedAt = StreamSessionEndedAt.Find(EndpointKey);
+			if (EndedAt == nullptr || Now - *EndedAt >= 0.300)
+			{
+				StartEndpointSession(EndpointKey);
+			}
+		}
+	}
+}
+
+void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
+{
+	const FStreamEndpoint* Endpoint = StreamEndpoints.Find(EndpointKey);
+	if (Endpoint == nullptr || Socket == nullptr || StreamSessions.Contains(EndpointKey))
+	{
+		return;
+	}
+	FGuid FirstSourceId;
+	FStreamSource* FirstSource = nullptr;
+	UHapbeatStreamPlayback* FirstPlayback = nullptr;
+	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
+	{
+		if (Pair.Value.EndpointKeys.Contains(EndpointKey)
+			&& (FirstPlayback = Pair.Value.Playback.Get()) != nullptr && FirstPlayback->IsActive())
+		{
+			FirstSourceId = Pair.Key;
+			FirstSource = &Pair.Value;
+			break;
+		}
+	}
+	if (FirstSource == nullptr)
+	{
+		return;
+	}
+	TArray<FString> EndpointIps;
+	EndpointIps.Add(Endpoint->Ip);
+	FStreamSession Session;
+	Session.Runnable = new FHapbeatStreamRunnable(
+		FirstSourceId, TArray<uint8>(FirstSource->CanonicalPcm16), 16000, 2, Endpoint->Address,
+		FirstSource->bLoop, FirstPlayback->GetMirror(), [this]() { return NextSeq(); }, Socket,
+		Endpoint->Port, MoveTemp(EndpointIps), true, StreamSendAheadSeconds, FString());
+	Session.Thread = FRunnableThread::Create(Session.Runnable, TEXT("HapbeatStreamEndpointThread"), 0, TPri_AboveNormal);
+	if (Session.Thread == nullptr)
+	{
+		delete Session.Runnable;
+		return;
+	}
+	Session.SourceIds.Add(FirstSourceId);
+	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
+	{
+		if (Pair.Key != FirstSourceId && Pair.Value.EndpointKeys.Contains(EndpointKey))
+		{
+			if (UHapbeatStreamPlayback* Playback = Pair.Value.Playback.Get())
+			{
+				if (Session.Runnable->AddSource(Pair.Key, TArray<uint8>(Pair.Value.CanonicalPcm16), Pair.Value.bLoop, Playback->GetMirror()))
+				{
+					Session.SourceIds.Add(Pair.Key);
+				}
+			}
+		}
+	}
+	StreamSessions.Add(EndpointKey, MoveTemp(Session));
+}
+
+void UHapbeatSubsystem::StopStreamSession(const FString& EndpointKey)
+{
+	FStreamSession Session;
+	if (!StreamSessions.RemoveAndCopyValue(EndpointKey, Session))
+	{
+		return;
+	}
+	if (Session.Thread != nullptr)
+	{
+		Session.Thread->Kill(true);
+		delete Session.Thread;
+	}
+	delete Session.Runnable;
+	StreamSessionEndedAt.Add(EndpointKey, FPlatformTime::Seconds());
+}
+
 bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 {
+	for (const TPair<FString, FStreamSession>& SessionPair : StreamSessions)
+	{
+		if (SessionPair.Value.Runnable == nullptr)
+		{
+			continue;
+		}
+		TArray<FGuid> FinishedSourceIds;
+		SessionPair.Value.Runnable->DrainFinishedSourceIds(FinishedSourceIds);
+		for (const FGuid& SourceId : FinishedSourceIds)
+		{
+			if (FStreamSource* Source = StreamSources.Find(SourceId))
+			{
+				Source->CompletedEndpointKeys.Add(SessionPair.Key);
+			}
+		}
+	}
+	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
+	{
+		FStreamSource& Source = Pair.Value;
+		if (Source.EndpointKeys.Num() == 0)
+		{
+			continue;
+		}
+		bool bFinishedOnEveryEndpoint = true;
+		for (const FString& EndpointKey : Source.EndpointKeys)
+		{
+			if (!Source.CompletedEndpointKeys.Contains(EndpointKey))
+			{
+				bFinishedOnEveryEndpoint = false;
+				break;
+			}
+		}
+		if (bFinishedOnEveryEndpoint)
+		{
+			if (UHapbeatStreamPlayback* Playback = Source.Playback.Get())
+			{
+				Playback->Stop();
+			}
+		}
+	}
 	ActivePlaybacks.RemoveAllSwap([](const TObjectPtr<UHapbeatStreamPlayback>& Playback)
 	{
 		return Playback == nullptr || Playback->IsStopped();
 	}, /*bAllowShrinking=*/false);
 
-	if (StreamRunnable == nullptr)
+	for (auto It = StreamSources.CreateIterator(); It; ++It)
 	{
-		// Nothing to drive — auto-unregister this ticker.
-		StreamTickHandle.Reset();
-		return false;
+		UHapbeatStreamPlayback* Playback = It.Value().Playback.Get();
+		if (Playback == nullptr || Playback->IsStopped())
+		{
+			It.RemoveCurrent();
+		}
 	}
-
-	if (StreamRunnable->IsFinished())
+	TSet<FGuid> CompletedCandidates;
+	for (auto It = StreamSessions.CreateIterator(); It; ++It)
 	{
-		// The thread ended on its own (clip end on a non-loop, or the handle's
-		// own Stop() was honored) — STREAM_END has already been sent by the
-		// time IsFinished() reports true (see FHapbeatStreamRunnable::Run()'s
-		// class-doc guarantee). Reuse StopStream() for the join (instant —
-		// the thread already exited) + cleanup, same code path as an explicit
-		// user-initiated stop.
-		//
-		// Clear the handle FIRST so StopStream()'s RemoveTicker branch is
-		// skipped: we are inside this very ticker's callback, and returning
-		// false below is the reentrancy-safe way to unregister (never
-		// RemoveTicker on the currently-firing handle).
-		StreamTickHandle.Reset();
-		StopStream();
-		return false;
+		FStreamSession& Session = It.Value();
+		if (Session.Runnable != nullptr && Session.Runnable->IsFinished())
+		{
+			for (const FGuid& SourceId : Session.SourceIds)
+			{
+				CompletedCandidates.Add(SourceId);
+			}
+			if (Session.Thread != nullptr)
+			{
+				Session.Thread->Kill(true);
+				delete Session.Thread;
+			}
+			delete Session.Runnable;
+			StreamSessionEndedAt.Add(It.Key(), FPlatformTime::Seconds());
+			It.RemoveCurrent();
+		}
 	}
-
-	return true; // keep polling
+	for (const FGuid& SourceId : CompletedCandidates)
+	{
+		bool bStillRunning = false;
+		for (const TPair<FString, FStreamSession>& Pair : StreamSessions)
+		{
+			if (Pair.Value.SourceIds.Contains(SourceId))
+			{
+				bStillRunning = true;
+				break;
+			}
+		}
+		if (!bStillRunning)
+		{
+			if (FStreamSource* Source = StreamSources.Find(SourceId))
+			{
+				if (UHapbeatStreamPlayback* Playback = Source->Playback.Get())
+				{
+					Playback->Stop();
+				}
+			}
+		}
+	}
+	ReconcileStreamSources();
+	if (StreamSources.Num() > 0 || StreamSessions.Num() > 0)
+	{
+		return true;
+	}
+	StreamTickHandle.Reset();
+	return false;
 }
 
 void UHapbeatSubsystem::StopStream()
 {
-	if (StreamThread != nullptr)
+	TArray<FString> SessionKeys;
+	StreamSessions.GetKeys(SessionKeys);
+	for (const FString& Key : SessionKeys)
 	{
-		// Kill(true) calls StreamRunnable->Stop() (flags the atomic) then BLOCKS
-		// until Run() returns — by then STREAM_END has already gone out. Brief:
-		// the thread notices within one ~10ms pacing tick at most; instant if it
-		// already finished on its own (TickStream's watchdog path).
-		StreamThread->Kill(true);
-		delete StreamThread;
-		StreamThread = nullptr;
-	}
-	if (StreamRunnable != nullptr)
-	{
-		delete StreamRunnable;
-		StreamRunnable = nullptr;
+		StopStreamSession(Key);
 	}
 
 	for (UHapbeatStreamPlayback* Playback : ActivePlaybacks)
@@ -798,6 +909,7 @@ void UHapbeatSubsystem::StopStream()
 		}
 	}
 	ActivePlaybacks.Empty();
+	StreamSources.Empty();
 
 	// Remove the ticker explicitly. Callers from OUTSIDE the tick callback
 	// (StreamClip's replace path, Deinitialize) land here with a valid handle.
@@ -815,17 +927,10 @@ void UHapbeatSubsystem::StopStream()
 void UHapbeatSubsystem::StopStreamWithFlush(const FString& Target)
 {
 	StopStream();
-
-	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
-
-	// Force the device ring buffer to flush: a STREAM_BEGIN + STREAM_END pair
-	// trips the firmware's BEGIN_FLUSH_THRESHOLD path (ringReset when residual
-	// > 32 ms), silencing within a few ms. gain = 1.0 (any format works); parity
-	// with Unity StopStreamWithFlush (SendStreamBegin(16000,1,PCM16,0,1.0,target)
-	// + SendStreamEnd()). SendPacket no-ops if the socket is gone.
-	SendStreamPacket(FHapbeatProtocol::BuildStreamBegin(
-		NextSeq(), 16000, 1, FHapbeatProtocol::AudioFormatPcm16, 0, 1.0f, ResolvedTarget));
-	SendStreamPacket(FHapbeatProtocol::BuildStreamEnd(NextSeq()));
+	// A synthetic BEGIN/END flush would either broadcast STREAM packets or break
+	// the required same-route END -> BEGIN guard. Endpoint sessions own their END
+	// lifecycle, so there is no cross-route flush packet to send here.
+	UE_LOG(LogHapbeat, Verbose, TEXT("StopStreamWithFlush completed through endpoint session shutdown (target='%s')."), *Target);
 }
 
 void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPersist)
@@ -928,6 +1033,7 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 	}
 
 	const FString SenderIp = Sender.Address.ToString(); // "a.b.c.d" (no port)
+	const int32 SenderPort = Sender.Port;
 
 	if (Pkt.Cmd == FHapbeatProtocol::CmdPong)
 	{
@@ -951,7 +1057,7 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 		// is torn down. Bail if 'this' is gone (use-after-free guard).
 		TWeakObjectPtr<UHapbeatSubsystem> WeakThis(this);
 		AsyncTask(ENamedThreads::GameThread,
-			[WeakThis, SenderIp, PongSeq, NowMono, EchoedTs, DeviceName, Address, Firmware]()
+			[WeakThis, SenderIp, SenderPort, PongSeq, NowMono, EchoedTs, DeviceName, Address, Firmware]()
 			{
 				UHapbeatSubsystem* Self = WeakThis.Get();
 				if (Self == nullptr)
@@ -988,7 +1094,30 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 					// kept by both unicast filters (fail-open) — older firmware
 					// must not silently lose its haptics.
 					Self->DeviceAddresses.Add(SenderIp, Address);
+					const FString EndpointKey = FString::Printf(TEXT("%s:%d|%s"), *SenderIp, SenderPort, *Address);
+					// A device that changes Wi-Fi route/port is a new wire endpoint. End
+					// the old endpoint on its old route before a session is allowed to
+					// begin on the new one; never leak DATA across the two routes.
+					TArray<FString> ReplacedEndpoints;
+					for (const TPair<FString, FStreamEndpoint>& Existing : Self->StreamEndpoints)
+					{
+						if (Existing.Key != EndpointKey && Existing.Value.Address == Address)
+						{
+							ReplacedEndpoints.Add(Existing.Key);
+						}
+					}
+					for (const FString& ReplacedKey : ReplacedEndpoints)
+					{
+						Self->StopStreamSession(ReplacedKey);
+						Self->StreamEndpoints.Remove(ReplacedKey);
+					}
+					FStreamEndpoint& Endpoint = Self->StreamEndpoints.FindOrAdd(EndpointKey);
+					Endpoint.Ip = SenderIp;
+					Endpoint.Port = SenderPort;
+					Endpoint.Address = Address;
+					Endpoint.LastPongSeconds = FPlatformTime::Seconds();
 				}
+				Self->ReconcileStreamSources();
 
 				Self->OnPongGameThread(SenderIp, RttUs, DeviceName, Address, Firmware);
 				Self->EvaluateLivenessTransition();

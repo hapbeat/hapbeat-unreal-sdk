@@ -8,6 +8,21 @@
 
 class AActor;
 
+UENUM(BlueprintType)
+enum class EHapbeatStreamPlaybackStatus : uint8
+{
+	Deferred,
+	Active,
+	Stopped
+};
+
+UENUM(BlueprintType)
+enum class EHapbeatStreamDeferredReason : uint8
+{
+	None,
+	NoResolvedEndpoint
+};
+
 /**
  * Handle to an active StreamClip playback. The caller holds this to modulate the
  * stream in real time: write Gain (via ApplyGainModulation) and Pan each frame
@@ -42,6 +57,17 @@ class HAPBEATSDK_API UHapbeatStreamPlayback : public UObject
 	GENERATED_BODY()
 
 public:
+	/** Stable logical-source identity owned by the StreamHub. */
+	UPROPERTY(BlueprintReadOnly, Category = "Hapbeat")
+	FGuid Id;
+
+	/** Current endpoint-resolution state for this logical source. */
+	UPROPERTY(BlueprintReadOnly, Category = "Hapbeat")
+	EHapbeatStreamPlaybackStatus Status = EHapbeatStreamPlaybackStatus::Deferred;
+
+	/** Reason for Deferred; None while Active or Stopped. */
+	UPROPERTY(BlueprintReadOnly, Category = "Hapbeat")
+	EHapbeatStreamDeferredReason DeferredReason = EHapbeatStreamDeferredReason::NoResolvedEndpoint;
 	/**
 	 * The gain the entry authored (entry.gain x manifest.intensity), captured at
 	 * stream start. A bound stream is BaselineGain x bindingOutput so author
@@ -100,7 +126,13 @@ public:
 
 	/** True while the stream is still active (not stopped). */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
-	bool IsActive() const { return !IsStopped(); }
+	bool IsActive() const { return Status == EHapbeatStreamPlaybackStatus::Active && !IsStopped(); }
+
+	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	EHapbeatStreamPlaybackStatus GetStatus() const { return IsStopped() ? EHapbeatStreamPlaybackStatus::Stopped : Status; }
+
+	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	EHapbeatStreamDeferredReason GetDeferredReason() const { return DeferredReason; }
 
 	/**
 	 * Per-channel LINEAR balance coefficients derived from Pan. Returns
@@ -143,6 +175,10 @@ public:
 	 * returns null.
 	 */
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> GetMirror();
+
+	/** StreamHub game-thread state transitions. */
+	void SetDeferredNoEndpoint();
+	void SetActive();
 
 private:
 	/** Live gain (= BaselineGain x modulator), clamped to [0, 2]. */

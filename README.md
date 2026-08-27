@@ -255,9 +255,13 @@ stereo clip ~3 dB versus mono. Gain/pan are pre-multiplied into the PCM on the
 SDK side before every `STREAM_DATA` packet — `STREAM_BEGIN` always carries
 `gain=1.0`; the device never re-applies gain.
 
-**Single active session, REPLACE semantics**: a new `StreamClip()` call first
-stops any current stream (`STREAM_END`), then starts the new one (fresh
-`STREAM_BEGIN`). There is no multi-source mixing in v1.
+`StreamClip()` registers an independent logical source with the subsystem's
+StreamHub. Sources addressed to the same PONG-confirmed endpoint are mixed
+into one 16 kHz stereo PCM16 wire session; different endpoints get separate
+exact-unicast sessions. With no matching endpoint the returned playback is
+`Deferred(NoResolvedEndpoint)` and sends no STREAM packet. `Stop()` affects
+only that source; the last source leaves its endpoint session after a 300 ms
+linger.
 
 `UHapbeatParameterBinding : UActorComponent` drives a playback continuously
 each tick: `Source → normalize([InputMin,InputMax]) → curve → lerp([OutputMin,

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Replaced the single-stream runner with endpoint-scoped StreamHub sessions:
+  each exact PONG endpoint receives one unicast STREAM session, while logical
+  sources on that endpoint are mixed independently with gain/pan/loop/stop.
+- Stream output is normalized to 16 kHz stereo PCM16. Unresolved sources stay
+  `Deferred(NoResolvedEndpoint)` and never broadcast STREAM packets; empty
+  endpoint sessions linger for 300 ms before END.
+
 Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
 
 形式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、

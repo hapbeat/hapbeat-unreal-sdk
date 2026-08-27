@@ -5,10 +5,13 @@
 
 void UHapbeatStreamPlayback::Init(float Baseline, float InitialModulator)
 {
+	Id = FGuid::NewGuid();
 	BaselineGain = Baseline;
 	Gain = FMath::Clamp(Baseline * InitialModulator, 0.0f, 2.0f);
 	Pan = 0.0f;
 	bStopped = false;
+	Status = EHapbeatStreamPlaybackStatus::Deferred;
+	DeferredReason = EHapbeatStreamDeferredReason::NoResolvedEndpoint;
 
 	// GetMirror() lazily creates on first call — always fine here since Init()
 	// is only ever called from the game thread (StreamClip), same as every
@@ -36,7 +39,27 @@ void UHapbeatStreamPlayback::SetPan(float NewPan)
 void UHapbeatStreamPlayback::Stop()
 {
 	bStopped = true;
+	Status = EHapbeatStreamPlaybackStatus::Stopped;
+	DeferredReason = EHapbeatStreamDeferredReason::None;
 	GetMirror()->bStopped.store(true, std::memory_order_relaxed);
+}
+
+void UHapbeatStreamPlayback::SetDeferredNoEndpoint()
+{
+	if (!IsStopped())
+	{
+		Status = EHapbeatStreamPlaybackStatus::Deferred;
+		DeferredReason = EHapbeatStreamDeferredReason::NoResolvedEndpoint;
+	}
+}
+
+void UHapbeatStreamPlayback::SetActive()
+{
+	if (!IsStopped())
+	{
+		Status = EHapbeatStreamPlaybackStatus::Active;
+		DeferredReason = EHapbeatStreamDeferredReason::None;
+	}
 }
 
 bool UHapbeatStreamPlayback::IsStopped() const

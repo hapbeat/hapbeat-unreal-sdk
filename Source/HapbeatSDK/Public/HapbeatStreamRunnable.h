@@ -69,6 +69,7 @@ public:
 	 * @param InSendAheadSeconds   FHapbeatStreamer pacing lead (UHapbeatConfig::StreamSendAheadSeconds).
 	 */
 	FHapbeatStreamRunnable(
+		const FGuid& InSourceId,
 		TArray<uint8>&& InPcm16,
 		int32 InSampleRate,
 		int32 InChannels,
@@ -100,20 +101,25 @@ public:
 	 * worker has atomically closed admission for natural session completion.
 	 */
 	bool AddSource(
+		const FGuid& InSourceId,
 		TArray<uint8>&& InPcm16,
 		bool bInLoop,
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror);
+
+	/** Game-thread poll: source ids that reached EOF in this endpoint session. */
+	void DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds);
 
 private:
 	struct FPendingSource
 	{
 		TArray<uint8> Pcm16;
+		FGuid SourceId;
 		bool bLoop = false;
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
 
-		FPendingSource(TArray<uint8>&& InPcm16, bool bInLoop,
+		FPendingSource(const FGuid& InSourceId, TArray<uint8>&& InPcm16, bool bInLoop,
 			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
-			: Pcm16(MoveTemp(InPcm16)), bLoop(bInLoop), Mirror(InMirror)
+			: Pcm16(MoveTemp(InPcm16)), SourceId(InSourceId), bLoop(bInLoop), Mirror(InMirror)
 		{
 		}
 	};
@@ -174,5 +180,8 @@ private:
 	 */
 	mutable FCriticalSection SourceMutex;
 	TArray<FPendingSource> PendingSources;
+	TArray<FGuid> FinishedSourceIds;
 	bool bAcceptingSources = true;
+	/** Empty endpoint sessions stay open briefly so adjacent sources share one wire stream. */
+	double EmptySinceSeconds = -1.0;
 };

@@ -366,9 +366,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
 	bool IsAlive() const { return GetAliveDeviceCount() > 0; }
 
-	/** True while a clip stream session is active. */
+	/** True while at least one endpoint-scoped clip stream session is active. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
-	bool IsStreaming() const { return StreamRunnable != nullptr; }
+	bool IsStreaming() const { return StreamSessions.Num() > 0; }
 
 	/** First active local source, or nullptr. Hold StreamClip's return value for source-specific control. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
@@ -438,6 +438,10 @@ private:
 	 * (the playback is not retained in ActivePlaybacks in that case).
 	 */
 	bool StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPlayback* Playback, const FString& Target, bool bLoop);
+	void ReconcileStreamSources();
+	void StopStreamSession(const FString& EndpointKey);
+	void StartEndpointSession(const FString& EndpointKey);
+	bool NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const;
 
 	/**
 	 * Send a STREAM_* packet on the GAME THREAD: unicast to each device
@@ -478,8 +482,8 @@ private:
 	 * intentionally differs from the stream path (see SendStreamPacket).
 	 */
 	void SendCommandPacket(const TArray<uint8>& Packet, const FString& ResolvedTarget);
-
 	void SendStreamPacket(const TArray<uint8>& Packet);
+
 
 	/**
 	 * AppName as it goes on the wire: the stored (raw, templated) name with the
@@ -489,6 +493,7 @@ private:
 	 * HapbeatManager.AppName (Unity SDK).
 	 */
 	FString AppNameForWire() const;
+	void RefreshStreamUnicastTargets(const FString& ResolvedTarget);
 
 	/**
 	 * Snapshot the currently-alive device IPs into StreamUnicastTargets (called
@@ -497,7 +502,6 @@ private:
 	 * SendStreamPacket then broadcasts. A device whose first PONG lands mid-session
 	 * is picked up by the NEXT session, exactly like Unity.
 	 */
-	void RefreshStreamUnicastTargets(const FString& ResolvedTarget);
 
 	/**
 	 * Thread-safe: guarded by SeqLock so both the game thread (Play/Stop/
@@ -657,19 +661,41 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UHapbeatStreamPlayback>> ActivePlaybacks;
 
-	/**
-	 * The active stream's dedicated FRunnable + thread. Null when not
-	 * streaming. Owned raw pointers (deleted in StopStream/dtor), same pattern
-	 * as Receiver above. Deliberately not TUniquePtr: UHT's gen.cpp includes
-	 * this header with FHapbeatStreamRunnable still forward-declared and would
-	 * instantiate the smart pointer's deleter there -> C4150 "deletion of
-	 * incomplete type" as-error (identical reasoning to the earlier Streamer
-	 * pointer this replaces).
-	 */
-	FHapbeatStreamRunnable* StreamRunnable = nullptr;
-	FRunnableThread* StreamThread = nullptr;
+	struct FStreamSource
+	{
+		TArray<uint8> CanonicalPcm16;
+		FString ResolvedTarget;
+		bool bLoop = false;
+		TWeakObjectPtr<UHapbeatStreamPlayback> Playback;
+		TSet<FString> EndpointKeys;
+		TSet<FString> CompletedEndpointKeys;
+	};
 
-	/** Game-thread watchdog ticker driving TickStream; valid only while a stream is active. */
+	struct FStreamEndpoint
+	{
+		FString Ip;
+		int32 Port = 0;
+		FString Address;
+		double LastPongSeconds = 0.0;
+	};
+
+	struct FStreamSession
+	{
+		FHapbeatStreamRunnable* Runnable = nullptr;
+		FRunnableThread* Thread = nullptr;
+		TSet<FGuid> SourceIds;
+	};
+
+	/** PONG-confirmed exact endpoints; STREAM packets are never broadcast. */
+	TMap<FString, FStreamEndpoint> StreamEndpoints;
+	/** Logical sources, each independently assigned to matching endpoint sessions. */
+	TMap<FGuid, FStreamSource> StreamSources;
+	/** One runnable/thread per exact PONG endpoint. */
+	TMap<FString, FStreamSession> StreamSessions;
+	/** Last END time per route/address; enforces the 300 ms same-route BEGIN gap. */
+	TMap<FString, double> StreamSessionEndedAt;
+
+	/** Game-thread watchdog ticker driving TickStream; valid while sources are active or Deferred. */
 	FTSTicker::FDelegateHandle StreamTickHandle;
 
 	/** Send-ahead lead for streaming; seeded from UHapbeatConfig in Initialize. */

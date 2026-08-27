@@ -8,15 +8,18 @@
 
 namespace
 {
-	TArray<uint8> MakeMonoPcm(int16 Sample, int32 Frames)
+	TArray<uint8> MakeStereoPcm(int16 Sample, int32 Frames)
 	{
 		TArray<uint8> Bytes;
-		Bytes.SetNumUninitialized(Frames * 2);
+		Bytes.SetNumUninitialized(Frames * 4);
 		const uint16 Value = static_cast<uint16>(Sample);
 		for (int32 Frame = 0; Frame < Frames; ++Frame)
 		{
-			Bytes[Frame * 2] = static_cast<uint8>(Value & 0xFF);
-			Bytes[Frame * 2 + 1] = static_cast<uint8>((Value >> 8) & 0xFF);
+			for (int32 Channel = 0; Channel < 2; ++Channel)
+			{
+				Bytes[Frame * 4 + Channel * 2] = static_cast<uint8>(Value & 0xFF);
+				Bytes[Frame * 4 + Channel * 2 + 1] = static_cast<uint8>((Value >> 8) & 0xFF);
+			}
 		}
 		return Bytes;
 	}
@@ -40,10 +43,12 @@ bool FHapbeatMultiSourceStreamerTest::RunTest(const FString& Parameters)
 	TArray<TArray<uint8>> Packets;
 	auto LoopMirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
 	auto TickMirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+	const FGuid LoopId = FGuid::NewGuid();
+	const FGuid TickId = FGuid::NewGuid();
 
 	FHapbeatStreamer Streamer(
 		/*SampleRate=*/16000,
-		/*Channels=*/1,
+		/*Channels=*/2,
 		FString(),
 		LoopMirror,
 		[&Sequence]() { return ++Sequence; },
@@ -52,8 +57,8 @@ bool FHapbeatMultiSourceStreamerTest::RunTest(const FString& Parameters)
 
 	// The loop is the persistent Z4 bed; the one-frame source is a slider detent.
 	// Both must appear in the first mixed sample without creating a second BEGIN.
-	Streamer.AddSource(MakeMonoPcm(1000, 160), /*bLoop=*/true, LoopMirror);
-	Streamer.AddSource(MakeMonoPcm(2000, 1), /*bLoop=*/false, TickMirror);
+	Streamer.AddSource(LoopId, MakeStereoPcm(1000, 160), /*bLoop=*/true, LoopMirror);
+	Streamer.AddSource(TickId, MakeStereoPcm(2000, 1), /*bLoop=*/false, TickMirror);
 	Streamer.Start(/*NowSeconds=*/0.0);
 	Streamer.Tick(/*NowSeconds=*/0.0);
 
@@ -87,14 +92,15 @@ bool FHapbeatMultiSourceStreamerTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("loop + tick are summed"), ReadFirstDataSample(*FirstData), static_cast<int16>(3000));
 	}
-	TestTrue(TEXT("one-shot source finishes independently"),
-		TickMirror->bStopped.load(std::memory_order_relaxed));
+	TArray<FGuid> FinishedSourceIds;
+	Streamer.DrainFinishedSourceIds(FinishedSourceIds);
+	TestTrue(TEXT("one-shot source finishes independently"), FinishedSourceIds.Contains(TickId));
 	TestFalse(TEXT("loop remains active after one-shot"),
 		LoopMirror->bStopped.load(std::memory_order_relaxed));
 	TestTrue(TEXT("session retains the loop source"), Streamer.HasSources());
 
 	Streamer.SendEnd();
-	TestTrue(TEXT("global end stops the remaining loop"),
+	TestFalse(TEXT("endpoint END does not stop the logical source on sibling endpoints"),
 		LoopMirror->bStopped.load(std::memory_order_relaxed));
 	int32 EndCount = 0;
 	for (const TArray<uint8>& Packet : Packets)

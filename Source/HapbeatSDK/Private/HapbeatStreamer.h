@@ -29,6 +29,7 @@ public:
 
 	/** Worker-thread only: add one source already validated against the session format/target. */
 	void AddSource(
+		const FGuid& InSourceId,
 		TArray<uint8>&& InPcm16,
 		bool bInLoop,
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror);
@@ -44,18 +45,20 @@ public:
 
 	bool HasSources() const { return Sources.Num() > 0; }
 	bool IsDone() const { return bDone; }
+	void DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds);
 
 private:
 	struct FSource
 	{
+		FGuid Id;
 		TArray<uint8> Pcm16;
 		int32 ByteOffset = 0;
 		bool bLoop = false;
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
 
-		FSource(TArray<uint8>&& InPcm16, bool bInLoop,
+		FSource(const FGuid& InSourceId, TArray<uint8>&& InPcm16, bool bInLoop,
 			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
-			: Pcm16(MoveTemp(InPcm16)), bLoop(bInLoop), Mirror(InMirror)
+			: Id(InSourceId), Pcm16(MoveTemp(InPcm16)), bLoop(bInLoop), Mirror(InMirror)
 		{
 		}
 	};
@@ -75,6 +78,7 @@ private:
 	TFunction<uint16()> NextSeqFn;
 	TFunction<void(const TArray<uint8>&)> SendFn;
 	TArray<FSource> Sources;
+	TArray<FGuid> FinishedSourceIds;
 
 	uint32 WireOffset = 0;
 	int64 TotalFramesSent = 0;

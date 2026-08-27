@@ -668,6 +668,65 @@ bool UHapbeatSubsystem::NormalizeClipToCanonical(const UHapbeatClip* Clip, TArra
 	return true;
 }
 
+void UHapbeatSubsystem::RegisterStreamEndpoint(
+	const FString& Ip, int32 InPort, const FString& Address, double NowSeconds)
+{
+	const FString EndpointKey = FString::Printf(TEXT("%s:%d|%s"), *Ip, InPort, *Address);
+	TArray<FString> MigrationCandidates;
+	const bool bExactSessionExists = StreamSessions.Contains(EndpointKey);
+	for (const TPair<FString, FStreamEndpoint>& Existing : StreamEndpoints)
+	{
+		if (Existing.Key == EndpointKey
+			|| !HapbeatStreamSessionContract::IsMigrationCandidate(
+				Existing.Value.Ip, Existing.Value.Port, Existing.Value.Address,
+				Ip, InPort, Address,
+				NowSeconds - Existing.Value.LastPongSeconds <= AliveTimeoutSeconds()))
+		{
+			continue;
+		}
+		MigrationCandidates.Add(Existing.Key);
+	}
+
+	// More than one candidate has no trustworthy device identity. Preserve every
+	// exact endpoint instead of guessing and collapsing independent sessions.
+	if (!bExactSessionExists && MigrationCandidates.Num() == 1)
+	{
+		const FString OldKey = MigrationCandidates[0];
+		FStreamSession Migrated;
+		if (StreamSessions.RemoveAndCopyValue(OldKey, Migrated))
+		{
+			if (Migrated.Runnable != nullptr)
+			{
+				Migrated.Runnable->UpdateEndpoint(Ip, InPort);
+			}
+			StreamSessions.Add(EndpointKey, MoveTemp(Migrated));
+		}
+		if (const double* EndedAt = StreamSessionEndedAt.Find(OldKey))
+		{
+			StreamSessionEndedAt.Add(EndpointKey, *EndedAt);
+		}
+		for (TPair<FGuid, FStreamSource>& SourcePair : StreamSources)
+		{
+			if (SourcePair.Value.EndpointKeys.Remove(OldKey) > 0)
+			{
+				SourcePair.Value.EndpointKeys.Add(EndpointKey);
+			}
+			if (SourcePair.Value.CompletedEndpointKeys.Remove(OldKey) > 0)
+			{
+				SourcePair.Value.CompletedEndpointKeys.Add(EndpointKey);
+			}
+		}
+		StreamSessionEndedAt.Remove(OldKey);
+		StreamEndpoints.Remove(OldKey);
+	}
+
+	FStreamEndpoint& Endpoint = StreamEndpoints.FindOrAdd(EndpointKey);
+	Endpoint.Ip = Ip;
+	Endpoint.Port = InPort;
+	Endpoint.Address = Address;
+	Endpoint.LastPongSeconds = NowSeconds;
+}
+
 void UHapbeatSubsystem::ReconcileStreamSources()
 {
 	const double Now = FPlatformTime::Seconds();
@@ -692,7 +751,7 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 		{
 			continue;
 		}
-		Source.EndpointKeys.Reset();
+		TSet<FString> NewEndpointKeys;
 		for (const TPair<FString, FStreamEndpoint>& EndpointPair : StreamEndpoints)
 		{
 			const FStreamEndpoint& Endpoint = EndpointPair.Value;
@@ -700,9 +759,26 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 				&& !Endpoint.Address.IsEmpty()
 				&& UHapbeatTargetLibrary::AddressMatches(Source.ResolvedTarget, Endpoint.Address))
 			{
-				Source.EndpointKeys.Add(EndpointPair.Key);
+				NewEndpointKeys.Add(EndpointPair.Key);
 			}
 		}
+		for (const FString& PreviousEndpointKey : Source.EndpointKeys)
+		{
+			if (NewEndpointKeys.Contains(PreviousEndpointKey))
+			{
+				continue;
+			}
+			if (FStreamSession* PreviousSession = StreamSessions.Find(PreviousEndpointKey))
+			{
+				if (PreviousSession->Runnable != nullptr)
+				{
+					PreviousSession->Runnable->DetachSource(Pair.Key);
+				}
+				PreviousSession->SourceIds.Remove(Pair.Key);
+			}
+			Source.CompletedEndpointKeys.Remove(PreviousEndpointKey);
+		}
+		Source.EndpointKeys = MoveTemp(NewEndpointKeys);
 		if (Source.EndpointKeys.Num() == 0)
 		{
 			Playback->SetDeferredNoEndpoint();
@@ -1157,75 +1233,8 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 					// kept by both unicast filters (fail-open) — older firmware
 					// must not silently lose its haptics.
 					Self->DeviceAddresses.Add(SenderIp, Address);
-					const FString EndpointKey = FString::Printf(TEXT("%s:%d|%s"), *SenderIp, SenderPort, *Address);
-					// A stable address across an IP change, or a stable IP across an
-					// address/port change, is one logical-route migration. Preserve the
-					// primary runner/cursors and retire any stale duplicate without END.
-					TArray<FString> MigrationCandidates;
-					FString PrimaryMigrationKey;
-					const bool bExactSessionExists = Self->StreamSessions.Contains(EndpointKey);
-					int32 PrimaryPriority = -1;
-					double PrimaryLastPong = -1.0;
-					for (const TPair<FString, FStreamEndpoint>& Existing : Self->StreamEndpoints)
-					{
-						if (Existing.Key == EndpointKey
-							|| !HapbeatStreamSessionContract::IsMigrationCandidate(
-								Existing.Value.Ip, Existing.Value.Address, SenderIp, Address))
-						{
-							continue;
-						}
-						MigrationCandidates.Add(Existing.Key);
-						const int32 Priority = HapbeatStreamSessionContract::MigrationPriority(
-							Existing.Value.Address, Address);
-						if (Priority > PrimaryPriority
-							|| (Priority == PrimaryPriority && Existing.Value.LastPongSeconds > PrimaryLastPong))
-						{
-							PrimaryMigrationKey = Existing.Key;
-							PrimaryPriority = Priority;
-							PrimaryLastPong = Existing.Value.LastPongSeconds;
-						}
-					}
-					for (const FString& OldKey : MigrationCandidates)
-					{
-						if (!bExactSessionExists && OldKey == PrimaryMigrationKey)
-						{
-							FStreamSession Migrated;
-							if (Self->StreamSessions.RemoveAndCopyValue(OldKey, Migrated))
-							{
-								if (Migrated.Runnable != nullptr)
-								{
-									Migrated.Runnable->UpdateEndpoint(SenderIp, SenderPort);
-								}
-								Self->StreamSessions.Add(EndpointKey, MoveTemp(Migrated));
-							}
-							if (const double* EndedAt = Self->StreamSessionEndedAt.Find(OldKey))
-							{
-								Self->StreamSessionEndedAt.Add(EndpointKey, *EndedAt);
-							}
-						}
-						else
-						{
-							Self->AbandonStreamSession(OldKey);
-						}
-						for (TPair<FGuid, FStreamSource>& SourcePair : Self->StreamSources)
-						{
-							if (SourcePair.Value.EndpointKeys.Remove(OldKey) > 0 && OldKey == PrimaryMigrationKey)
-							{
-								SourcePair.Value.EndpointKeys.Add(EndpointKey);
-							}
-							if (SourcePair.Value.CompletedEndpointKeys.Remove(OldKey) > 0 && OldKey == PrimaryMigrationKey)
-							{
-								SourcePair.Value.CompletedEndpointKeys.Add(EndpointKey);
-							}
-						}
-						Self->StreamSessionEndedAt.Remove(OldKey);
-						Self->StreamEndpoints.Remove(OldKey);
-					}
-					FStreamEndpoint& Endpoint = Self->StreamEndpoints.FindOrAdd(EndpointKey);
-					Endpoint.Ip = SenderIp;
-					Endpoint.Port = SenderPort;
-					Endpoint.Address = Address;
-					Endpoint.LastPongSeconds = FPlatformTime::Seconds();
+					Self->RegisterStreamEndpoint(
+						SenderIp, SenderPort, Address, FPlatformTime::Seconds());
 				}
 				Self->ReconcileStreamSources();
 

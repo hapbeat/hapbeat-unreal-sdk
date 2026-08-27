@@ -8,9 +8,11 @@
 - Stream output is normalized to 16 kHz stereo PCM16. Unresolved sources stay
   `Deferred(NoResolvedEndpoint)` and never broadcast STREAM packets; empty
   endpoint sessions linger for 300 ms before END.
-- IP, port, or reported-address changes now migrate one logical endpoint
-  session in place, preserving its runner and source cursors without END/BEGIN;
-  stale duplicate routes are abandoned without END.
+- An unambiguous logical-route change now migrates its endpoint session in
+  place, preserving runner/cursors without END/BEGIN. Live exact endpoints
+  that merely share an IP or address remain separate; ambiguous routes are not
+  collapsed. Sources that stop matching a migrated address are detached from
+  that runner immediately and become Deferred when no endpoint remains.
 - Runtime `Playback.Loop` is authoritative for existing, late, and rejoined
   endpoints. Source admission no longer restores the authored initial loop
   value, and an EOF source can rejoin at frame 0 when loop is enabled.

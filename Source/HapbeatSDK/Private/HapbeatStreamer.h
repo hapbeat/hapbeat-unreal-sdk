@@ -32,6 +32,8 @@ public:
 		const FGuid& InSourceId,
 		TArray<uint8>&& InPcm16,
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror);
+	/** Worker-thread only: detach one endpoint-local cursor without completing the logical source. */
+	void RemoveSource(const FGuid& SourceId);
 
 	/** Record the start time and send the session's only STREAM_BEGIN (gain = 1). */
 	void Start(double NowSeconds);

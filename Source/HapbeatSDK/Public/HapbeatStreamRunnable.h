@@ -100,9 +100,17 @@ public:
 		const FGuid& InSourceId,
 		TArray<uint8>&& InPcm16,
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror);
+	/** Detach one source cursor from this endpoint without stopping its Playback. */
+	void DetachSource(const FGuid& SourceId);
 
 	/** Game-thread poll: source ids that reached EOF in this endpoint session. */
 	void DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds);
+
+protected:
+	/** Packet boundary overridden only by in-memory runner tests. */
+	virtual void SendRaw(const TArray<uint8>& Packet);
+	/** Snapshot the exact destination currently owned by the runner. */
+	bool GetSingleEndpoint(FString& OutIp, int32& OutPort) const;
 
 private:
 	struct FPendingSource
@@ -117,9 +125,6 @@ private:
 		{
 		}
 	};
-
-	/** Send one packet to the exact endpoint. Worker-thread only. */
-	void SendRaw(const TArray<uint8>& Packet);
 
 	/** Worker-thread: drain game-thread additions, or close admission if the session is empty. */
 	bool DrainPendingSourcesOrClose();
@@ -160,6 +165,7 @@ private:
 	mutable FCriticalSection SourceMutex;
 	mutable FCriticalSection DestinationMutex;
 	TArray<FPendingSource> PendingSources;
+	TSet<FGuid> PendingDetachedSourceIds;
 	TArray<FGuid> FinishedSourceIds;
 	bool bAcceptingSources = true;
 	/** Empty endpoint sessions stay open briefly so adjacent sources share one wire stream. */

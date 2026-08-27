@@ -54,6 +54,14 @@ void FHapbeatStreamer::AddSource(
 	Sources.Emplace(InSourceId, MoveTemp(InPcm16), InMirror);
 }
 
+void FHapbeatStreamer::RemoveSource(const FGuid& SourceId)
+{
+	Sources.RemoveAllSwap([&SourceId](const FSource& Source)
+	{
+		return Source.Id == SourceId;
+	}, /*bAllowShrinking=*/false);
+}
+
 void FHapbeatStreamer::Start(double NowSeconds)
 {
 	StartTimeSeconds = NowSeconds;

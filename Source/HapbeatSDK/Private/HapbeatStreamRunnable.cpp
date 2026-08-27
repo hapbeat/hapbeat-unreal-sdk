@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatStreamRunnable.h"
 
-#include "HapbeatStreamSessionContract.h"
 #include "HapbeatNetworkSafety.h"
 
 #include "HapbeatStreamer.h"
@@ -149,13 +148,12 @@ uint32 FHapbeatStreamRunnable::Run()
 
 	while (!Streamer->IsDone())
 	{
-		if (bStopRequested.load(std::memory_order_relaxed))
+		if (bStopRequested.load(std::memory_order_acquire))
 		{
 			// Idempotent; the only other caller is Tick()'s own natural-EOF /
 			// mirror-stopped path below, and only ONE of the two paths is ever
 			// taken per session (see the class doc's END-uniqueness argument).
-			if (HapbeatStreamSessionContract::ShouldSendEnd(
-				bAbandonRequested.load(std::memory_order_acquire)))
+			if (!bAbandonRequested.load(std::memory_order_acquire))
 			{
 				Streamer->SendEnd();
 			}
@@ -167,8 +165,7 @@ uint32 FHapbeatStreamRunnable::Run()
 		// AddSource can be accepted behind the worker's back after STREAM_END.
 		if (!DrainPendingSourcesOrClose())
 		{
-			if (HapbeatStreamSessionContract::ShouldSendEnd(
-				bAbandonRequested.load(std::memory_order_acquire)))
+			if (!bAbandonRequested.load(std::memory_order_acquire))
 			{
 				Streamer->SendEnd();
 			}
@@ -207,7 +204,7 @@ void FHapbeatStreamRunnable::Stop()
 		FScopeLock Lock(&SourceMutex);
 		bAcceptingSources = false;
 	}
-	bStopRequested.store(true, std::memory_order_relaxed);
+	bStopRequested.store(true, std::memory_order_release);
 }
 
 void FHapbeatStreamRunnable::Abandon()
@@ -242,6 +239,18 @@ void FHapbeatStreamRunnable::UpdateEndpoint(const FString& InIp, int32 InPort)
 	LocalUnicastTargets.Add(Address);
 }
 
+bool FHapbeatStreamRunnable::GetSingleEndpoint(FString& OutIp, int32& OutPort) const
+{
+	FScopeLock Lock(&DestinationMutex);
+	if (LocalUnicastTargets.Num() != 1 || !LocalUnicastTargets[0].IsValid())
+	{
+		return false;
+	}
+	OutIp = LocalUnicastTargets[0]->ToString(/*bAppendPort=*/false);
+	OutPort = LocalUnicastTargets[0]->GetPort();
+	return true;
+}
+
 bool FHapbeatStreamRunnable::IsCompatible(
 	int32 InSampleRate, int32 InChannels, const FString& InTarget) const
 {
@@ -264,6 +273,16 @@ bool FHapbeatStreamRunnable::AddSource(
 	return true;
 }
 
+void FHapbeatStreamRunnable::DetachSource(const FGuid& SourceId)
+{
+	FScopeLock Lock(&SourceMutex);
+	PendingSources.RemoveAllSwap([&SourceId](const FPendingSource& Pending)
+	{
+		return Pending.SourceId == SourceId;
+	}, /*bAllowShrinking=*/false);
+	PendingDetachedSourceIds.Add(SourceId);
+}
+
 void FHapbeatStreamRunnable::DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds)
 {
 	FScopeLock Lock(&SourceMutex);
@@ -274,6 +293,11 @@ void FHapbeatStreamRunnable::DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds)
 bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 {
 	FScopeLock Lock(&SourceMutex);
+	for (const FGuid& SourceId : PendingDetachedSourceIds)
+	{
+		Streamer->RemoveSource(SourceId);
+	}
+	PendingDetachedSourceIds.Reset();
 	for (FPendingSource& Pending : PendingSources)
 	{
 		Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.Mirror);

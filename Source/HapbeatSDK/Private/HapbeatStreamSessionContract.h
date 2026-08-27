@@ -7,22 +7,18 @@ namespace HapbeatStreamSessionContract
 {
 	inline bool IsMigrationCandidate(
 		const FString& ExistingIp,
+		int32 ExistingPort,
 		const FString& ExistingAddress,
 		const FString& NewIp,
-		const FString& NewAddress)
+		int32 NewPort,
+		const FString& NewAddress,
+		bool bExistingAlive)
 	{
-		return ExistingIp == NewIp || ExistingAddress == NewAddress;
-	}
-
-	inline int32 MigrationPriority(const FString& ExistingAddress, const FString& NewAddress)
-	{
-		// A reported device address is the stronger identity signal; fall back to
-		// the stable IP when the device address itself changed.
-		return ExistingAddress == NewAddress ? 2 : 1;
-	}
-
-	inline bool ShouldSendEnd(bool bAbandonRequested)
-	{
-		return !bAbandonRequested;
+		// A live exact endpoint is never collapsed merely because one tuple field
+		// matches. Once its liveness expires, a stable route or stable address can
+		// identify one unambiguous migration candidate.
+		return !bExistingAlive
+			&& ((ExistingIp == NewIp && ExistingPort == NewPort)
+				|| ExistingAddress == NewAddress);
 	}
 }

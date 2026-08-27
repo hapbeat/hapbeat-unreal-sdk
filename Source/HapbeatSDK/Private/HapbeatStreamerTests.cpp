@@ -2,7 +2,13 @@
 #include "HapbeatStreamer.h"
 
 #include "HapbeatProtocol.h"
-#include "HapbeatStreamSessionContract.h"
+#include "HapbeatStreamPlayback.h"
+#include "HapbeatStreamRunnable.h"
+#include "HapbeatSubsystem.h"
+#include "Engine/GameInstance.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "HAL/RunnableThread.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -32,6 +38,61 @@ namespace
 			| (static_cast<uint16>(Packet[13]) << 8);
 		return static_cast<int16>(Value);
 	}
+
+	TArray<FString> OneEndpoint(const FString& Ip)
+	{
+		TArray<FString> Result;
+		Result.Add(Ip);
+		return Result;
+	}
+
+	UHapbeatSubsystem* NewTestSubsystem()
+	{
+		UGameInstance* GameInstance = NewObject<UGameInstance>();
+		return NewObject<UHapbeatSubsystem>(GameInstance);
+	}
+
+	class FRecordingStreamRunnable final : public FHapbeatStreamRunnable
+	{
+	public:
+		FRecordingStreamRunnable(const FGuid& SourceId, TArray<uint8>&& Pcm16,
+			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror)
+			: FHapbeatStreamRunnable(SourceId, MoveTemp(Pcm16), 16000, 2,
+				TEXT("player_1/pos_l_arm"), Mirror, []() { return static_cast<uint16>(1); },
+				nullptr, 7700, OneEndpoint(TEXT("192.0.2.10")), 0.05f)
+		{
+		}
+
+		bool SnapshotEndpoint(FString& OutIp, int32& OutPort) const
+		{
+			return GetSingleEndpoint(OutIp, OutPort);
+		}
+
+		std::atomic<int32> BeginCount{0};
+		std::atomic<int32> DataCount{0};
+		std::atomic<int32> EndCount{0};
+
+	protected:
+		virtual void SendRaw(const TArray<uint8>& Packet) override
+		{
+			if (Packet.Num() < FHapbeatProtocol::HeaderSize)
+			{
+				return;
+			}
+			if (Packet[3] == FHapbeatProtocol::CmdStreamBegin)
+			{
+				BeginCount.fetch_add(1, std::memory_order_relaxed);
+			}
+			else if (Packet[3] == FHapbeatProtocol::CmdStreamData)
+			{
+				DataCount.fetch_add(1, std::memory_order_relaxed);
+			}
+			else if (Packet[3] == FHapbeatProtocol::CmdStreamEnd)
+			{
+				EndCount.fetch_add(1, std::memory_order_relaxed);
+			}
+		}
+	};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatMultiSourceStreamerTest,
@@ -153,27 +214,125 @@ bool FHapbeatRuntimeLoopRejoinTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamSessionContractTest,
-	"Hapbeat.Streaming.SessionContract",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamSubsystemRoutingTest,
+	"Hapbeat.Streaming.SubsystemRouting",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
-bool FHapbeatStreamSessionContractTest::RunTest(const FString& Parameters)
+bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 {
-	using namespace HapbeatStreamSessionContract;
-	TestTrue(TEXT("IP change migrates stable address"),
-		IsMigrationCandidate(TEXT("192.0.2.10"), TEXT("player_1/pos_l_arm"),
-			TEXT("192.0.2.11"), TEXT("player_1/pos_l_arm")));
-	TestTrue(TEXT("address change migrates stable IP"),
-		IsMigrationCandidate(TEXT("192.0.2.10"), TEXT("player_1/pos_l_arm"),
-			TEXT("192.0.2.10"), TEXT("player_2/pos_l_arm")));
-	TestFalse(TEXT("unrelated endpoint is not migrated"),
-		IsMigrationCandidate(TEXT("192.0.2.10"), TEXT("player_1/pos_l_arm"),
-			TEXT("192.0.2.11"), TEXT("player_2/pos_l_arm")));
-	TestTrue(TEXT("stable address wins ambiguous duplicate selection"),
-		MigrationPriority(TEXT("player_1/pos_l_arm"), TEXT("player_1/pos_l_arm"))
-			> MigrationPriority(TEXT("player_2/pos_l_arm"), TEXT("player_1/pos_l_arm")));
-	TestFalse(TEXT("abandon suppresses END"), ShouldSendEnd(/*bAbandonRequested=*/true));
-	TestTrue(TEXT("ordinary stop sends END"), ShouldSendEnd(/*bAbandonRequested=*/false));
+	UHapbeatSubsystem* Live = NewTestSubsystem();
+	Live->RegisterStreamEndpoint(TEXT("192.0.2.10"), 7700, TEXT("player_1/pos_l_arm"), 100.0);
+	Live->RegisterStreamEndpoint(TEXT("192.0.2.10"), 7701, TEXT("player_2/pos_l_arm"), 101.0);
+	Live->RegisterStreamEndpoint(TEXT("192.0.2.11"), 7700, TEXT("player_1/pos_l_arm"), 102.0);
+	TestEqual(TEXT("live exact endpoints sharing IP/address remain distinct"),
+		Live->StreamEndpoints.Num(), 3);
+
+	UHapbeatSubsystem* SameRoute = NewTestSubsystem();
+	SameRoute->RegisterStreamEndpoint(TEXT("192.0.2.20"), 7700, TEXT("player_1/pos_l_arm"), 100.0);
+	SameRoute->RegisterStreamEndpoint(TEXT("192.0.2.20"), 7700, TEXT("player_2/pos_l_arm"), 101.0);
+	TestEqual(TEXT("live same-route exact tuples remain distinct"),
+		SameRoute->StreamEndpoints.Num(), 2);
+
+	UHapbeatSubsystem* Expired = NewTestSubsystem();
+	Expired->RegisterStreamEndpoint(TEXT("192.0.2.30"), 7700, TEXT("player_3/pos_l_arm"), 100.0);
+	Expired->RegisterStreamEndpoint(TEXT("192.0.2.31"), 7700, TEXT("player_3/pos_l_arm"),
+		100.0 + Expired->AliveTimeoutSeconds() + 1.0);
+	TestEqual(TEXT("one expired stable-address route migrates"), Expired->StreamEndpoints.Num(), 1);
+	TestTrue(TEXT("expired route moved to the new IP"),
+		Expired->StreamEndpoints.Contains(TEXT("192.0.2.31:7700|player_3/pos_l_arm")));
+
+	UHapbeatSubsystem* Ambiguous = NewTestSubsystem();
+	Ambiguous->RegisterStreamEndpoint(TEXT("192.0.2.50"), 7700, TEXT("player_6/pos_l_arm"), 100.0);
+	Ambiguous->RegisterStreamEndpoint(TEXT("192.0.2.51"), 7700, TEXT("player_6/pos_l_arm"), 101.0);
+	Ambiguous->RegisterStreamEndpoint(TEXT("192.0.2.52"), 7700, TEXT("player_6/pos_l_arm"),
+		101.0 + Ambiguous->AliveTimeoutSeconds() + 1.0);
+	TestEqual(TEXT("ambiguous expired candidates remain separate exact tuples"),
+		Ambiguous->StreamEndpoints.Num(), 3);
+
+	// Exercise the full subsystem map -> runner UpdateEndpoint -> Reconcile
+	// detach path. The old-address source must become Deferred and emit no DATA.
+	UHapbeatSubsystem* Migrating = NewTestSubsystem();
+	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(Migrating);
+	Playback->Init(1.0f, 1.0f);
+	const FGuid SourceId = Playback->Id;
+	auto Mirror = Playback->GetMirror();
+	FRecordingStreamRunnable Runner(SourceId, MakeStereoPcm(1000, 160), Mirror);
+	TestTrue(TEXT("migration runner initializes"), Runner.Init());
+	const double Now = FPlatformTime::Seconds();
+	const FString OldKey = TEXT("192.0.2.40:7700|player_4/pos_l_arm");
+	const FString NewKey = TEXT("192.0.2.40:7700|player_5/pos_l_arm");
+	Migrating->RegisterStreamEndpoint(TEXT("192.0.2.40"), 7700, TEXT("player_4/pos_l_arm"),
+		Now - Migrating->AliveTimeoutSeconds() - 1.0);
+	UHapbeatSubsystem::FStreamSource& Source = Migrating->StreamSources.Add(SourceId);
+	Source.CanonicalPcm16 = MakeStereoPcm(1000, 160);
+	Source.ResolvedTarget = TEXT("player_4/pos_l_arm");
+	Source.Playback = Playback;
+	Source.EndpointKeys.Add(OldKey);
+	Migrating->ActivePlaybacks.Add(Playback);
+	UHapbeatSubsystem::FStreamSession& Session = Migrating->StreamSessions.Add(OldKey);
+	Session.Runnable = &Runner;
+	Session.SourceIds.Add(SourceId);
+	Playback->SetActive();
+	Migrating->RegisterStreamEndpoint(TEXT("192.0.2.40"), 7700, TEXT("player_5/pos_l_arm"), Now + 0.01);
+	Migrating->ReconcileStreamSources();
+	TestTrue(TEXT("runner migrated without duplicate session"),
+		Migrating->StreamSessions.Contains(NewKey) && Migrating->StreamSessions.Num() == 1);
+	TestEqual(TEXT("mismatched migrated source detached from session"),
+		Migrating->StreamSessions[NewKey].SourceIds.Num(), 0);
+	TestEqual(TEXT("mismatched Playback becomes Deferred"),
+		Playback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
+	TestEqual(TEXT("mismatched Playback has no endpoint keys"), Source.EndpointKeys.Num(), 0);
+	Runner.Run();
+	TestEqual(TEXT("detached old-address source emits no DATA"),
+		Runner.DataCount.load(std::memory_order_relaxed), 0);
+	Migrating->StreamSessions.Empty(); // Runner is stack-owned by this test.
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamRunnableLifecycleTest,
+	"Hapbeat.Streaming.RunnableLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamRunnableLifecycleTest::RunTest(const FString& Parameters)
+{
+	auto LoopMirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+	LoopMirror->bLoop.store(true, std::memory_order_relaxed);
+	FRecordingStreamRunnable Running(FGuid::NewGuid(), MakeStereoPcm(1000, 160), LoopMirror);
+	FRunnableThread* Thread = FRunnableThread::Create(&Running, TEXT("HapbeatRunnableContractTest"));
+	TestNotNull(TEXT("runner thread starts"), Thread);
+	if (Thread != nullptr)
+	{
+		const double Deadline = FPlatformTime::Seconds() + 1.0;
+		while (Running.DataCount.load(std::memory_order_relaxed) == 0
+			&& FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Yield();
+		}
+		TestTrue(TEXT("runner produced fake DATA"),
+			Running.DataCount.load(std::memory_order_relaxed) > 0);
+		Running.UpdateEndpoint(TEXT("192.0.2.11"), 8800);
+		FString Ip;
+		int32 Port = 0;
+		TestTrue(TEXT("updated endpoint snapshot exists"), Running.SnapshotEndpoint(Ip, Port));
+		TestEqual(TEXT("runner route IP migrated in place"), Ip, FString(TEXT("192.0.2.11")));
+		TestEqual(TEXT("runner route port migrated in place"), Port, 8800);
+		Running.Abandon();
+		Thread->Kill(true);
+		delete Thread;
+		TestEqual(TEXT("Abandon followed by Stop never sends END"),
+			Running.EndCount.load(std::memory_order_relaxed), 0);
+	}
+
+	auto DetachedMirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+	const FGuid DetachedId = FGuid::NewGuid();
+	FRecordingStreamRunnable Detached(DetachedId, MakeStereoPcm(2000, 160), DetachedMirror);
+	TestTrue(TEXT("detached runner initializes"), Detached.Init());
+	Detached.DetachSource(DetachedId);
+	Detached.Run();
+	TestEqual(TEXT("detached source produces no DATA"),
+		Detached.DataCount.load(std::memory_order_relaxed), 0);
+	TestEqual(TEXT("empty detached session closes normally"),
+		Detached.EndCount.load(std::memory_order_relaxed), 1);
 	return true;
 }
 

@@ -18,6 +18,7 @@ class FRunnableThread;
 class UHapbeatClip;
 class UHapbeatEventMap;
 class UHapbeatStreamPlayback;
+class FHapbeatStreamSubsystemRoutingTest;
 struct FHapbeatEventEntry;
 
 /** What a deferred (haptic-delay) send does once its timer fires. See FHapbeatPendingSend. */
@@ -380,6 +381,7 @@ public:
 	FHapbeatOnPong OnPong;
 
 private:
+	friend class FHapbeatStreamSubsystemRoutingTest;
 	void SendPacket(const TArray<uint8>& Packet);
 
 	// ---- Haptic delay (PlayEntry / StopEntry only) ----
@@ -427,6 +429,7 @@ private:
 	 * (the playback is not retained in ActivePlaybacks in that case).
 	 */
 	bool StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPlayback* Playback, const FString& Target, bool bLoop);
+	void RegisterStreamEndpoint(const FString& Ip, int32 InPort, const FString& Address, double NowSeconds);
 	void ReconcileStreamSources();
 	void StopStreamSession(const FString& EndpointKey);
 	void AbandonStreamSession(const FString& EndpointKey);

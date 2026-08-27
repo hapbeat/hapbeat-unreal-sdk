@@ -47,11 +47,11 @@ FHapbeatStreamer::FHapbeatStreamer(
 void FHapbeatStreamer::AddSource(
 	const FGuid& InSourceId,
 	TArray<uint8>&& InPcm16,
-	bool bInLoop,
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
 {
-	InMirror->bLoop.store(bInLoop, std::memory_order_relaxed);
-	Sources.Emplace(InSourceId, MoveTemp(InPcm16), bInLoop, InMirror);
+	// Loop is live Playback state. Never overwrite it with the source's authored
+	// initial value when this source joins a late or migrated endpoint.
+	Sources.Emplace(InSourceId, MoveTemp(InPcm16), InMirror);
 }
 
 void FHapbeatStreamer::Start(double NowSeconds)

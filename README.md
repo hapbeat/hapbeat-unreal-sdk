@@ -111,7 +111,7 @@ UHapbeatStreamPlayback* GetActivePlayback() const;
 | `Play(EventId, Gain, Target)` | play an event (`Gain` 0..1) |
 | `Stop(EventId, Target)` / `StopAll(Target)` | stop one / everything |
 | `Ping()` | probe |
-| `StreamClip(Clip, BaselineGain, InitialGain, Target, bLoop)` | stream a PCM16 clip; returns a playback handle for real-time gain/pan |
+| `StreamClip(Clip, BaselineGain, InitialGain, Target, bLoop)` | stream a PCM16 clip; returns a playback handle for real-time gain/pan/loop |
 | `StopStream()` | stop all local stream sources |
 | `SetAddressOverride(Player, Group, bPersist)` / `ClearPersistedAddressOverride()` | force player/group on every outgoing send (see [Global address override](#global-address-override)) |
 | `IsAlive()` / `GetAliveDeviceCount()` | device presence (from PONGs) |

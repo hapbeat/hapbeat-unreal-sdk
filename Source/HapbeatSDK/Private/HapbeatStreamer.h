@@ -31,7 +31,6 @@ public:
 	void AddSource(
 		const FGuid& InSourceId,
 		TArray<uint8>&& InPcm16,
-		bool bInLoop,
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror);
 
 	/** Record the start time and send the session's only STREAM_BEGIN (gain = 1). */
@@ -54,12 +53,11 @@ private:
 		FGuid Id;
 		TArray<uint8> Pcm16;
 		int32 ByteOffset = 0;
-		bool bLoop = false;
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
 
-		FSource(const FGuid& InSourceId, TArray<uint8>&& InPcm16, bool bInLoop,
+		FSource(const FGuid& InSourceId, TArray<uint8>&& InPcm16,
 			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
-			: Id(InSourceId), Pcm16(MoveTemp(InPcm16)), bLoop(bInLoop), Mirror(InMirror)
+			: Id(InSourceId), Pcm16(MoveTemp(InPcm16)), Mirror(InMirror)
 		{
 		}
 	};

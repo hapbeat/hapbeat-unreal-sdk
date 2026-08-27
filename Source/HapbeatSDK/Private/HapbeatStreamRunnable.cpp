@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatStreamRunnable.h"
 
+#include "HapbeatStreamSessionContract.h"
 #include "HapbeatNetworkSafety.h"
 
 #include "HapbeatStreamer.h"
@@ -59,31 +60,25 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	int32 InSampleRate,
 	int32 InChannels,
 	const FString& InTarget,
-	bool bInLoop,
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror,
 	TFunction<uint16()> InNextSeq,
 	FSocket* InSocket,
 	int32 InPort,
 	TArray<FString> InUnicastTargetIps,
-	bool bInHasUnicastSnapshot,
-	float InSendAheadSeconds,
-	const FString& InBroadcastIp)
+	float InSendAheadSeconds)
 	// Initializer order matches declaration order in the header (Socket ..
 	// Mirror) to avoid -Wreorder; see the header for the full member list.
 	: Socket(InSocket)
 	, Port(InPort)
 	, UnicastTargetIps(MoveTemp(InUnicastTargetIps))
-	, bHasUnicastSnapshot(bInHasUnicastSnapshot)
 	, SendAheadSeconds(InSendAheadSeconds)
-	, BroadcastIp(InBroadcastIp.IsEmpty() ? FString(TEXT("255.255.255.255")) : InBroadcastIp)
 	, NextSeqFn(MoveTemp(InNextSeq))
 	, SessionSampleRate(InSampleRate)
 	, SessionChannels(InChannels)
 	, SessionTarget(InTarget)
 	, InitialMirror(InMirror)
 {
-	InMirror->bLoop.store(bInLoop, std::memory_order_relaxed);
-	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), bInLoop, InMirror);
+	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), InMirror);
 }
 
 FHapbeatStreamRunnable::~FHapbeatStreamRunnable() = default;
@@ -108,18 +103,6 @@ bool FHapbeatStreamRunnable::Init()
 		// true. Publish completion here so StopStream() cleans up on the next tick.
 		bFinished.store(true, std::memory_order_release);
 		return false;
-	}
-
-	LocalBroadcastAddr = SocketSubsystem->CreateInternetAddr();
-	bool bBroadcastValid = false;
-	LocalBroadcastAddr->SetIp(*BroadcastIp, bBroadcastValid);
-	LocalBroadcastAddr->SetPort(Port);
-	if (!bBroadcastValid)
-	{
-		// Would otherwise degrade into a silent no-op stream (SendRaw's
-		// broadcast fallback sends nothing) with no way to tell why.
-		UE_LOG(LogHapbeatStream, Warning,
-			TEXT("Stream thread: failed to build the broadcast address; the broadcast fallback will not send."));
 	}
 
 	LocalUnicastTargets.Reserve(UnicastTargetIps.Num());
@@ -171,7 +154,11 @@ uint32 FHapbeatStreamRunnable::Run()
 			// Idempotent; the only other caller is Tick()'s own natural-EOF /
 			// mirror-stopped path below, and only ONE of the two paths is ever
 			// taken per session (see the class doc's END-uniqueness argument).
-			Streamer->SendEnd();
+			if (HapbeatStreamSessionContract::ShouldSendEnd(
+				bAbandonRequested.load(std::memory_order_acquire)))
+			{
+				Streamer->SendEnd();
+			}
 			break;
 		}
 
@@ -180,7 +167,8 @@ uint32 FHapbeatStreamRunnable::Run()
 		// AddSource can be accepted behind the worker's back after STREAM_END.
 		if (!DrainPendingSourcesOrClose())
 		{
-			if (!bAbandonRequested.load(std::memory_order_relaxed))
+			if (HapbeatStreamSessionContract::ShouldSendEnd(
+				bAbandonRequested.load(std::memory_order_acquire)))
 			{
 				Streamer->SendEnd();
 			}
@@ -203,10 +191,8 @@ uint32 FHapbeatStreamRunnable::Run()
 		}
 	}
 
-	// Last statement: by the time a poller observes bFinished, STREAM_END has
-	// unconditionally already been sent (either by the break above, or inside
-	// Streamer->Tick() on the natural-EOF / mirror-stopped path, which is why
-	// the while condition re-checks IsDone() before looping again).
+	// Last statement: by the time a poller observes bFinished, the worker has
+	// either sent the ordinary END or deliberately suppressed it for Abandon.
 	bFinished.store(true, std::memory_order_release);
 	return 0;
 }
@@ -226,8 +212,14 @@ void FHapbeatStreamRunnable::Stop()
 
 void FHapbeatStreamRunnable::Abandon()
 {
-	bAbandonRequested.store(true, std::memory_order_relaxed);
-	bStopRequested.store(true, std::memory_order_relaxed);
+	{
+		FScopeLock Lock(&SourceMutex);
+		bAcceptingSources = false;
+	}
+	// Publish abandon before stop: every stop branch that observes the latter
+	// must also observe that END is forbidden for this retired route.
+	bAbandonRequested.store(true, std::memory_order_release);
+	bStopRequested.store(true, std::memory_order_release);
 }
 
 void FHapbeatStreamRunnable::UpdateEndpoint(const FString& InIp, int32 InPort)
@@ -261,16 +253,14 @@ bool FHapbeatStreamRunnable::IsCompatible(
 bool FHapbeatStreamRunnable::AddSource(
 	const FGuid& InSourceId,
 	TArray<uint8>&& InPcm16,
-	bool bInLoop,
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
 {
-	InMirror->bLoop.store(bInLoop, std::memory_order_relaxed);
 	FScopeLock Lock(&SourceMutex);
 	if (!bAcceptingSources || bStopRequested.load(std::memory_order_relaxed))
 	{
 		return false;
 	}
-	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), bInLoop, InMirror);
+	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), InMirror);
 	return true;
 }
 
@@ -286,7 +276,7 @@ bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 	FScopeLock Lock(&SourceMutex);
 	for (FPendingSource& Pending : PendingSources)
 	{
-		Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.bLoop, Pending.Mirror);
+		Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.Mirror);
 	}
 	PendingSources.Reset();
 
@@ -331,16 +321,7 @@ void FHapbeatStreamRunnable::SendRaw(const TArray<uint8>& Packet)
 
 	if (LocalUnicastTargets.Num() == 0)
 	{
-		// Endpoint sessions require an exact unicast destination.
-		if (bHasUnicastSnapshot)
-		{
-			return;
-		}
-		if (LocalBroadcastAddr.IsValid())
-		{
-			int32 BytesSent = 0;
-			Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *LocalBroadcastAddr);
-		}
+		// Endpoint sessions never fall back to broadcast.
 		return;
 	}
 

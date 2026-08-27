@@ -2,6 +2,7 @@
 #include "HapbeatStreamer.h"
 
 #include "HapbeatProtocol.h"
+#include "HapbeatStreamSessionContract.h"
 #include "Misc/AutomationTest.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -57,8 +58,9 @@ bool FHapbeatMultiSourceStreamerTest::RunTest(const FString& Parameters)
 
 	// The loop is the persistent Z4 bed; the one-frame source is a slider detent.
 	// Both must appear in the first mixed sample without creating a second BEGIN.
-	Streamer.AddSource(LoopId, MakeStereoPcm(1000, 160), /*bLoop=*/true, LoopMirror);
-	Streamer.AddSource(TickId, MakeStereoPcm(2000, 1), /*bLoop=*/false, TickMirror);
+	LoopMirror->bLoop.store(true, std::memory_order_relaxed);
+	Streamer.AddSource(LoopId, MakeStereoPcm(1000, 160), LoopMirror);
+	Streamer.AddSource(TickId, MakeStereoPcm(2000, 1), TickMirror);
 	Streamer.Start(/*NowSeconds=*/0.0);
 	Streamer.Tick(/*NowSeconds=*/0.0);
 
@@ -112,6 +114,66 @@ bool FHapbeatMultiSourceStreamerTest::RunTest(const FString& Parameters)
 		}
 	}
 	TestEqual(TEXT("one wire END"), EndCount, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatRuntimeLoopRejoinTest,
+	"Hapbeat.Streaming.RuntimeLoopRejoin",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatRuntimeLoopRejoinTest::RunTest(const FString& Parameters)
+{
+	uint16 Sequence = 0;
+	TArray<TArray<uint8>> Packets;
+	auto Mirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+	const FGuid SourceId = FGuid::NewGuid();
+	FHapbeatStreamer Streamer(
+		16000, 2, FString(), Mirror,
+		[&Sequence]() { return ++Sequence; },
+		[&Packets](const TArray<uint8>& Packet) { Packets.Add(Packet); },
+		0.05f);
+
+	Streamer.AddSource(SourceId, MakeStereoPcm(1000, 1), Mirror);
+	Streamer.Start(0.0);
+	Streamer.Tick(0.0);
+	TestFalse(TEXT("non-loop source reaches EOF"), Streamer.HasSources());
+
+	// Runtime state is authoritative when an EOF source is admitted again for
+	// a late/rejoined endpoint. AddSource must not restore the authored false.
+	Mirror->bLoop.store(true, std::memory_order_relaxed);
+	Streamer.AddSource(SourceId, MakeStereoPcm(1000, 1), Mirror);
+	Streamer.Tick(0.0);
+	TestTrue(TEXT("runtime loop survives EOF rejoin"), Streamer.HasSources());
+	TestTrue(TEXT("AddSource preserves live loop mirror"),
+		Mirror->bLoop.load(std::memory_order_relaxed));
+
+	Mirror->bLoop.store(false, std::memory_order_relaxed);
+	Streamer.Tick(1.0);
+	TestFalse(TEXT("runtime loop disable reaches EOF again"), Streamer.HasSources());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamSessionContractTest,
+	"Hapbeat.Streaming.SessionContract",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamSessionContractTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionContract;
+	TestTrue(TEXT("IP change migrates stable address"),
+		IsMigrationCandidate(TEXT("192.0.2.10"), TEXT("player_1/pos_l_arm"),
+			TEXT("192.0.2.11"), TEXT("player_1/pos_l_arm")));
+	TestTrue(TEXT("address change migrates stable IP"),
+		IsMigrationCandidate(TEXT("192.0.2.10"), TEXT("player_1/pos_l_arm"),
+			TEXT("192.0.2.10"), TEXT("player_2/pos_l_arm")));
+	TestFalse(TEXT("unrelated endpoint is not migrated"),
+		IsMigrationCandidate(TEXT("192.0.2.10"), TEXT("player_1/pos_l_arm"),
+			TEXT("192.0.2.11"), TEXT("player_2/pos_l_arm")));
+	TestTrue(TEXT("stable address wins ambiguous duplicate selection"),
+		MigrationPriority(TEXT("player_1/pos_l_arm"), TEXT("player_1/pos_l_arm"))
+			> MigrationPriority(TEXT("player_2/pos_l_arm"), TEXT("player_1/pos_l_arm")));
+	TestFalse(TEXT("abandon suppresses END"), ShouldSendEnd(/*bAbandonRequested=*/true));
+	TestTrue(TEXT("ordinary stop sends END"), ShouldSendEnd(/*bAbandonRequested=*/false));
 	return true;
 }
 

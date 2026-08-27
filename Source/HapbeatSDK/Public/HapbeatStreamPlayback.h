@@ -38,7 +38,7 @@ enum class EHapbeatStreamDeferredReason : uint8
  * thread migration — see unreal-sdk-v1-design.md §5) that must NOT dereference
  * this UObject either (GC safety). So every mutator here ALSO write-throughs to
  * GetMirror() — a plain (non-UObject) atomic value mirror the stream thread
- * reads instead. The plain Gain/Pan/bStopped fields below stay as the
+ * reads instead. The plain Gain/Pan/Loop/bStopped fields below stay as the
  * BlueprintPure getters' backing store (fast game-thread reads); the mirror is
  * the cross-thread channel.
  *
@@ -174,7 +174,7 @@ public:
 	AActor* GetOwnerActor() const;
 
 	/**
-	 * Thread-safe atomic mirror of Gain/Pan/bStopped for the stream-send thread
+	 * Thread-safe atomic mirror of Gain/Pan/Loop/bStopped for the stream-send thread
 	 * (FHapbeatStreamRunnable) to read WITHOUT ever touching this UObject off
 	 * the game thread. Created on first access. C++-only (not BlueprintCallable
 	 * — internal plumbing between the playback handle and the streamer); never

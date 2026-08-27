@@ -374,15 +374,12 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 		Clip->SampleRate,
 		Clip->NumChannels,
 		Target,
-		bLoop,
 		StreamMirror.ToSharedRef(),
 		[]() { return NextSeq(); },
 		Socket,
 		Port,
 		MoveTemp(UnicastIps),
-		bHasSnapshot,
-		SendAhead,
-		BroadcastAddr.IsValid() ? BroadcastAddr->ToString(false) : FString());
+		SendAhead);
 
 	StreamThread = FRunnableThread::Create(StreamRunnable, TEXT("HapbeatEditorStream"), 0, TPri_AboveNormal);
 

@@ -6,8 +6,8 @@
 
 /**
  * Thread-safe value mirror of a UHapbeatStreamPlayback's live Gain / Pan /
- * stopped state, shared between the game thread (writer: ApplyGainModulation /
- * SetPan / Stop, called from triggers and UHapbeatParameterBinding) and the
+ * Loop / stopped state, shared between the game thread (writer:
+ * ApplyGainModulation / SetPan / SetLoop / Stop) and the
  * dedicated stream-send thread (reader: FHapbeatStreamRunnable, every chunk).
  *
  * Exists so the stream thread NEVER touches the UHapbeatStreamPlayback UObject
@@ -21,7 +21,7 @@
  * Lives in Public/ (not Private/) because it appears in the signature of the
  * Public UHapbeatStreamPlayback::GetMirror().
  *
- * All three fields are lock-free (std::atomic), single-writer (game thread)
+ * All four fields are lock-free (std::atomic), single-writer (game thread)
  * per field / single-reader (stream thread) per read — no torn reads, no lock
  * needed for this simple value-mirror pattern.
  */

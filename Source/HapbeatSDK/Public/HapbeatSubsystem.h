@@ -627,7 +627,6 @@ private:
 	{
 		TArray<uint8> CanonicalPcm16;
 		FString ResolvedTarget;
-		bool bLoop = false;
 		TWeakObjectPtr<UHapbeatStreamPlayback> Playback;
 		TSet<FString> EndpointKeys;
 		TSet<FString> CompletedEndpointKeys;

@@ -8,6 +8,14 @@
 - Stream output is normalized to 16 kHz stereo PCM16. Unresolved sources stay
   `Deferred(NoResolvedEndpoint)` and never broadcast STREAM packets; empty
   endpoint sessions linger for 300 ms before END.
+- IP, port, or reported-address changes now migrate one logical endpoint
+  session in place, preserving its runner and source cursors without END/BEGIN;
+  stale duplicate routes are abandoned without END.
+- Runtime `Playback.Loop` is authoritative for existing, late, and rejoined
+  endpoints. Source admission no longer restores the authored initial loop
+  value, and an EOF source can rejoin at frame 0 when loop is enabled.
+- Removed the remaining public runnable broadcast fallback parameters. STREAM
+  sessions accept exact unicast endpoints only.
 
 Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
 

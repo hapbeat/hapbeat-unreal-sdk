@@ -9,6 +9,7 @@
 #include "HapbeatEventEntry.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatStreamPlayback.h"
+#include "HapbeatStreamSessionContract.h"
 #include "HapbeatStreamRunnable.h"
 #include "HapbeatTargetLibrary.h"
 #include "Async/Async.h"
@@ -625,7 +626,6 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 	FStreamSource& Source = StreamSources.Add(Playback->Id);
 	Source.CanonicalPcm16 = MoveTemp(CanonicalPcm16);
 	Source.ResolvedTarget = ResolvedTarget;
-	Source.bLoop = bLoop;
 	Source.Playback = Playback;
 
 	// Watchdog: poll for the thread finishing on its own (natural EOF on a
@@ -716,7 +716,7 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 			{
 				if (!Existing->SourceIds.Contains(Pair.Key))
 				{
-					if (Existing->Runnable->AddSource(Pair.Key, TArray<uint8>(Source.CanonicalPcm16), Source.bLoop, Playback->GetMirror()))
+					if (Existing->Runnable->AddSource(Pair.Key, TArray<uint8>(Source.CanonicalPcm16), Playback->GetMirror()))
 					{
 						Existing->SourceIds.Add(Pair.Key);
 					}
@@ -769,8 +769,8 @@ void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 	FStreamSession Session;
 	Session.Runnable = new FHapbeatStreamRunnable(
 		FirstSourceId, TArray<uint8>(FirstSource->CanonicalPcm16), 16000, 2, Endpoint->Address,
-		FirstSource->bLoop, FirstPlayback->GetMirror(), [this]() { return NextSeq(); }, Socket,
-		Endpoint->Port, MoveTemp(EndpointIps), true, StreamSendAheadSeconds, FString());
+		FirstPlayback->GetMirror(), [this]() { return NextSeq(); }, Socket,
+		Endpoint->Port, MoveTemp(EndpointIps), StreamSendAheadSeconds);
 	Session.Thread = FRunnableThread::Create(Session.Runnable, TEXT("HapbeatStreamEndpointThread"), 0, TPri_AboveNormal);
 	if (Session.Thread == nullptr)
 	{
@@ -785,7 +785,7 @@ void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 		{
 			if (UHapbeatStreamPlayback* Playback = Pair.Value.Playback.Get())
 			{
-				if (Session.Runnable->AddSource(Pair.Key, TArray<uint8>(Pair.Value.CanonicalPcm16), Pair.Value.bLoop, Playback->GetMirror()))
+				if (Session.Runnable->AddSource(Pair.Key, TArray<uint8>(Pair.Value.CanonicalPcm16), Playback->GetMirror()))
 				{
 					Session.SourceIds.Add(Pair.Key);
 				}
@@ -838,7 +838,7 @@ void UHapbeatSubsystem::AbandonStreamSession(const FString& EndpointKey)
 
 bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 {
-	for (const TPair<FString, FStreamSession>& SessionPair : StreamSessions)
+	for (TPair<FString, FStreamSession>& SessionPair : StreamSessions)
 	{
 		if (SessionPair.Value.Runnable == nullptr)
 		{
@@ -848,15 +848,32 @@ bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 		SessionPair.Value.Runnable->DrainFinishedSourceIds(FinishedSourceIds);
 		for (const FGuid& SourceId : FinishedSourceIds)
 		{
+			SessionPair.Value.SourceIds.Remove(SourceId);
 			if (FStreamSource* Source = StreamSources.Find(SourceId))
 			{
-				Source->CompletedEndpointKeys.Add(SessionPair.Key);
+				UHapbeatStreamPlayback* Playback = Source->Playback.Get();
+				if (Playback != nullptr && Playback->GetLoop())
+				{
+					// Loop may have been enabled after this endpoint reached EOF.
+					// Leave the source alive so Reconcile can re-admit it at frame 0.
+					Source->CompletedEndpointKeys.Remove(SessionPair.Key);
+				}
+				else
+				{
+					Source->CompletedEndpointKeys.Add(SessionPair.Key);
+				}
 			}
 		}
 	}
 	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
 	{
 		FStreamSource& Source = Pair.Value;
+		UHapbeatStreamPlayback* Playback = Source.Playback.Get();
+		if (Playback != nullptr && Playback->GetLoop())
+		{
+			Source.CompletedEndpointKeys.Reset();
+			continue;
+		}
 		if (Source.EndpointKeys.Num() == 0)
 		{
 			continue;
@@ -872,7 +889,7 @@ bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 		}
 		if (bFinishedOnEveryEndpoint)
 		{
-			if (UHapbeatStreamPlayback* Playback = Source.Playback.Get())
+			if (Playback != nullptr)
 			{
 				Playback->Stop();
 			}
@@ -1141,30 +1158,68 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 					// must not silently lose its haptics.
 					Self->DeviceAddresses.Add(SenderIp, Address);
 					const FString EndpointKey = FString::Printf(TEXT("%s:%d|%s"), *SenderIp, SenderPort, *Address);
-					// A PONG tuple is an endpoint identity. Do not coalesce another IP
-					// reporting the same address: it can be a second physical device.
-					// Port-only change on the same IP/address is the sole unambiguous
-					// migration; retain its runner/cursors and send no END/BEGIN.
-					TArray<FString> SameRouteCandidates;
+					// A stable address across an IP change, or a stable IP across an
+					// address/port change, is one logical-route migration. Preserve the
+					// primary runner/cursors and retire any stale duplicate without END.
+					TArray<FString> MigrationCandidates;
+					FString PrimaryMigrationKey;
+					const bool bExactSessionExists = Self->StreamSessions.Contains(EndpointKey);
+					int32 PrimaryPriority = -1;
+					double PrimaryLastPong = -1.0;
 					for (const TPair<FString, FStreamEndpoint>& Existing : Self->StreamEndpoints)
 					{
-						if (Existing.Key != EndpointKey && Existing.Value.Ip == SenderIp && Existing.Value.Address == Address)
+						if (Existing.Key == EndpointKey
+							|| !HapbeatStreamSessionContract::IsMigrationCandidate(
+								Existing.Value.Ip, Existing.Value.Address, SenderIp, Address))
 						{
-							SameRouteCandidates.Add(Existing.Key);
+							continue;
+						}
+						MigrationCandidates.Add(Existing.Key);
+						const int32 Priority = HapbeatStreamSessionContract::MigrationPriority(
+							Existing.Value.Address, Address);
+						if (Priority > PrimaryPriority
+							|| (Priority == PrimaryPriority && Existing.Value.LastPongSeconds > PrimaryLastPong))
+						{
+							PrimaryMigrationKey = Existing.Key;
+							PrimaryPriority = Priority;
+							PrimaryLastPong = Existing.Value.LastPongSeconds;
 						}
 					}
-					if (SameRouteCandidates.Num() == 1)
+					for (const FString& OldKey : MigrationCandidates)
 					{
-						FStreamSession Migrated;
-						if (Self->StreamSessions.RemoveAndCopyValue(SameRouteCandidates[0], Migrated))
+						if (!bExactSessionExists && OldKey == PrimaryMigrationKey)
 						{
-							if (Migrated.Runnable != nullptr)
+							FStreamSession Migrated;
+							if (Self->StreamSessions.RemoveAndCopyValue(OldKey, Migrated))
 							{
-								Migrated.Runnable->UpdateEndpoint(SenderIp, SenderPort);
+								if (Migrated.Runnable != nullptr)
+								{
+									Migrated.Runnable->UpdateEndpoint(SenderIp, SenderPort);
+								}
+								Self->StreamSessions.Add(EndpointKey, MoveTemp(Migrated));
 							}
-							Self->StreamSessions.Add(EndpointKey, MoveTemp(Migrated));
+							if (const double* EndedAt = Self->StreamSessionEndedAt.Find(OldKey))
+							{
+								Self->StreamSessionEndedAt.Add(EndpointKey, *EndedAt);
+							}
 						}
-						Self->StreamEndpoints.Remove(SameRouteCandidates[0]);
+						else
+						{
+							Self->AbandonStreamSession(OldKey);
+						}
+						for (TPair<FGuid, FStreamSource>& SourcePair : Self->StreamSources)
+						{
+							if (SourcePair.Value.EndpointKeys.Remove(OldKey) > 0 && OldKey == PrimaryMigrationKey)
+							{
+								SourcePair.Value.EndpointKeys.Add(EndpointKey);
+							}
+							if (SourcePair.Value.CompletedEndpointKeys.Remove(OldKey) > 0 && OldKey == PrimaryMigrationKey)
+							{
+								SourcePair.Value.CompletedEndpointKeys.Add(EndpointKey);
+							}
+						}
+						Self->StreamSessionEndedAt.Remove(OldKey);
+						Self->StreamEndpoints.Remove(OldKey);
 					}
 					FStreamEndpoint& Endpoint = Self->StreamEndpoints.FindOrAdd(EndpointKey);
 					Endpoint.Ip = SenderIp;

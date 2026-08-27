@@ -64,8 +64,7 @@ public:
 	 * @param InSocket             The subsystem's UDP socket. Valid for this object's entire lifetime
 	 *                             (see the class doc's threading contract).
 	 * @param InPort               UDP port, for building this thread's own broadcast address.
-	 * @param InUnicastTargetIps   Snapshot of known-device IPs (plain strings) for stream unicast, or
-	 *                             empty to always broadcast. Captured once at session start (Unity parity).
+	 * @param InUnicastTargetIps   Exact PONG endpoint IP (plain string), captured for this session.
 	 * @param InSendAheadSeconds   FHapbeatStreamer pacing lead (UHapbeatConfig::StreamSendAheadSeconds).
 	 */
 	FHapbeatStreamRunnable(
@@ -148,9 +147,8 @@ private:
 	/**
 	 * Where this session broadcasts when it has no unicast snapshot -- the
 	 * subnet a device answered on, or 255.255.255.255 before any has. Passed in
-	 * rather than hardcoded so a stream sent with bStreamUnicast=false (many
-	 * devices firing in lockstep) still reaches a multi-homed host's real
-	 * subnet. See HapbeatNetInterfaces.h.
+	 * retained only for construction compatibility; endpoint sessions always
+	 * send exact unicast destinations.
 	 */
 	FString BroadcastIp;
 

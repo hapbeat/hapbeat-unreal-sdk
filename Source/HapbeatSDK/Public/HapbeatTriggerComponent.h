@@ -33,8 +33,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHapbeatTriggerFired, AActor*, Othe
  * so reordering / inserting / duplicating entries cannot silently break wiring.
  *
  * This is the UE counterpart of Unity's HapbeatUnityEventTrigger + the code-first
- * "Bridge" helpers (which in Unity lived on a separate HapbeatBridge): Blueprint
- * or C++ wires a UnityEvent-style call to Fire() / FireWithGain() / Stop().
+ * Game/event-controller helpers: Blueprint or C++ routes gameplay events to
+ * Fire() / FireWithGain() / Stop().
  * Subclasses (collision, sequence) reuse the same resolve + gain-composition +
  * dispatch core via FireInternal().
  *

@@ -331,10 +331,7 @@ void FHapbeatStreamRunnable::SendRaw(const TArray<uint8>& Packet)
 
 	if (LocalUnicastTargets.Num() == 0)
 	{
-		// Three-state, mirroring UHapbeatSubsystem::SendStreamPacket: only
-		// broadcast when NO snapshot was taken. A snapshot that filtered every
-		// device out means this stream isn't addressed to anyone here — send
-		// nowhere rather than blasting it at everybody.
+		// Endpoint sessions require an exact unicast destination.
 		if (bHasUnicastSnapshot)
 		{
 			return;
@@ -347,9 +344,7 @@ void FHapbeatStreamRunnable::SendRaw(const TArray<uint8>& Packet)
 		return;
 	}
 
-	// Same bytes, same seq, to every unicast target (parity with the game-thread
-	// SendStreamPacket / Unity SendStreamRaw). A single target failing doesn't
-	// stop the others.
+	// A single endpoint send failure does not stop the logical source.
 	for (const TSharedPtr<FInternetAddr>& Addr : LocalUnicastTargets)
 	{
 		if (!Addr.IsValid())

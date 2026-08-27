@@ -55,7 +55,6 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		Port = Cfg->Port;
 		PingInterval = Cfg->PingInterval;
 		StreamSendAheadSeconds = Cfg->StreamSendAheadSeconds;
-		bStreamUnicast = Cfg->bStreamUnicast;
 		bCommandUnicast = Cfg->bCommandUnicast;
 
 		// AppName shows on the device OLED. Empty => fall back to the project name
@@ -980,15 +979,6 @@ void UHapbeatSubsystem::StopStream()
 	}
 }
 
-void UHapbeatSubsystem::StopStreamWithFlush(const FString& Target)
-{
-	StopStream();
-	// A synthetic BEGIN/END flush would either broadcast STREAM packets or break
-	// the required same-route END -> BEGIN guard. Endpoint sessions own their END
-	// lifecycle, so there is no cross-route flush packet to send here.
-	UE_LOG(LogHapbeat, Verbose, TEXT("StopStreamWithFlush completed through endpoint session shutdown (target='%s')."), *Target);
-}
-
 void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPersist)
 {
 	OverridePlayer = NormalizeAddressOverride(Player);
@@ -1277,7 +1267,7 @@ int64 UHapbeatSubsystem::UnixMicros() const
 uint16 UHapbeatSubsystem::NextSeq()
 {
 	// Locked: since the 2026-07-25 thread migration this is called from both
-	// the game thread (Play/Stop/StopAll/Ping/CONNECT_STATUS/StopStreamWithFlush)
+	// the game thread (Play/Stop/StopAll/Ping/CONNECT_STATUS)
 	// and the dedicated stream thread (STREAM_BEGIN/DATA/END) — the SAME
 	// counter, matching Unity's single locked _sequenceNumber (HapbeatClient.cs
 	// _seqLock) shared across its main + background mixer threads. Contention
@@ -1370,130 +1360,6 @@ void UHapbeatSubsystem::SendCommandPacket(const TArray<uint8>& Packet, const FSt
 	if (!bSentAny)
 	{
 		SendPacket(Packet);
-	}
-}
-
-void UHapbeatSubsystem::RefreshStreamUnicastTargets(const FString& ResolvedTarget)
-{
-	StreamUnicastTargets.Reset();
-	bStreamTargetsSnapshotted = false;
-	if (!bStreamUnicast)
-	{
-		UE_LOG(LogHapbeat, Log, TEXT("Stream route: broadcast because Stream Unicast is disabled."));
-		return; // feature off -> no snapshot -> SendStreamPacket broadcasts
-	}
-
-	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
-	if (SocketSubsystem == nullptr)
-	{
-		UE_LOG(LogHapbeat, Warning, TEXT("Stream route: broadcast fallback because the socket subsystem is unavailable."));
-		return;
-	}
-
-	// Same liveness window as GetAliveDeviceCount(). Snapshotting ONCE per stream
-	// session (instead of re-reading per packet) matches Unity db6fd31: a device
-	// whose first PONG lands mid-session joins the NEXT session.
-	const double Now = FPlatformTime::Seconds();
-	const double Timeout = AliveTimeoutSeconds();
-	int32 LiveCount = 0;
-	int32 SkippedByAddress = 0;
-	for (const TPair<FString, double>& Pair : DevicePongTimes)
-	{
-		if (Now - Pair.Value > Timeout)
-		{
-			continue;
-		}
-		++LiveCount;
-
-		// Send-side target filter (Unity 029efc1): don't fan every chunk out to
-		// devices this stream isn't addressed to (one person wearing several
-		// units, or several pairs sharing a LAN). Fail open on an unknown
-		// address — firmware re-applies its own filter on receipt, so the worst
-		// case is one extra unicast, never a silently lost stream.
-		if (const FString* KnownAddress = DeviceAddresses.Find(Pair.Key))
-		{
-			if (!UHapbeatTargetLibrary::AddressMatches(ResolvedTarget, *KnownAddress))
-			{
-				++SkippedByAddress;
-				continue;
-			}
-		}
-
-		TSharedPtr<FInternetAddr> Addr = SocketSubsystem->CreateInternetAddr();
-		bool bIsValid = false;
-		Addr->SetIp(*Pair.Key, bIsValid);
-		if (!bIsValid)
-		{
-			continue;
-		}
-		Addr->SetPort(Port);
-		StreamUnicastTargets.Add(Addr);
-	}
-
-	// A snapshot counts as "taken" only when at least one device was actually
-	// live. With nobody alive we leave it un-snapshotted so the broadcast
-	// fallback stays available (a device that PONGs later still gets audio);
-	// with live devices that ALL mismatched, the snapshot IS taken and stays
-	// empty => send nowhere. See the header for the three-state contract.
-	bStreamTargetsSnapshotted = LiveCount > 0;
-
-	if (StreamUnicastTargets.Num() > 0)
-	{
-		UE_LOG(LogHapbeat, Log, TEXT("Stream unicast: targeting %d of %d live device(s)."),
-			StreamUnicastTargets.Num(), LiveCount);
-	}
-	else if (SkippedByAddress > 0)
-	{
-		UE_LOG(LogHapbeat, Log,
-			TEXT("Stream unicast: all %d live device(s) filtered out by target '%s'; this session sends nowhere."),
-			SkippedByAddress, *ResolvedTarget);
-	}
-	else
-	{
-		UE_LOG(LogHapbeat, Log,
-			TEXT("Stream route: broadcast fallback because no live device has replied to PING yet."));
-	}
-}
-
-void UHapbeatSubsystem::SendStreamPacket(const TArray<uint8>& Packet)
-{
-	if (HapbeatIsNetworkSuppressedForEditor())
-	{
-		return;
-	}
-
-	// Three-state (see the header): no snapshot -> broadcast; snapshot with no
-	// surviving target -> send NOWHERE (the filter said this stream isn't for
-	// anyone here); snapshot with targets -> unicast below.
-	if (!bStreamTargetsSnapshotted)
-	{
-		SendPacket(Packet);
-		return;
-	}
-	if (StreamUnicastTargets.Num() == 0)
-	{
-		return;
-	}
-	if (Socket == nullptr || bShuttingDown)
-	{
-		return;
-	}
-
-	// ONE seq per logical packet (the caller already stamped it) — the same bytes
-	// go to every target, matching Unity SendStreamRaw. Per-target failures are
-	// logged and skipped so one unreachable device can't kill the session.
-	for (const TSharedPtr<FInternetAddr>& Addr : StreamUnicastTargets)
-	{
-		if (!Addr.IsValid())
-		{
-			continue;
-		}
-		int32 BytesSent = 0;
-		if (!Socket->SendTo(Packet.GetData(), Packet.Num(), BytesSent, *Addr))
-		{
-			UE_LOG(LogHapbeat, Verbose, TEXT("Stream unicast send to %s failed; continuing with the other targets."),
-				*Addr->ToString(true));
-		}
 	}
 }
 

@@ -3,7 +3,6 @@
 
 #include "HapbeatAddressOverridePanelComponent.h"
 #include "HapbeatClip.h"
-#include "HapbeatConfig.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatParameterBinding.h"
 #include "HapbeatSampleLibrary.h"
@@ -413,9 +412,7 @@ bool AHapbeatShowcaseZ4StreamConsoleActor::ShouldWaitForUnicastDevice(UHapbeatSu
 		return false;
 	}
 #endif
-	const UHapbeatConfig* Config = GetDefault<UHapbeatConfig>();
-	return Config != nullptr && Config->bStreamUnicast
-		&& (Subsystem == nullptr || Subsystem->GetAliveDeviceCount() == 0);
+	return Subsystem == nullptr || Subsystem->GetAliveDeviceCount() == 0;
 }
 
 void AHapbeatShowcaseZ4StreamConsoleActor::DebugToggleStream()

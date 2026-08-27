@@ -100,7 +100,7 @@ private:
 	 */
 	static void SendRouted(const TArray<uint8>& Packet);
 
-	/** Unicast to known devices, count sent. Shared by SendRouted and SendStreamPacket. */
+	/** Unicast to known devices, count sent. Shared by editor command routes. */
 	static int32 SendToKnownDevices(const TArray<uint8>& Packet);
 
 	/**

@@ -46,11 +46,7 @@ public:
 	float StreamSendAheadSeconds = 0.05f;
 
 	UPROPERTY(EditAnywhere, config, Category = "Behavior",
-		meta = (Tooltip = "Send streamed clip packets (STREAM_BEGIN/DATA/END) directly to devices already known from a PONG response, instead of UDP broadcast. Wi-Fi AP power-save (DTIM) batching can hold broadcast frames for one beacon interval, showing up as periodic ~100-200 ms stutter in streamed haptics; unicast avoids that batching. Falls back to broadcast automatically when no device has responded yet. Other commands (Play/Stop/StopAll/PING/CONNECT_STATUS) are unaffected and always broadcast. Default: enabled."))
-	bool bStreamUnicast = true;
-
-	UPROPERTY(EditAnywhere, config, Category = "Behavior",
-		meta = (Tooltip = "Send Play / Stop / StopAll directly to devices already known from a PONG response, instead of UDP broadcast. Same Wi-Fi AP power-save (DTIM) rationale as Stream Unicast, applied to one-shot commands: a broadcast can sit at the AP until the next beacon, delaying a single command by up to ~300 ms. Falls back to broadcast automatically when no device has responded yet, or when every known device's address mismatches the command's target -- the device applies the same target filter on receipt, so a broadcast can never actuate a device the target did not address. Default: enabled."))
+		meta = (Tooltip = "Send Play / Stop / StopAll directly to devices already known from a PONG response, instead of UDP broadcast. AP power-save (DTIM) can hold broadcast frames until the next beacon. Falls back to broadcast automatically when no device has responded yet, or when every known device's address mismatches the command target. Default: enabled."))
 	bool bCommandUnicast = true;
 
 	UPROPERTY(EditAnywhere, config, Category = "Behavior",

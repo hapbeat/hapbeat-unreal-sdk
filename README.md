@@ -92,7 +92,6 @@ void Ping();
 UHapbeatStreamPlayback* StreamClip(UHapbeatClip* Clip, float BaselineGain = 1.0f,
     float InitialGain = 1.0f, const FString& Target = TEXT(""), bool bLoop = false);
 void StopStream();
-void StopStreamWithFlush(const FString& Target = TEXT(""));
 
 void SetAddressOverride(int32 Player, int32 InGroup, bool bPersist = false);
 void ClearPersistedAddressOverride();
@@ -113,7 +112,7 @@ UHapbeatStreamPlayback* GetActivePlayback() const;
 | `Stop(EventId, Target)` / `StopAll(Target)` | stop one / everything |
 | `Ping()` | probe |
 | `StreamClip(Clip, BaselineGain, InitialGain, Target, bLoop)` | stream a PCM16 clip; returns a playback handle for real-time gain/pan |
-| `StopStream()` / `StopStreamWithFlush(Target)` | end the active stream (with-flush also forces an immediate device ring-buffer flush) |
+| `StopStream()` | stop all local stream sources |
 | `SetAddressOverride(Player, Group, bPersist)` / `ClearPersistedAddressOverride()` | force player/group on every outgoing send (see [Global address override](#global-address-override)) |
 | `IsAlive()` / `GetAliveDeviceCount()` | device presence (from PONGs) |
 
@@ -302,7 +301,7 @@ static constexpr int32 AddressOverrideDisabled = -1;
 
 Values outside `1..99` normalize to `AddressOverrideDisabled`. The override
 is applied at exactly 4 send boundaries — `Play` / `Stop` / `StopAll` /
-`StreamClip` (+ `StopStreamWithFlush`) — via
+`StreamClip` — via
 `UHapbeatTargetLibrary::ResolveTarget`, which rewrites only the `player_` /
 `group_` segments of the outgoing target string **without touching any
 EventMap/trigger-authored target**. With `bPersist = true` the values survive

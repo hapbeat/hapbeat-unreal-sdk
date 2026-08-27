@@ -53,7 +53,7 @@ Unity SDK v0.4.0 で確定した接続まわりの修正を移植した。
     唯一のプラットフォーム依存コードをこの 1 ファイルに隔離**してある。取得できない
     プラットフォームは空を返し、従来どおり limited broadcast のみで動く。
   - **PONG が返ったサブネットに確定**し、以後のブロードキャストをそこへ向ける。
-    `bStreamUnicast=false`（複数台を同時発火させる構成）のストリームにも適用される。
+    endpoint-scoped stream session にも適用される。
   - **PLAY / STOP / STOP_ALL / STREAM_\* は従来どおり単一宛先**。ファームウェア v0.3.0
     未満は seq 重複排除を持たないため、複数経路へ送ると触覚が 2 回鳴る。Test Play の
     ブロードキャストフォールバックも単一宛先のまま（`SendSingleBroadcast`）。
@@ -123,7 +123,7 @@ Initial release. Hapbeat Unity SDK の Unreal 版として、wire protocol・Eve
   ロード（`USoundWave` decode を経由しない全バージョン安全な経路）。
 - `UHapbeatStreamPlayback` — 再生中ハンドル。`Gain` / `Pan`
   （リニア L/R バランス）をゲームスレッドからリアルタイム変更可能。
-- `FHapbeatStreamer` + `UHapbeatSubsystem::StreamClip/StopStream/StopStreamWithFlush` —
+- `FHapbeatStreamer` + `UHapbeatSubsystem::StreamClip/StopStream` —
   ゲームスレッド `FTSTicker` ペーシングで PCM16 chunk を送信先行バッファ付きで
   送出。単一セッション・新規呼び出しで既存ストリームを置換 (REPLACE semantics)。
 
@@ -158,7 +158,7 @@ Initial release. Hapbeat Unity SDK の Unreal 版として、wire protocol・Eve
   Z2 Door（状態遷移で命令的に発火）/ Z3 Fishing
   (`UHapbeatSequenceComponent` + velocity→StreamGain binding) / Z4 Stream
   Console（スライダー→Gain/Pan binding）/ Z5 ChargeShot（チャージループ +
-  `ApplyGainModulation` + `StopStreamWithFlush`）。全ゾーン C++ 製 Actor + engine
+  `ApplyGainModulation` + playback `Stop()`）。全ゾーン C++ 製 Actor + engine
   primitive visuals（同梱 WAV・Kit manifest は Unity Showcase と共通）。
 
 **パッケージング**

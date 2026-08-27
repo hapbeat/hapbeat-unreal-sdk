@@ -72,7 +72,7 @@ Kit の要否は再生方式で変わります。ここが最初のつまずき�
 | App Name | 空 | デバイスの OLED に出る名前（空ならプロジェクト名）。最大 16 文字 |
 | Ping Interval | `5` 秒 | 死活監視の間隔 |
 | Stream Send Ahead Seconds | `0.05` | ストリーミングで先送りする秒数 |
-| Stream Unicast / Command Unicast | 両方 on | 既知デバイスへ直接送信（Wi-Fi の遅延対策。下記) |
+| Command Unicast | on | 既知デバイスへ直接送信（Wi-Fi の遅延対策。下記) |
 | Haptic Delay Seconds | `0` | 音の遅延に触覚を合わせたいときだけ使う（下記） |
 
 > **Unicast 設定について**: Wi-Fi のブロードキャストは、同じアクセスポイントに省電力状態の端末が
@@ -144,7 +144,7 @@ F だけ鳴らない場合は Kit 未書き込みが原因です。Studio で
 | `reachable: 0` だが Studio では見える | **PC が有線と Wi-Fi に同時接続**していると、ブロードキャストが有線側に出て届かないことがあります。一時的に有線を切って確認してください |
 | Space は鳴るが **F だけ鳴らない** | Kit 未書き込み（上記）。イベント ID がデバイス内の Kit と一致しているか |
 | 何も鳴らないが `reachable` は 1 以上 | デバイス本体の音量。Output Log に `LogHapbeat` の警告が出ていないか |
-| 途切れ・ブツブツする | Project Settings の **Stream Unicast** が on か。Wi-Fi の電波状況 |
+| 途切れ・ブツブツする | Wi-Fi の電波状況と PONG endpoint の到達性を確認 |
 | **起動直後だけ**ガクガクする | v0.1.0 で修正済み。デバイス発見前は全送信がブロードキャストになるため。`reachable` が 1 になれば解消する |
 | エディタ自体がクラッシュする | まず SDK 起因か切り分ける。`<プロジェクト>/Saved/Crashes/` の最新フォルダにある `CrashContext.runtime-xml` を開き、`<CallStack>` に `Hapbeat` が含まれるか確認する。含まれない場合（描画・シェーダー系が多い）は SDK とは無関係 |
 

@@ -104,7 +104,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FHapbeatOnPong, const FString&, En
  * OnConnected also fired on socket-open).
  *
  * Global address override: SetAddressOverride() forces the player/group on
- * EVERY outgoing send (Play/Stop/StopAll/StreamClip/StopStreamWithFlush)
+ * EVERY outgoing send (Play/Stop/StopAll/StreamClip)
  * WITHOUT touching triggers or EventMap entries — the intended flow for one
  * identical build deployed to many HMDs, each pinned 1:1 to its own Hapbeat via
  * a per-launch override (optionally persisted). See ResolveTarget (Unity SDK:
@@ -274,22 +274,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void StopStream();
 
-	/**
-	 * Stop the active stream AND force the device ring buffer to flush for
-	 * immediate silence (a residual tail otherwise drains over ~50-250 ms).
-	 * Runs StopStream(), then sends a STREAM_BEGIN(gain=1.0) + STREAM_END pair to
-	 * trigger the firmware's flush path. With no target this broadcasts and
-	 * flushes every device (it can also cut other sessions) — pass a target for
-	 * per-target stop. Parity with Unity StopStreamWithFlush.
-	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
-	void StopStreamWithFlush(const FString& Target = TEXT(""));
-
 	// ---- Global address override (single-app, multi-HMD 1:1 deployments) ----
 
 	/**
 	 * Force the player / group applied to EVERY outgoing command (Play/Stop/
-	 * StopAll/StreamClip/StopStreamWithFlush) at runtime. Pass
+	 * StopAll/StreamClip) at runtime. Pass
 	 * AddressOverrideDisabled (-1) to leave an axis alone — a disabled axis
 	 * means "don't override that axis", not "rewrite the target's value to
 	 * -1"; it leaves each EventMap/trigger-authored target string exactly as
@@ -445,23 +434,6 @@ private:
 	bool NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const;
 
 	/**
-	 * Send a STREAM_* packet on the GAME THREAD: unicast to each device
-	 * snapshotted at session start when stream-unicast is on and at least one
-	 * device is known, else fall back to the normal broadcast SendPacket.
-	 * Wi-Fi AP power-save (DTIM) batching can hold BROADCAST frames for a whole
-	 * beacon interval, which shows up as periodic ~100-200 ms stutter in
-	 * streamed haptics; unicast dodges that.
-	 *
-	 * Since the 2026-07-25 thread migration, the ACTIVE stream's own
-	 * STREAM_BEGIN/DATA/END no longer go through here — FHapbeatStreamRunnable
-	 * sends those itself from its dedicated thread (via its own locally-owned
-	 * FInternetAddr targets, never these). This game-thread path now serves
-	 * only StopStreamWithFlush()'s flush BEGIN+END pair, sent AFTER the stream
-	 * thread has already been joined (see StopStream()). Unity SDK parity:
-	 * SendStreamRaw, commit db6fd31. A per-target send failure is logged and
-	 * skipped; it never kills the session.
-	 */
-	/**
 	 * Send a PLAY / STOP / STOP_ALL packet. Routing (verbatim parity with Unity
 	 * HapbeatClient.SendCommandRaw, commit 97c2988):
 	 *   (a) command-unicast disabled            -> broadcast
@@ -479,11 +451,9 @@ private:
 	 * airtime, at the price of silently losing a command whenever our cached
 	 * address is stale (the device's group/player was just changed and its next
 	 * PONG hasn't landed). For STOP/STOP_ALL that silent loss means a looping
-	 * event never stops. This is the one place where the command path
-	 * intentionally differs from the stream path (see SendStreamPacket).
+	 * event never stops.
 	 */
 	void SendCommandPacket(const TArray<uint8>& Packet, const FString& ResolvedTarget);
-	void SendStreamPacket(const TArray<uint8>& Packet);
 
 
 	/**
@@ -494,19 +464,10 @@ private:
 	 * HapbeatManager.AppName (Unity SDK).
 	 */
 	FString AppNameForWire() const;
-	void RefreshStreamUnicastTargets(const FString& ResolvedTarget);
-
-	/**
-	 * Snapshot the currently-alive device IPs into StreamUnicastTargets (called
-	 * once per stream session start, mirroring Unity's SetStreamUnicastTargets
-	 * seeding). Clears the list when unicast is disabled or nobody has PONGed —
-	 * SendStreamPacket then broadcasts. A device whose first PONG lands mid-session
-	 * is picked up by the NEXT session, exactly like Unity.
-	 */
 
 	/**
 	 * Thread-safe: guarded by SeqLock so both the game thread (Play/Stop/
-	 * StopAll/Ping/CONNECT_STATUS/StopStreamWithFlush) and the dedicated stream
+	 * StopAll/Ping/CONNECT_STATUS) and the dedicated stream
 	 * thread's STREAM_BEGIN/DATA/END draw from the SAME monotonic counter,
 	 * matching Unity's single locked _sequenceNumber (HapbeatClient.cs
 	 * _seqLock) shared across its main + background mixer threads.
@@ -703,27 +664,8 @@ private:
 	/** Send-ahead lead for streaming; seeded from UHapbeatConfig in Initialize. */
 	float StreamSendAheadSeconds = 0.05f;
 
-	/** Config: unicast STREAM_* to known devices instead of broadcasting (UHapbeatConfig::bStreamUnicast). */
-	bool bStreamUnicast = true;
-
 	/** Config: unicast PLAY/STOP/STOP_ALL to known devices instead of broadcasting (UHapbeatConfig::bCommandUnicast). */
 	bool bCommandUnicast = true;
-
-	/**
-	 * Per-session snapshot of the stream's unicast destinations.
-	 *
-	 * Three states, mirroring Unity's _streamUnicastTargets (029efc1) — note this
-	 * differs from the command path on purpose:
-	 *   bStreamTargetsSnapshotted == false -> no snapshot (feature off / nobody
-	 *       has PONGed): SendStreamPacket BROADCASTS.
-	 *   snapshotted && Num() == 0          -> a snapshot WAS taken and every known
-	 *       device's address mismatched this session's target: send NOWHERE. Not a
-	 *       broadcast — that would defeat the filter, and unlike a one-shot STOP a
-	 *       lost stream cannot wedge the device in a looping state.
-	 *   snapshotted && Num()  > 0          -> unicast to exactly these endpoints.
-	 */
-	TArray<TSharedPtr<FInternetAddr>> StreamUnicastTargets;
-	bool bStreamTargetsSnapshotted = false;
 
 	/**
 	 * Last address each device reported in its PONG extension (device-addressing

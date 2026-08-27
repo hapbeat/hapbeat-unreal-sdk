@@ -56,7 +56,7 @@ class AHapbeatShowcaseZ5ProjectileActor;
  *              .cpp comment for why this is byte-for-byte Unity's
  *              AnimationCurve.EaseInOut(0,0,1,1).
  *              Crossing HeavyThreshold (default 0.7) fires z5_charge_thd once.
- *   - release: Stop() the loop handle, then Subsystem->StopStreamWithFlush()
+ *   - release: Stop() the loop playback handle
  *              (parity with Unity ChargeShooter.Release()); after
  *              ShotDelayAfterLoop seconds (default 0.05, via FTimerManager --
  *              mirrors Unity's _shotDelayAfterLoop, which exists so the

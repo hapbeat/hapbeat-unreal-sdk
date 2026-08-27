@@ -694,11 +694,7 @@ void AHapbeatShowcaseZ5ChargeShotActor::HandleChargeRelease()
 	bCharging = false;
 	const float ChargeT = LastChargeT;
 
-	UHapbeatSubsystem* Subsystem = ResolveSubsystem();
-
-	// Stop the loop handle, then force an immediate device ring-buffer flush --
-	// exact parity with Unity ChargeShooter.Release():
-	//   _loopPlayback.Stop(); _loopPlayback = null; HapbeatManager.Instance.StopStreamWithFlush();
+	// Stop only this logical source; sibling endpoint-session sources continue.
 	if (UHapbeatStreamPlayback* Pb = LoopPlayback.Get())
 	{
 		if (Pb->IsActive())
@@ -707,11 +703,6 @@ void AHapbeatShowcaseZ5ChargeShotActor::HandleChargeRelease()
 		}
 	}
 	LoopPlayback.Reset();
-	if (Subsystem != nullptr)
-	{
-		Subsystem->StopStreamWithFlush(TEXT(""));
-	}
-
 	if (ChargeAudio != nullptr)
 	{
 		ChargeAudio->Stop();

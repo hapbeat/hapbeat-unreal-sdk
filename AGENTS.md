@@ -115,7 +115,6 @@ void Ping();
 UHapbeatStreamPlayback* StreamClip(UHapbeatClip* Clip, float BaselineGain = 1.0f, float InitialGain = 1.0f,
     const FString& Target = TEXT(""), bool bLoop = false);
 void StopStream();
-void StopStreamWithFlush(const FString& Target = TEXT(""));
 
 // Global address override (one build, many HMDs, each pinned 1:1 to its own Hapbeat).
 static constexpr int32 AddressOverrideDisabled = -1;
@@ -144,9 +143,6 @@ FHapbeatOnPong         OnPong;         // (FString Endpoint, int64 RttUs, FStrin
 - `StreamClip` pre-multiplies every PCM sample by the handle's live
   `Gain`/`Pan`, so `STREAM_BEGIN` always carries `gain = 1.0` (the device must
   not re-apply gain). Returns `nullptr` (+ warning) for a null/empty clip.
-- `StopStreamWithFlush` sends a `STREAM_BEGIN`+`STREAM_END` pair after
-  stopping to force the device ring buffer to flush immediately (plain
-  `StopStream()` leaves a ~50–250 ms residual tail).
 - **Liveness**: UDP is connectionless, so `IsConnected()` only means the
   socket is open (stays `true` with every device off). `IsAlive()` /
   `GetAliveDeviceCount()` / `OnConnected`/`OnDisconnected` track real device
@@ -254,7 +250,7 @@ For one build deployed 1:1 to many HMDs (each paired with its own Hapbeat),
 use the subsystem's **global address override** instead of editing every
 EventMap entry's `Target`: `SetAddressOverride(Player, Group, bPersist)`
 forces the player/group segment on **every** outgoing
-`Play`/`Stop`/`StopAll`/`StreamClip`/`StopStreamWithFlush`, via
+`Play`/`Stop`/`StopAll`/`StreamClip`, via
 `ResolveTarget`. Pass `AddressOverrideDisabled` (`-1`) for an axis to leave it
 alone (not "rewrite to -1"). `bPersist = true` saves to the platform's
 GameUserSettings ini (`[HapbeatSDK]` section), restored in `Initialize()`

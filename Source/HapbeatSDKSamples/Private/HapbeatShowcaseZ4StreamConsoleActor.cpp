@@ -389,7 +389,7 @@ void AHapbeatShowcaseZ4StreamConsoleActor::HandleToggleKey()
 				Subsystem->Ping();
 			}
 			UE_LOG(LogHapbeatShowcaseZ4, Log,
-				TEXT("Z4 stream waiting for a PONG so the session starts as unicast, not broadcast fallback."));
+				TEXT("Z4 stream waiting for a PONG so an exact endpoint session can start."));
 			return;
 		}
 		LoopTrigger->Fire();

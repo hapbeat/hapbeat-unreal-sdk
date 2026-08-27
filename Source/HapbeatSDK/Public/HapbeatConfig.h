@@ -12,8 +12,8 @@
  *
  * The subsystem reads GetDefault<UHapbeatConfig>() in Initialize() to seed the
  * port / app name / ping interval / group before auto-connecting. Field set
- * mirrors Hapbeat.HapbeatConfig (Unity SDK); the Bridge / latency live-flush
- * fields are intentionally dropped for v1 (see the design doc §3.3).
+ * mirrors Hapbeat.HapbeatConfig (Unity SDK); legacy relay and live-flush
+ * fields are intentionally absent.
  */
 UCLASS(config = Game, defaultconfig, meta = (DisplayName = "Hapbeat"))
 class HAPBEATSDK_API UHapbeatConfig : public UDeveloperSettings

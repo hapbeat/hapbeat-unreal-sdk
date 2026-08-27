@@ -39,6 +39,7 @@ public:
 
 	/** Mix and pace pending chunks. Does not close an empty session; the runnable owns that race. */
 	void Tick(double NowSeconds);
+	void RebasePacing(double NowSeconds);
 
 	/** Send the session's only STREAM_END and stop every remaining source. Idempotent. */
 	void SendEnd();

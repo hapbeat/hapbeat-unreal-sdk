@@ -29,5 +29,6 @@ struct FHapbeatStreamGainMirror
 {
 	std::atomic<float> Gain{1.0f};
 	std::atomic<float> Pan{0.0f};
+	std::atomic<bool> bLoop{false};
 	std::atomic<bool> bStopped{false};
 };

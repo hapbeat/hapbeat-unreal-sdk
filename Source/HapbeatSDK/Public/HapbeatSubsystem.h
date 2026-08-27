@@ -440,6 +440,7 @@ private:
 	bool StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPlayback* Playback, const FString& Target, bool bLoop);
 	void ReconcileStreamSources();
 	void StopStreamSession(const FString& EndpointKey);
+	void AbandonStreamSession(const FString& EndpointKey);
 	void StartEndpointSession(const FString& EndpointKey);
 	bool NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const;
 
@@ -694,6 +695,7 @@ private:
 	TMap<FString, FStreamSession> StreamSessions;
 	/** Last END time per route/address; enforces the 300 ms same-route BEGIN gap. */
 	TMap<FString, double> StreamSessionEndedAt;
+	TMap<FString, double> StreamRouteEndedAt;
 
 	/** Game-thread watchdog ticker driving TickStream; valid while sources are active or Deferred. */
 	FTSTicker::FDelegateHandle StreamTickHandle;

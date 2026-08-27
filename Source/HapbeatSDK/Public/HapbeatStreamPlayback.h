@@ -105,6 +105,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
 	void SetPan(float NewPan);
 
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	void SetLoop(bool bNewLoop);
+
+	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	bool GetLoop() const { return bLoop; }
+
 	/**
 	 * Request the stream to stop. The streamer notices this between chunks and
 	 * sends STREAM_END shortly after. Idempotent.
@@ -185,6 +191,7 @@ private:
 	float Gain = 1.0f;
 	/** Live pan, clamped to [-1, 1]. */
 	float Pan = 0.0f;
+	bool bLoop = false;
 	/** Set once the stream has been asked to stop / has finished. */
 	bool bStopped = false;
 

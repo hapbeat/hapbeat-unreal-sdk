@@ -89,6 +89,9 @@ public:
 	virtual bool Init() override;
 	virtual uint32 Run() override;
 	virtual void Stop() override;
+	/** Stop without STREAM_END when a PONG endpoint expires. */
+	void Abandon();
+	void UpdateEndpoint(const FString& InIp, int32 InPort);
 
 	/** True once Run() has returned (STREAM_END already sent). Game-thread poll. */
 	bool IsFinished() const { return bFinished.load(std::memory_order_acquire); }
@@ -163,6 +166,7 @@ private:
 
 	/** Set by Stop() (game thread, via FRunnableThread::Kill); polled by Run(). */
 	std::atomic<bool> bStopRequested{false};
+	std::atomic<bool> bAbandonRequested{false};
 	/** Set by Run() as its last statement; polled by the game-thread watchdog. */
 	std::atomic<bool> bFinished{false};
 
@@ -179,6 +183,7 @@ private:
 	 * STREAM_END; it is either drained or rejected and started as a new session.
 	 */
 	mutable FCriticalSection SourceMutex;
+	mutable FCriticalSection DestinationMutex;
 	TArray<FPendingSource> PendingSources;
 	TArray<FGuid> FinishedSourceIds;
 	bool bAcceptingSources = true;

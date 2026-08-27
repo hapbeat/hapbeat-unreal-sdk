@@ -362,6 +362,7 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 	// to decide whether a mono clip has to be upmixed to stereo to be pannable at
 	// all (STREAM_BEGIN fixes the channel count for the session).
 	StreamMirror->Pan.store(FMath::Clamp(Pan, -1.0f, 1.0f), std::memory_order_release);
+	StreamMirror->bLoop.store(bLoop, std::memory_order_release);
 
 	const UHapbeatConfig* Config = GetDefault<UHapbeatConfig>();
 	const int32 Port = Config != nullptr ? Config->Port : 7700;

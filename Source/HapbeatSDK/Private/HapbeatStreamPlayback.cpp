@@ -9,6 +9,7 @@ void UHapbeatStreamPlayback::Init(float Baseline, float InitialModulator)
 	BaselineGain = Baseline;
 	Gain = FMath::Clamp(Baseline * InitialModulator, 0.0f, 2.0f);
 	Pan = 0.0f;
+	bLoop = false;
 	bStopped = false;
 	Status = EHapbeatStreamPlaybackStatus::Deferred;
 	DeferredReason = EHapbeatStreamDeferredReason::NoResolvedEndpoint;
@@ -19,6 +20,7 @@ void UHapbeatStreamPlayback::Init(float Baseline, float InitialModulator)
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> M = GetMirror();
 	M->Gain.store(Gain, std::memory_order_relaxed);
 	M->Pan.store(Pan, std::memory_order_relaxed);
+	M->bLoop.store(bLoop, std::memory_order_relaxed);
 	M->bStopped.store(false, std::memory_order_relaxed);
 }
 
@@ -34,6 +36,12 @@ void UHapbeatStreamPlayback::SetPan(float NewPan)
 {
 	Pan = FMath::Clamp(NewPan, -1.0f, 1.0f);
 	GetMirror()->Pan.store(Pan, std::memory_order_relaxed);
+}
+
+void UHapbeatStreamPlayback::SetLoop(bool bNewLoop)
+{
+	bLoop = bNewLoop;
+	GetMirror()->bLoop.store(bLoop, std::memory_order_relaxed);
 }
 
 void UHapbeatStreamPlayback::Stop()

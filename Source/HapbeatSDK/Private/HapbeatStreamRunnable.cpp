@@ -82,6 +82,7 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	, SessionTarget(InTarget)
 	, InitialMirror(InMirror)
 {
+	InMirror->bLoop.store(bInLoop, std::memory_order_relaxed);
 	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), bInLoop, InMirror);
 }
 
@@ -179,7 +180,10 @@ uint32 FHapbeatStreamRunnable::Run()
 		// AddSource can be accepted behind the worker's back after STREAM_END.
 		if (!DrainPendingSourcesOrClose())
 		{
-			Streamer->SendEnd();
+			if (!bAbandonRequested.load(std::memory_order_relaxed))
+			{
+				Streamer->SendEnd();
+			}
 			break;
 		}
 
@@ -220,6 +224,32 @@ void FHapbeatStreamRunnable::Stop()
 	bStopRequested.store(true, std::memory_order_relaxed);
 }
 
+void FHapbeatStreamRunnable::Abandon()
+{
+	bAbandonRequested.store(true, std::memory_order_relaxed);
+	bStopRequested.store(true, std::memory_order_relaxed);
+}
+
+void FHapbeatStreamRunnable::UpdateEndpoint(const FString& InIp, int32 InPort)
+{
+	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+	if (SocketSubsystem == nullptr)
+	{
+		return;
+	}
+	TSharedPtr<FInternetAddr> Address = SocketSubsystem->CreateInternetAddr();
+	bool bValid = false;
+	Address->SetIp(*InIp, bValid);
+	if (!bValid)
+	{
+		return;
+	}
+	Address->SetPort(InPort);
+	FScopeLock Lock(&DestinationMutex);
+	LocalUnicastTargets.Reset();
+	LocalUnicastTargets.Add(Address);
+}
+
 bool FHapbeatStreamRunnable::IsCompatible(
 	int32 InSampleRate, int32 InChannels, const FString& InTarget) const
 {
@@ -234,6 +264,7 @@ bool FHapbeatStreamRunnable::AddSource(
 	bool bInLoop,
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
 {
+	InMirror->bLoop.store(bInLoop, std::memory_order_relaxed);
 	FScopeLock Lock(&SourceMutex);
 	if (!bAcceptingSources || bStopRequested.load(std::memory_order_relaxed))
 	{
@@ -261,6 +292,10 @@ bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 
 	if (Streamer->HasSources())
 	{
+		if (EmptySinceSeconds >= 0.0)
+		{
+			Streamer->RebasePacing(FPlatformTime::Seconds());
+		}
 		EmptySinceSeconds = -1.0;
 		return true;
 	}
@@ -281,6 +316,7 @@ bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 
 void FHapbeatStreamRunnable::SendRaw(const TArray<uint8>& Packet)
 {
+	FScopeLock DestinationLock(&DestinationMutex);
 	if (HapbeatIsNetworkSuppressedForEditor())
 	{
 		return;

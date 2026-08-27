@@ -50,6 +50,7 @@ void FHapbeatStreamer::AddSource(
 	bool bInLoop,
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
 {
+	InMirror->bLoop.store(bInLoop, std::memory_order_relaxed);
 	Sources.Emplace(InSourceId, MoveTemp(InPcm16), bInLoop, InMirror);
 }
 
@@ -119,7 +120,7 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 					(Source.Pcm16.Num() - Source.ByteOffset) / SrcBytesPerFrame;
 				if (FramesAvailable <= 0)
 				{
-					if (Source.bLoop)
+					if (Source.Mirror->bLoop.load(std::memory_order_relaxed))
 					{
 						Source.ByteOffset = 0;
 						continue;
@@ -161,7 +162,7 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 				Source.ByteOffset += FramesToMix * SrcBytesPerFrame;
 				OutputFrame += FramesToMix;
 			}
-			if (!Source.bLoop
+			if (!Source.Mirror->bLoop.load(std::memory_order_relaxed)
 				&& Source.ByteOffset / SrcBytesPerFrame >= Source.Pcm16.Num() / SrcBytesPerFrame)
 			{
 				bFinished = true;
@@ -189,6 +190,12 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 		SentDuration = static_cast<double>(TotalFramesSent) / static_cast<double>(SampleRate);
 		Lead = SentDuration - (NowSeconds - StartTimeSeconds);
 	}
+}
+
+void FHapbeatStreamer::RebasePacing(double NowSeconds)
+{
+	StartTimeSeconds = NowSeconds - static_cast<double>(TotalFramesSent) / static_cast<double>(SampleRate)
+		+ SendAheadSeconds;
 }
 
 void FHapbeatStreamer::SendEnd()

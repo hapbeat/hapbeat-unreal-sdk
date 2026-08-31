@@ -149,6 +149,8 @@ AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor()
 	if (DefaultEventMap.Succeeded())
 	{
 		EventMapOverride = DefaultEventMap.Object;
+		PinHitEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			DefaultEventMap.Object, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z1_pin_hit"));
 	}
 	static ConstructorHelpers::FObjectFinder<USoundBase> PinHitSound(
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z1_pin_hit.S_z1_pin_hit"));
@@ -217,16 +219,18 @@ void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
 		return;
 	}
 
-	// Look the id up by event name. The fallback map below authors the same
-	// category / name / mode, so both paths go through this one resolution step
-	// instead of duplicating the wiring.
-	PinHitEntryId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z1_pin_hit"));
+	// An authored map uses the entry selected in the Details panel. The
+	// code-built fallback resolves its equivalent built-in entry by name.
+	PinHitEntryId = EventMapOverride != nullptr
+		? PinHitEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip,
+			TEXT("showcase-kit"), TEXT("z1_pin_hit"));
 	ResolvedPinHitEventMap = EventMap;
 	ResolvedPinHitEntryId = PinHitEntryId;
-	if (PinHitEntryId.IsValid())
+	FHapbeatEventEntry PinHitEntry;
+	if (EventMap->FindById(PinHitEntryId, PinHitEntry))
 	{
-		ResolvedPinHitEntryName = TEXT("showcase-kit.z1_pin_hit");
+		ResolvedPinHitEntryName = PinHitEntry.GetEventId();
 	}
 }
 

@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HapbeatEntryRef.h"
 #include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ1BowlingActor.generated.h"
 
@@ -177,6 +178,11 @@ private:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat")
 	TObjectPtr<UHapbeatEventMap> EventMapOverride;
+
+	/** The entry every pin fires, selected from EventMapOverride in the Details panel. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling|Pin Hit",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Pin Hit Event"))
+	FHapbeatEntryRef PinHitEvent;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;

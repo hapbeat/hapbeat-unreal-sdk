@@ -68,7 +68,7 @@ Ball の OnComponentHit
 ### PIE を始めずに確認する
 
 1. World Outliner で `Z1_Bowling` を選びます。
-2. Details の **Hapbeat > Bowling > Pin Hit Wiring** を開きます。
+2. Details の **Pin Hit Wiring** セクションを開きます。
 3. **Event Map** が `EM_Showcase`、**Entry Name** が `showcase-kit.z1_pin_hit` であることを確認します。**Entry ID** は、その entry を指す内部 ID です。Event Map の asset を開き、`z1_pin_hit` の Mode / Gain / Target / Clip を確認できます。
 4. `Z1_Bowling` の component tree にある `Pin1`〜`Pin6` は Child Actor Component です。親 Actor の tree に pin 内部の `HitTrigger` が展開されるわけではありません。ここは以前の説明が誤りでした。
 

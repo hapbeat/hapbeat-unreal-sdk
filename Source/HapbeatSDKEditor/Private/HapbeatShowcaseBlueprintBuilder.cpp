@@ -307,8 +307,11 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	UK2Node_Timeline* DoorMotion = AddTimeline(Graph, DoorMotionTemplate, 0, -120);
 	UK2Node_CallFunction* LerpRotation = AddCall(Graph, UKismetMathLibrary::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RLerp), 280, -120);
-	FindPinChecked(LerpRotation, TEXT("A"))->DefaultValue = TEXT("(Pitch=0.000000,Yaw=0.000000,Roll=0.000000)");
-	FindPinChecked(LerpRotation, TEXT("B"))->DefaultValue = TEXT("(Pitch=0.000000,Yaw=90.000000,Roll=0.000000)");
+	// K2 pins serialize a Rotator as its three comma-separated components, not
+	// as FRotator::ToString()'s named-property representation.  Using the latter
+	// lets the asset save but leaves the generated Timeline graph uncompilable.
+	FindPinChecked(LerpRotation, TEXT("A"))->DefaultValue = TEXT("0.000000,0.000000,0.000000");
+	FindPinChecked(LerpRotation, TEXT("B"))->DefaultValue = TEXT("0.000000,90.000000,0.000000");
 	FindPinChecked(LerpRotation, TEXT("bShortestPath"))->DefaultValue = TEXT("false");
 	UK2Node_VariableGet* HingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 280, 40);
 	UK2Node_CallFunction* SetHingeRotation = AddCall(Graph, USceneComponent::StaticClass(),

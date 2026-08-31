@@ -118,9 +118,9 @@ bool FHapbeatStreamRunnable::Init()
 	}
 
 	// Build the streamer HERE (worker thread) so its ctor-time scratch-buffer
-	// allocation, and every byte of mutable state it subsequently owns, belongs
-	// to this thread from the moment it exists (single-writer, no locks).
-	Streamer = MakeUnique<FHapbeatStreamer>(
+	// allocation belongs to this thread. Publish it under the same barrier used
+	// by DetachSource(), which may have recorded a pre-init tombstone.
+	TUniquePtr<FHapbeatStreamer> NewStreamer = MakeUnique<FHapbeatStreamer>(
 		SessionSampleRate,
 		SessionChannels,
 		SessionTarget,
@@ -128,6 +128,18 @@ bool FHapbeatStreamRunnable::Init()
 		NextSeqFn,
 		[this](const TArray<uint8>& Packet) { SendRaw(Packet); },
 		SendAheadSeconds);
+	{
+		// Keep SourceMutex -> StreamerMutex everywhere structural source state and
+		// the mixer meet. A detach can arrive before Init() has made Streamer;
+		// retain its tombstone and apply it as soon as the object exists.
+		FScopeLock SourceLock(&SourceMutex);
+		FScopeLock StreamerLock(&StreamerMutex);
+		Streamer = MoveTemp(NewStreamer);
+		for (const FGuid& SourceId : DetachedSourceIds)
+		{
+			Streamer->RemoveSource(SourceId);
+		}
+	}
 
 	return true;
 }
@@ -277,6 +289,9 @@ bool FHapbeatStreamRunnable::AddSource(
 	{
 		return false;
 	}
+	// A later explicit AddSource is a real endpoint rejoin, not the stale
+	// constructor source which DetachSource tombstoned before Init().
+	DetachedSourceIds.Remove(InSourceId);
 	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), InMirror);
 	return true;
 }
@@ -289,13 +304,17 @@ void FHapbeatStreamRunnable::DetachSource(const FGuid& SourceId)
 		{
 			return Pending.SourceId == SourceId;
 		}, /*bAllowShrinking=*/false);
+		DetachedSourceIds.Add(SourceId);
 	}
 
 	// Wait for an in-flight Tick()/SendRaw() to complete, then remove the cursor
 	// before another packet can be built. SetAddressOverride relies on this being
 	// a synchronous boundary: no old-route STREAM_DATA may follow its return.
 	FScopeLock StreamerLock(&StreamerMutex);
-	Streamer->RemoveSource(SourceId);
+	if (Streamer.IsValid())
+	{
+		Streamer->RemoveSource(SourceId);
+	}
 }
 
 void FHapbeatStreamRunnable::DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds)
@@ -311,7 +330,10 @@ bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 	FScopeLock StreamerLock(&StreamerMutex);
 	for (FPendingSource& Pending : PendingSources)
 	{
-		Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.Mirror);
+		if (!DetachedSourceIds.Contains(Pending.SourceId))
+		{
+			Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.Mirror);
+		}
 	}
 	PendingSources.Reset();
 

@@ -455,12 +455,12 @@ bool FHapbeatStreamRunnableLifecycleTest::RunTest(const FString& Parameters)
 	auto DetachedMirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
 	const FGuid DetachedId = FGuid::NewGuid();
 	FRecordingStreamRunnable Detached(DetachedId, MakeStereoPcm(2000, 160), DetachedMirror);
-	TestTrue(TEXT("detached runner initializes"), Detached.Init());
 	Detached.DetachSource(DetachedId);
+	TestTrue(TEXT("pre-init detached runner initializes"), Detached.Init());
 	Detached.Run();
-	TestEqual(TEXT("detached source produces no DATA"),
+	TestEqual(TEXT("pre-init detached source produces no DATA"),
 		Detached.DataCount.load(std::memory_order_relaxed), 0);
-	TestEqual(TEXT("empty detached session closes normally"),
+	TestEqual(TEXT("pre-init empty session closes normally"),
 		Detached.EndCount.load(std::memory_order_relaxed), 1);
 
 	// DetachSource must wait for the packet currently at the send boundary, then

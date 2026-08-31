@@ -173,6 +173,12 @@ private:
 	mutable FCriticalSection StreamerMutex;
 	mutable FCriticalSection DestinationMutex;
 	TArray<FPendingSource> PendingSources;
+	/**
+	 * Source ids detached before Init() creates Streamer. The tombstone survives
+	 * until an explicit later AddSource() re-joins this endpoint, so startup can
+	 * never admit the retired constructor source.
+	 */
+	TSet<FGuid> DetachedSourceIds;
 	TArray<FGuid> FinishedSourceIds;
 	bool bAcceptingSources = true;
 	/** Empty endpoint sessions stay open briefly so adjacent sources share one wire stream. */

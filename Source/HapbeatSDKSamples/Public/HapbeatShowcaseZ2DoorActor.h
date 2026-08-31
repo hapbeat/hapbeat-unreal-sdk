@@ -142,6 +142,8 @@ public:
 	float RattleAmplitudeDegrees = 3.0f;
 
 protected:
+	/** Resolve trigger wiring in Editor World as well as at runtime. */
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;

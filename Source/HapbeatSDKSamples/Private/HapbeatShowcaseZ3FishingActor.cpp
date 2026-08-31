@@ -193,6 +193,10 @@ void AHapbeatShowcaseZ3FishingActor::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 	UpdateStaticVisuals();
+	// Shark is a child Actor, so its internal HookSequence is not shown beneath
+	// this actor's component tree. Resolve and hand over the same wiring here so
+	// its parent Details can truthfully preview the connection before PIE.
+	BuildEventMapAndHaptics();
 }
 
 #if WITH_EDITOR
@@ -413,6 +417,14 @@ void AHapbeatShowcaseZ3FishingActor::UpdateRodPreviewVisual()
 
 void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 {
+	ResolvedHookEventMap = nullptr;
+	ResolvedHookStartEntryId.Invalidate();
+	ResolvedHookLoopEntryId.Invalidate();
+	ResolvedHookReleaseEntryId.Invalidate();
+	ResolvedHookStartEntryName.Empty();
+	ResolvedHookLoopEntryName.Empty();
+	ResolvedHookReleaseEntryName.Empty();
+
 	EventMap = EventMapOverride != nullptr ? ToRawPtr(EventMapOverride) : BuildFallbackEventMap();
 	if (EventMap == nullptr)
 	{
@@ -430,14 +442,34 @@ void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 	const FGuid HookReleaseId = FHapbeatSampleLibrary::FindEntryId(
 		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"));
 
-	if (Shark == nullptr || Shark->HookSequence == nullptr)
+	ResolvedHookEventMap = EventMap;
+	ResolvedHookStartEntryId = HookStartId;
+	ResolvedHookLoopEntryId = HookLoopId;
+	ResolvedHookReleaseEntryId = HookReleaseId;
+	if (HookStartId.IsValid())
 	{
-		return; // already warned in SetUpShark
+		ResolvedHookStartEntryName = TEXT("showcase-kit.z3_hook_start");
 	}
-	Shark->HookSequence->EventMap = EventMap;
-	Shark->HookSequence->EntryId = HookLoopId;
-	Shark->HookSequence->StartEntryId = HookStartId;
-	Shark->HookSequence->StopEntryId = HookReleaseId;
+	if (HookLoopId.IsValid())
+	{
+		ResolvedHookLoopEntryName = TEXT("showcase-kit.z3_hook_loop");
+	}
+	if (HookReleaseId.IsValid())
+	{
+		ResolvedHookReleaseEntryName = TEXT("showcase-kit.z3_hook_release");
+	}
+
+	AHapbeatShowcaseZ3SharkActor* WiredShark = Shark != nullptr
+		? Shark.Get()
+		: (SharkSlot != nullptr ? Cast<AHapbeatShowcaseZ3SharkActor>(SharkSlot->GetChildActor()) : nullptr);
+	if (WiredShark == nullptr || WiredShark->HookSequence == nullptr)
+	{
+		return;
+	}
+	WiredShark->HookSequence->EventMap = EventMap;
+	WiredShark->HookSequence->EntryId = HookLoopId;
+	WiredShark->HookSequence->StartEntryId = HookStartId;
+	WiredShark->HookSequence->StopEntryId = HookReleaseId;
 	// The tick ordering the binding depends on is set up in SetUpShark, with the
 	// rest of the shark's wiring.
 }

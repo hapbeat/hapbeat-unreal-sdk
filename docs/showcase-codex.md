@@ -16,12 +16,12 @@ Showcase の触覚ロジックはすべて C++ で実装されており、Bluepr
 2. `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Maps/Showcase` を開きます。
 3. World Outliner で `Z1_Bowling`、`Z2_Door`、`Z3_Fishing`、`Z4_StreamConsole`、`Z5_ChargeShot` のいずれかを選択します。
 4. Details パネルで **Hapbeat** カテゴリの **Event Map Override** を確認します。既定では `EM_Showcase` です。
-5. Actor 名の下にある component tree を展開し、`OpenTrigger`、`HookSequence`、`GainBinding` のような Hapbeat component を選択します。
+5. Actor 名の下にある component tree を展開し、`OpenTrigger`、`LoopTrigger`、`GainBinding` のような Hapbeat component を選択します。Z3 の `HookSequence` と Z5 の target trigger は child Actor 内部なので、親 Actor の Details にある **Hook Wiring** / **Haptic Wiring** で先に接続先を確認します。
 6. Content Browser で `HapbeatSamples/Showcase/EM_Showcase` をダブルクリックします。Event Map Editor で entry の Mode、Gain、Target、Clip、loop を確認します。
 
 Event Map Editor の entry を選んで右側の **Wiring** から **Scan Level** を実行すると、現在開いている level に、選択した entry を設定済みの trigger があれば表示されます。これは配置済み component の確認に使えます。
 
-> **Showcase の注意:** Z1 は Editor World の construction 時にも pin の Event Map / entry ID を設定するため、PIE 前に `Z1_Bowling` の Details で配線を確認できます。Z3 の shark と Z5 の target は PIE 開始時に子 Actor へ設定するため、これらは PIE 中の **Play World** で確認します。
+> **Showcase の注意:** Z1〜Z5 は Editor World の construction 時にも Event Map の entry を解決します。Z2/Z4 は component tree の trigger を、Z3/Z5 は child Actor 内部の trigger / sequence を親 Actor Details の **Hook Wiring** / **Haptic Wiring** で、PIE 前に確認できます。Hit callback の登録そのものだけは UE の lifecycle 上、PIE の `BeginPlay()` で行われます。
 
 ## 配線の全体像
 
@@ -39,9 +39,9 @@ Event Map Editor の entry を選んで右側の **Wiring** から **Scan Level*
 | --- | --- | --- | --- |
 | Z1 Bowling | `Z1_Bowling` | `HitTrigger` (`UHapbeatCollisionTriggerComponent`) | `z1_pin_hit` |
 | Z2 Swing Door | `Z2_Door` | `OpenTrigger` ほか 6 個の `UHapbeatTriggerComponent` | `z2_door_open` ほか 5 個 |
-| Z3 Fishing | `Z3_Fishing`、PIE 中の `Shark` child Actor | `HookSequence`、`HookVelocityBinding` | `z3_hook_start`、`z3_hook_loop`、`z3_hook_release` |
+| Z3 Fishing | `Z3_Fishing` | `HookSequence`、`HookVelocityBinding` | `z3_hook_start`、`z3_hook_loop`、`z3_hook_release` |
 | Z4 Stream Console | `Z4_StreamConsole` | `LoopTrigger`、`TickTrigger`、`GainBinding`、`PanBinding` | `z4_stream_loop`、`z4_slider_tick` |
-| Z5 Target Range | `Z5_ChargeShot`、PIE 中の `Target` child Actor | zone の charge / shot 関数、`LightHitTrigger`、`HeavyHitTrigger` | `z5_charge_*`、`z5_shot_*`、`z5_tar_hit_*` |
+| Z5 Target Range | `Z5_ChargeShot` | zone の charge / shot 関数、`LightHitTrigger`、`HeavyHitTrigger` | `z5_charge_*`、`z5_shot_*`、`z5_tar_hit_*` |
 
 ## Z1 Bowling — pin の衝突を発火する
 
@@ -91,9 +91,16 @@ pin 内部の collision setting 自体は `AHapbeatShowcaseZ1PinActor` の C++ c
 
 `F`、`G`、`L` の入力を zone の state machine が受け、状態が切り替わる瞬間に上の Trigger を `Fire()` します。ドアの見た目の回転は `DoorHinge` component が担当します。開閉方向、回転軸、duration は `Z2_Door` の Details で調整し、触覚の Clip / Gain / Target は Event Map 側で調整します。
 
+### PIE を始めずに確認する
+
+1. World Outliner で `Z2_Door` を選びます。
+2. component tree の `OpenTrigger`、`CloseTrigger` などを選びます。
+3. 各 component の Details で **Event Map** と **Entry ID** を確認します。これは `Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ2DoorActor.cpp` の `OnConstruction()` が `BuildEventMap()` を実行して設定します。
+4. entry ID をどの名前から解決するかは同ファイルの `BuildEventMap()`、各状態で `Fire()` を呼ぶ箇所は同 Actor の state transition 関数です。
+
 ## Z3 Fishing — Shark の sequence と速度 binding
 
-Z3 は、触覚 component が `Z3_Fishing` 直下ではなく **Shark child Actor** にあります。PIE を開始してから Outliner を Play World に切り替え、`Z3_Fishing` の `Shark` child Actor を選択してください。
+Z3 は、触覚 component が `Z3_Fishing` 直下ではなく **Shark child Actor** にあります。child Actor 内部は親の component tree に展開されないため、まず親 Actor Details の **Hook Wiring** を見ます。
 
 ```text
 左クリック press / release
@@ -111,7 +118,8 @@ Shark の速度
 - `HookSequence` は start / loop / release を 1 つの sequence として管理します。
 - `HookVelocityBinding` は Shark の速度を読み、loop StreamClip の gain を連続的に変えます。
 - `Z3_Fishing` の Details では rod の mount、`RodTipMarker`、line length、Shark slot の配置を調整します。釣り糸の始点は `RodTipMarker` です。
-- `HookSequence` と `HookVelocityBinding` の Event Map / entry ID は開始時に zone が Shark へ設定します。したがって PIE 前の `Shark` を選んだ場合は、runtime の接続値が表示されません。
+- `HookSequence` の Event Map / entry ID は `Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ3FishingActor.cpp` の `BuildEventMapAndHaptics()` が Shark へ設定します。`OnConstruction()` も同じ関数を実行するため、PIE 前でも `Z3_Fishing` の **Hook Wiring** に Event Map と start / loop / release の名前・ID が出ます。
+- `HookVelocityBinding` は Shark の constructor で `HookSequence` を Target Trigger に設定します。速度 binding の入力範囲・出力 gain は C++ の `AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor()` で確認できます。
 
 entry の loop 有無、Clip、Target、baseline Gain は Event Map で変更します。魚の動き、line、rod、速度から gain への変換は Z3 Actor / Shark component の Details を変更します。
 
@@ -132,6 +140,12 @@ pan slider  → PanBinding  (External) → StreamPan
 
 loop / tick の対象 Clip や Target を変える場合は Event Map を開きます。slider の範囲・detent・初期値、binding の curve は `Z4_StreamConsole` と各 binding component の Details で調整します。Address Panel は Event Map を書き換えず、実行中の address override を設定します。
 
+### PIE を始めずに確認する
+
+1. World Outliner で `Z4_StreamConsole` を選び、component tree の `LoopTrigger` または `TickTrigger` を選びます。
+2. Details の **Event Map** と **Entry ID** を確認します。`Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ4StreamConsoleActor.cpp` の `OnConstruction()` と `BuildEventMap()` がこの値を設定します。
+3. `GainBinding` / `PanBinding` を選ぶと、**Target Trigger** が `LoopTrigger` であることと、各 output parameter を PIE 前から確認できます。
+
 ## Z5 Target Range — charge / shot は C++、target hit は Trigger
 
 Z5 は 2 種類の接続を使います。charge / shot は zone Actor の C++ が `PlayEntry()` / `StopEntry()` を直接呼び、target に当たった時だけ child Actor の collision trigger が発火します。
@@ -147,8 +161,8 @@ projectile が Target に Hit
 ```
 
 - `Z5_ChargeShot` の Details では `Event Map Override`、charge 時間、heavy threshold、launch speed、projectile、Target slot を確認・調整します。
-- PIE 中に `Target` child Actor を選択すると、`LightHitTrigger` と `HeavyHitTrigger` の Hit 判定、tag filter、cooldown を確認できます。
-- 2 つの target trigger の Event Map と entry ID は `Z5_ChargeShot` が開始時に設定します。
+- `Z5_ChargeShot` の Details にある **Haptic Wiring** では、PIE 前に charge / threshold / shot / target hit の 6 entry 名と Event Map を確認できます。`Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ5ChargeShotActor.cpp` の `BuildEventMap()` が名前を解決し、`SetUpTarget()` が child target の `LightHitTrigger` / `HeavyHitTrigger` へ target-hit entry と tag filter を設定します。
+- target trigger の Hit 判定、tag filter、cooldown の固定 sample 設定は同ファイルの `AHapbeatShowcaseZ5TargetActor::AHapbeatShowcaseZ5TargetActor()` で確認できます。PIE 中の Play World で child target を選べる場合は component Details でも同じ値を確認できますが、親 Actor の **Haptic Wiring** が通常の確認場所です。
 - charge / threshold / shot entry は Trigger component ではないため、Event Map Editor の Scan Level には出ません。上の C++ 直結の経路が正しい確認方法です。
 
 charge loop の Clip / Gain / Target / loop は Event Map で、charge 時間や弾速は zone の Details で、命中判定は target trigger の Details で調整します。

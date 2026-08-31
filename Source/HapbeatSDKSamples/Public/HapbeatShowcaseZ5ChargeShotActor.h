@@ -204,7 +204,7 @@ public:
 	float ProjectileFriction = 0.2f;
 
 protected:
-	/** Keep the target child actor's local mesh fit in sync while authoring and in PIE. */
+	/** Keep the target child actor's local mesh fit and haptic wiring in sync while authoring and in PIE. */
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -296,6 +296,23 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;
+
+	/** Editor-visible preview of the Event Map used by direct charge/shot calls and target hit triggers. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Showcase|Haptic Wiring", meta = (DisplayName = "Event Map"))
+	TObjectPtr<UHapbeatEventMap> ResolvedHapticEventMap;
+
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Showcase|Haptic Wiring", meta = (DisplayName = "Charge Loop"))
+	FString ResolvedChargeLoopEntryName;
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Showcase|Haptic Wiring", meta = (DisplayName = "Charge Threshold"))
+	FString ResolvedChargeThresholdEntryName;
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Showcase|Haptic Wiring", meta = (DisplayName = "Light Shot"))
+	FString ResolvedShotLightEntryName;
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Showcase|Haptic Wiring", meta = (DisplayName = "Heavy Shot"))
+	FString ResolvedShotHeavyEntryName;
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Showcase|Haptic Wiring", meta = (DisplayName = "Light Target Hit"))
+	FString ResolvedTarHitLightEntryName;
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Showcase|Haptic Wiring", meta = (DisplayName = "Heavy Target Hit"))
+	FString ResolvedTarHitHeavyEntryName;
 
 	/**
 	 * Strong references keeping the 6 stream-clip WAVs alive when the code-built

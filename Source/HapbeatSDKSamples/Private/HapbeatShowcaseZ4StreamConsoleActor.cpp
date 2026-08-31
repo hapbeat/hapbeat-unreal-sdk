@@ -102,6 +102,14 @@ AHapbeatShowcaseZ4StreamConsoleActor::AHapbeatShowcaseZ4StreamConsoleActor()
 	TickSound = DetentSound.Object;
 }
 
+void AHapbeatShowcaseZ4StreamConsoleActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	// LoopTrigger and TickTrigger are persistent components, so expose their
+	// resolved Event Map/entry values in the Editor World too.
+	BuildEventMap();
+}
+
 void AHapbeatShowcaseZ4StreamConsoleActor::BeginPlay()
 {
 	Super::BeginPlay();

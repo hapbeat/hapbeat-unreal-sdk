@@ -213,7 +213,7 @@ public:
 	FVector SharkSizeCm = FVector(96.0f, 69.0f, 69.0f);
 
 protected:
-	/** Update editor-visible static visuals; runtime state remains in BeginPlay. */
+	/** Update editor-visible static visuals and resolve child-sequence wiring. Runtime state remains in BeginPlay. */
 	virtual void OnConstruction(const FTransform& Transform) override;
 #if WITH_EDITOR
 	virtual bool ShouldTickIfViewportsOnly() const override { return true; }
@@ -358,6 +358,28 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;
+
+	/** Editor-visible preview of the Event Map handed to Shark.HookSequence. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Fishing|Hook Wiring", meta = (DisplayName = "Event Map"))
+	TObjectPtr<UHapbeatEventMap> ResolvedHookEventMap;
+
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Fishing|Hook Wiring", meta = (DisplayName = "Start Entry ID"))
+	FGuid ResolvedHookStartEntryId;
+
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Fishing|Hook Wiring", meta = (DisplayName = "Loop Entry ID"))
+	FGuid ResolvedHookLoopEntryId;
+
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Fishing|Hook Wiring", meta = (DisplayName = "Release Entry ID"))
+	FGuid ResolvedHookReleaseEntryId;
+
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Fishing|Hook Wiring", meta = (DisplayName = "Start Entry Name"))
+	FString ResolvedHookStartEntryName;
+
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Fishing|Hook Wiring", meta = (DisplayName = "Loop Entry Name"))
+	FString ResolvedHookLoopEntryName;
+
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Fishing|Hook Wiring", meta = (DisplayName = "Release Entry Name"))
+	FString ResolvedHookReleaseEntryName;
 
 	// Strong refs keeping the 3 StreamClip WAVs alive when the code-built
 	// fallback map is in use; left null when the EM_Showcase asset supplies them.

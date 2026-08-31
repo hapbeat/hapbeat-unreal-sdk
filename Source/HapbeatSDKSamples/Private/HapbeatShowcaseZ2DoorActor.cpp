@@ -137,6 +137,14 @@ AHapbeatShowcaseZ2DoorActor::AHapbeatShowcaseZ2DoorActor()
 	ApplyShowcaseAssets();
 }
 
+void AHapbeatShowcaseZ2DoorActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+	// These are constructor-created components, so resolving their Event Map
+	// here makes the actual trigger wiring inspectable before PIE.
+	BuildEventMap();
+}
+
 void AHapbeatShowcaseZ2DoorActor::BeginPlay()
 {
 	Super::BeginPlay();

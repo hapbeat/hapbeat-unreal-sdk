@@ -172,6 +172,11 @@ void AHapbeatShowcaseZ5ChargeShotActor::OnConstruction(const FTransform& Transfo
 {
 	Super::OnConstruction(Transform);
 	UpdateTargetVisual();
+	// Target is a child Actor, so its collision triggers are not nested in this
+	// actor's component tree. Wire the same Event Map/entry values now, not just
+	// during BeginPlay, and expose their resolved names on this actor.
+	BuildEventMap();
+	SetUpTarget();
 }
 
 void AHapbeatShowcaseZ5ChargeShotActor::BeginPlay()
@@ -466,6 +471,20 @@ void AHapbeatShowcaseZ5ChargeShotActor::OnZoneDeactivated()
 
 void AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap()
 {
+	ResolvedHapticEventMap = nullptr;
+	ResolvedChargeLoopEntryName.Empty();
+	ResolvedChargeThresholdEntryName.Empty();
+	ResolvedShotLightEntryName.Empty();
+	ResolvedShotHeavyEntryName.Empty();
+	ResolvedTarHitLightEntryName.Empty();
+	ResolvedTarHitHeavyEntryName.Empty();
+	ChargeLoopEntryId.Invalidate();
+	ChargeThresholdEntryId.Invalidate();
+	ShotLightEntryId.Invalidate();
+	ShotHeavyEntryId.Invalidate();
+	TarHitLightEntryId.Invalidate();
+	TarHitHeavyEntryId.Invalidate();
+
 	EventMap = EventMapOverride != nullptr ? ToRawPtr(EventMapOverride) : BuildFallbackEventMap();
 	if (EventMap == nullptr)
 	{
@@ -488,6 +507,13 @@ void AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap()
 		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_light"));
 	TarHitHeavyEntryId = FHapbeatSampleLibrary::FindEntryId(
 		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_heavy"));
+	ResolvedHapticEventMap = EventMap;
+	if (ChargeLoopEntryId.IsValid()) { ResolvedChargeLoopEntryName = TEXT("showcase-kit.z5_charge_loop"); }
+	if (ChargeThresholdEntryId.IsValid()) { ResolvedChargeThresholdEntryName = TEXT("showcase-kit.z5_charge_thd"); }
+	if (ShotLightEntryId.IsValid()) { ResolvedShotLightEntryName = TEXT("showcase-kit.z5_shot_light"); }
+	if (ShotHeavyEntryId.IsValid()) { ResolvedShotHeavyEntryName = TEXT("showcase-kit.z5_shot_heavy"); }
+	if (TarHitLightEntryId.IsValid()) { ResolvedTarHitLightEntryName = TEXT("showcase-kit.z5_tar_hit_light"); }
+	if (TarHitHeavyEntryId.IsValid()) { ResolvedTarHitHeavyEntryName = TEXT("showcase-kit.z5_tar_hit_heavy"); }
 }
 
 UHapbeatEventMap* AHapbeatShowcaseZ5ChargeShotActor::BuildFallbackEventMap()

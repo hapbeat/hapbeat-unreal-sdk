@@ -21,7 +21,7 @@ Showcase の触覚ロジックはすべて C++ で実装されており、Bluepr
 
 Event Map Editor の entry を選んで右側の **Wiring** から **Scan Level** を実行すると、現在開いている level に、選択した entry を設定済みの trigger があれば表示されます。これは配置済み component の確認に使えます。
 
-> **Showcase の注意:** Z1 の pin や Z3 の shark、Z5 の target に対する Event Map と entry ID は、zone が PIE 開始時に子 Actor へ設定します。そのため、PIE 前の Editor World で Scan Level を実行しても、これらの runtime 配線は表示されません。以下の zone ごとの「接続箇所」で確認してください。PIE 中は Outliner を **Play World** に切り替えると、実行中の child Actor と component を確認できます。
+> **Showcase の注意:** Z1 は Editor World の construction 時にも pin の Event Map / entry ID を設定するため、PIE 前に `Z1_Bowling` の Details で配線を確認できます。Z3 の shark と Z5 の target は PIE 開始時に子 Actor へ設定するため、これらは PIE 中の **Play World** で確認します。
 
 ## 配線の全体像
 
@@ -37,7 +37,7 @@ Event Map Editor の entry を選んで右側の **Wiring** から **Scan Level*
 
 | Zone | Editor で選ぶ Actor | 触覚を発火する component / 関数 | `EM_Showcase` entry |
 | --- | --- | --- | --- |
-| Z1 Bowling | `Z1_Bowling`、PIE 中の pin child Actor | `HitTrigger` (`UHapbeatCollisionTriggerComponent`) | `z1_pin_hit` |
+| Z1 Bowling | `Z1_Bowling` | `HitTrigger` (`UHapbeatCollisionTriggerComponent`) | `z1_pin_hit` |
 | Z2 Swing Door | `Z2_Door` | `OpenTrigger` ほか 6 個の `UHapbeatTriggerComponent` | `z2_door_open` ほか 5 個 |
 | Z3 Fishing | `Z3_Fishing`、PIE 中の `Shark` child Actor | `HookSequence`、`HookVelocityBinding` | `z3_hook_start`、`z3_hook_loop`、`z3_hook_release` |
 | Z4 Stream Console | `Z4_StreamConsole` | `LoopTrigger`、`TickTrigger`、`GainBinding`、`PanBinding` | `z4_stream_loop`、`z4_slider_tick` |
@@ -45,7 +45,7 @@ Event Map Editor の entry を選んで右側の **Wiring** から **Scan Level*
 
 ## Z1 Bowling — pin の衝突を発火する
 
-左クリックで zone が ball を発射し、ball が pin に Hit すると、各 pin の `HitTrigger` が触覚を再生します。
+左クリックで zone が ball を発射し、ball が pin に Hit すると、各 pin の `HitTrigger` が触覚を再生します。これは Blueprint ではなく C++ の接続です。
 
 ```text
 Ball の OnComponentHit
@@ -53,9 +53,26 @@ Ball の OnComponentHit
   → z1_pin_hit
 ```
 
-- `Z1_Bowling` の Details で `Event Map Override`、`Launch Speed`、pin の大きさなどを確認します。
-- pin は child Actor です。PIE 中に pin Actor を選択し、component tree の `HitTrigger` を開くと、Hit 判定、速度しきい値、cooldown、`VelocityScaled` gain を確認できます。
-- `HitTrigger` の Event Map と entry ID は `Z1_Bowling` が開始時に全 pin へ設定します。PIE 前の pin を直接選んでも設定値が空なのは仕様です。
+### コードの接続箇所
+
+| 確認したいこと | C++ の場所 |
+| --- | --- |
+| pin が `HitTrigger` を持つこと、Hit / Velocity Scaled / 速度しきい値 / cooldown | `Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ1BowlingActor.cpp` の `AHapbeatShowcaseZ1PinActor::AHapbeatShowcaseZ1PinActor()` |
+| `EM_Showcase` から `z1_pin_hit` の entry ID を名前で探すこと | 同ファイルの `AHapbeatShowcaseZ1BowlingActor::BuildEventMap()` |
+| 見つけた Event Map / entry ID / tag filter を 6 本すべての `HitTrigger` へ渡すこと | 同ファイルの `AHapbeatShowcaseZ1BowlingActor::SetUpPins()` |
+| Editor World でも上の配線を実行すること | 同ファイルの `AHapbeatShowcaseZ1BowlingActor::OnConstruction()` |
+| UE の `OnComponentHit` を受けて trigger を発火する共通実装 | `Source/HapbeatSDK/Private/HapbeatCollisionTriggerComponent.cpp` の `UHapbeatCollisionTriggerComponent::BeginPlay()` と `HandleCollision()` |
+
+`OnComponentHit` は UE の physics callback なので、実際の callback 登録だけは PIE の `BeginPlay()` で行います。一方、どの Event Map entry を鳴らすかという配線は Editor World で確認できます。
+
+### PIE を始めずに確認する
+
+1. World Outliner で `Z1_Bowling` を選びます。
+2. Details の **Hapbeat > Bowling > Pin Hit Wiring** を開きます。
+3. **Event Map** が `EM_Showcase`、**Entry Name** が `showcase-kit.z1_pin_hit` であることを確認します。**Entry ID** は、その entry を指す内部 ID です。Event Map の asset を開き、`z1_pin_hit` の Mode / Gain / Target / Clip を確認できます。
+4. `Z1_Bowling` の component tree にある `Pin1`〜`Pin6` は Child Actor Component です。親 Actor の tree に pin 内部の `HitTrigger` が展開されるわけではありません。ここは以前の説明が誤りでした。
+
+pin 内部の collision setting 自体は `AHapbeatShowcaseZ1PinActor` の C++ constructor が作る固定 sample 設定です。pin の Hit / Velocity Scaled / threshold / cooldown を個別に変更する設計にする場合は、この Actor を Blueprint 化して component を編集可能にするのではなく、sample と同様に C++ の constructor または公開 property を変更します。Showcase の Z1 は「全 pin が同じ trigger 設定を共有する」例です。
 
 `z1_pin_hit` の Clip / baseline Gain / Target を変える場合は `EM_Showcase` を編集します。衝突で鳴る最低速度や強さの変化を変える場合は `HitTrigger` の設定を、ball の速さを変える場合は `Z1_Bowling` の `Launch Speed` を変更します。
 

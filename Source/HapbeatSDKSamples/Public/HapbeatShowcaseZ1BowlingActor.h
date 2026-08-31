@@ -123,7 +123,7 @@ private:
 	/** Build the transient EventMap used when no asset is assigned. */
 	UHapbeatEventMap* BuildFallbackEventMap();
 
-	/** Hand each child pin actor its EventMap / entry / SFX and remember the pose Space returns it to. */
+	/** Hand each child pin actor its EventMap / entry / SFX and remember the pose Space returns it to. Runs in Editor World and at BeginPlay. */
 	void SetUpPins();
 
 	/** Apply only the authored mesh fit; never changes a pin slot's authored transform. */
@@ -184,6 +184,18 @@ private:
 	/** Shared entry id every pin's HitTrigger references (StreamClip mode, "showcase-kit.z1_pin_hit"). */
 	FGuid PinHitEntryId;
 
+	/** Editor-visible Event Map resolved for every pin's HitTrigger. This is a preview of the runtime connection, not a second mapping. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Bowling|Pin Hit Wiring", meta = (DisplayName = "Event Map"))
+	TObjectPtr<UHapbeatEventMap> ResolvedPinHitEventMap;
+
+	/** Editor-visible entry id resolved from ResolvedPinHitEventMap for every pin's HitTrigger. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Bowling|Pin Hit Wiring", meta = (DisplayName = "Entry ID"))
+	FGuid ResolvedPinHitEntryId;
+
+	/** Editor-visible stable name of the entry resolved for every pin's HitTrigger. */
+	UPROPERTY(VisibleAnywhere, Transient, Category = "Hapbeat|Bowling|Pin Hit Wiring", meta = (DisplayName = "Entry Name"))
+	FString ResolvedPinHitEntryName;
+
 	// Strong ref keeping the pin-hit StreamClip WAV alive when the code-built
 	// fallback map is in use (entries only hold a TSoftObjectPtr -- see
 	// FHapbeatSampleLibrary::LoadSampleClip's GC note). Left null when the
@@ -242,10 +254,10 @@ private:
  * half height -- an 80 cm capsule around a 78 cm pin) and lets the mesh be
  * turned upright and centred inside it as a plain child transform.
  *
- * EventMap / EntryId / HitSound are assigned by the owning zone actor in its
- * BeginPlay (AHapbeatShowcaseZ1BowlingActor::SetUpPins); the collision trigger
- * reads them at fire time, so their arrival is not ordered against this actor's
- * own BeginPlay.
+ * EventMap / EntryId / HitSound are assigned by the owning zone actor during
+ * construction and repeated at BeginPlay (AHapbeatShowcaseZ1BowlingActor::
+ * SetUpPins). The construction pass makes the wiring inspectable before PIE;
+ * the collision trigger reads the same values at fire time.
  *
  * The trigger's numbers come from the Unity Showcase's BowlingPin.prefab
  * (_maxVelocity = 1 Unity m/s -> 100 cm/s), except VelocityThreshold, which is

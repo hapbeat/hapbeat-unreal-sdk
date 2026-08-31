@@ -162,6 +162,13 @@ void AHapbeatShowcaseZ1BowlingActor::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 	UpdatePinVisuals();
+
+	// Keep the actual child-pin trigger wiring inspectable in the Editor World.
+	// Physics callbacks are still bound only by each trigger's BeginPlay, but the
+	// EventMap, entry ID and tag filter do not depend on PIE and must not be
+	// hidden from an author trying to inspect this sample's connection.
+	BuildEventMap();
+	SetUpPins();
 }
 
 void AHapbeatShowcaseZ1BowlingActor::BeginPlay()
@@ -198,6 +205,11 @@ void AHapbeatShowcaseZ1BowlingActor::SetUpBall()
 
 void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
 {
+	ResolvedPinHitEventMap = nullptr;
+	ResolvedPinHitEntryId.Invalidate();
+	ResolvedPinHitEntryName.Empty();
+	PinHitEntryId.Invalidate();
+
 	EventMap = EventMapOverride != nullptr ? ToRawPtr(EventMapOverride) : BuildFallbackEventMap();
 	if (EventMap == nullptr)
 	{
@@ -210,6 +222,12 @@ void AHapbeatShowcaseZ1BowlingActor::BuildEventMap()
 	// instead of duplicating the wiring.
 	PinHitEntryId = FHapbeatSampleLibrary::FindEntryId(
 		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z1_pin_hit"));
+	ResolvedPinHitEventMap = EventMap;
+	ResolvedPinHitEntryId = PinHitEntryId;
+	if (PinHitEntryId.IsValid())
+	{
+		ResolvedPinHitEntryName = TEXT("showcase-kit.z1_pin_hit");
+	}
 }
 
 UHapbeatEventMap* AHapbeatShowcaseZ1BowlingActor::BuildFallbackEventMap()

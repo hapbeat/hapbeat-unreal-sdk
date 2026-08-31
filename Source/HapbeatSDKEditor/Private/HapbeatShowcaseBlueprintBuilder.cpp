@@ -314,7 +314,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	UK2Node_CallFunction* SetHingeRotation = AddCall(Graph, USceneComponent::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 560, -30);
 	ConnectPins(DoorMotion->GetUpdatePin(), SetHingeRotation->GetExecPin());
-	ConnectPins(DoorMotion->GetTrackPin(TEXT("OpenAlpha")), FindPinChecked(LerpRotation, TEXT("Alpha")));
+	ConnectPins(FindPinChecked(DoorMotion, TEXT("OpenAlpha")), FindPinChecked(LerpRotation, TEXT("Alpha")));
 	ConnectPins(LerpRotation->GetReturnValuePin(), FindPinChecked(SetHingeRotation, TEXT("NewRotation")));
 	ConnectPins(FindPinChecked(HingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetHingeRotation));
 

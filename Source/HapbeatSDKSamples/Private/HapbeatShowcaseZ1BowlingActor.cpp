@@ -165,12 +165,12 @@ void AHapbeatShowcaseZ1BowlingActor::OnConstruction(const FTransform& Transform)
 	Super::OnConstruction(Transform);
 	UpdatePinVisuals();
 
-	// Keep the actual child-pin trigger wiring inspectable in the Editor World.
-	// Physics callbacks are still bound only by each trigger's BeginPlay, but the
-	// EventMap, entry ID and tag filter do not depend on PIE and must not be
-	// hidden from an author trying to inspect this sample's connection.
-	BuildEventMap();
-	SetUpPins();
+	// A UChildActorComponent creates its child after its owner's construction
+	// pass.  Calling SetUpPins() here therefore races that creation whenever a
+	// Details value is edited: GetChildActor() is temporarily null and the
+	// editor emits one false "pin will not fire" warning per slot.  The editable
+	// Event Map / Pin Hit Event properties above remain visible in Details; the
+	// runtime-only child wiring belongs in BeginPlay(), where every pin exists.
 }
 
 void AHapbeatShowcaseZ1BowlingActor::BeginPlay()

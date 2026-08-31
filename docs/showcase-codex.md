@@ -1,3 +1,9 @@
+---
+sidebar:
+  order: 3
+  label: Showcase 配線
+---
+
 # Showcase の触覚配線ガイド
 
 Showcase は、Unreal Engine 5（UE5）で Hapbeat の触覚イベントをゲームの出来事へ接続する、5 つの実例です。このページは、まず **Editor 上で「どの Actor / Component が、どの Hapbeat Event Map entry を再生するか」** を確認・調整するための手引きです。

@@ -1,3 +1,9 @@
+---
+sidebar:
+  order: 1
+  label: Unreal 導入
+---
+
 # はじめかた（Unreal Engine）
 
 Hapbeat デバイスを Unreal Engine 5 から Wi-Fi 経由で鳴らすための導入手順です。

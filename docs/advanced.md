@@ -1,3 +1,9 @@
+---
+sidebar:
+  order: 2
+  label: 応用
+---
+
 # 応用
 
 [はじめかた](./getting-started.md) を一通り終えたあとの話題です。

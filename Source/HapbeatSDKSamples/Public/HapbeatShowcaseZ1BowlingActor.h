@@ -176,7 +176,7 @@ private:
 	 *
 	 * Entries are resolved by event name, not by order (see BuildEventMap).
 	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Bowling|Pin Hit", meta = (DisplayName = "Event Map"))
 	TObjectPtr<UHapbeatEventMap> EventMapOverride;
 
 	/** The entry every pin fires, selected from EventMapOverride in the Details panel. */

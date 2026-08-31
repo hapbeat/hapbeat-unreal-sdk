@@ -30,24 +30,14 @@ ball が pin に Hit
   → Pin Hit Event
 ```
 
-`Z1_Bowling` を選び、Details の **Hapbeat > Bowling > Pin Hit** を開きます。
+`Z1_Bowling` を選び、Details の **Hapbeat > Bowling > Pin Hit** を開きます。ここだけで pin-hit の触覚を編集できます。
 
-- **Event Map Override**: pin が参照する Event Map。既定は `EM_Showcase`。
-- **Pin Hit Event**: 6 本すべての pin が発火する entry。既定は `z1_pin_hit`。`Event Map Override` の entry 名から選択できます。
-- **Launch Speed**: ball の発射速度。
+- **Event Map**: pin が参照する Event Map。既定は `EM_Showcase`。
+- **Pin Hit Event**: 6 本すべての pin が発火する entry。`Event Map` を選ぶと、その entry 名から選択できます。
 
 `Pin Hit Event` は Actor に保存される編集可能な参照です。`EM_Showcase` 側で `z1_pin_hit` の Clip、Gain、Target を変えることも、別の entry を `Pin Hit Event` に選び直すこともできます。
 
-### C++ 実装を確認する
-
-Content Browser の **C++ Classes > HapbeatSDKSamples > Public** には、クラス宣言の [`HapbeatShowcaseZ1BowlingActor.h`](https://github.com/Hapbeat/hapbeat-unreal-sdk/blob/master/Source/HapbeatSDKSamples/Public/HapbeatShowcaseZ1BowlingActor.h) が表示されます。
-
-`.cpp` ファイルは Unreal のコンテンツではないため、Content Browser には表示されません。IDE またはエクスプローラーで [`Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ1BowlingActor.cpp`](https://github.com/Hapbeat/hapbeat-unreal-sdk/blob/master/Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ1BowlingActor.cpp) を開きます。
-
-- `AHapbeatShowcaseZ1PinActor::AHapbeatShowcaseZ1PinActor()` — pin の `HitTrigger` を作成
-- `AHapbeatShowcaseZ1BowlingActor::BuildEventMap()` — `Pin Hit Event` を解決
-- `AHapbeatShowcaseZ1BowlingActor::SetUpPins()` — 解決した Event Map と entry を各 pin へ設定
-- `UHapbeatCollisionTriggerComponent::BeginPlay()` / `HandleCollision()` — SDK の衝突検出と発火
+Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-behavior.md) を参照してください。
 
 ## Z2 Swing Door — Blueprint からイベントを発火する
 
@@ -130,9 +120,7 @@ projectile が target に Hit
 | 変更したい内容 | 変更場所 |
 | --- | --- |
 | Clip、Gain、Target、loop | `EM_Showcase` の entry |
-| Z1 の pin-hit entry | `Z1_Bowling` > **Pin Hit Event** |
-| ball の発射速度、charge 時間 | 各 zone Actor の Details |
-| ドア、竿、target の transform | 各 zone Actor の Details |
+| Z1 の pin-hit entry | `Z1_Bowling` > **Event Map / Pin Hit Event** |
 | 実行時の送信先 | Address Override |
 
 `Target` は送信先を表す論理フィルタです。Address Override は Event Map や Actor の配線を変更しません。

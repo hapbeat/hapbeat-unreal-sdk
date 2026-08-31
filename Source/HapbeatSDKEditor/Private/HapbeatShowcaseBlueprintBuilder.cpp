@@ -203,10 +203,14 @@ void ConnectPins(UEdGraphPin* From, UEdGraphPin* To)
 void ConfigurePlayEvent(UK2Node_CallFunction* Node, UHapbeatEventMap* EventMap, const FGuid& EntryId)
 {
 	FindPinChecked(Node, TEXT("Map"))->DefaultObject = EventMap;
-	// FGuid's Blueprint text form is four uint32 fields.  Its familiar
-	// {xxxxxxxx-...} display form is not accepted by ImportText for a struct pin.
+	// The graph pin parser reads FGuid's four fields through signed integer
+	// properties.  Writing a high-bit component as uint32 clamps it to
+	// INT32_MAX, silently changing only some event IDs (for example the Z2 close
+	// entry).  Its familiar {xxxxxxxx-...} display form is not accepted either.
 	FindPinChecked(Node, TEXT("Entry"))->DefaultValue = FString::Printf(
-		TEXT("(EntryId=(A=%u,B=%u,C=%u,D=%u))"), EntryId.A, EntryId.B, EntryId.C, EntryId.D);
+		TEXT("(EntryId=(A=%d,B=%d,C=%d,D=%d))"),
+		static_cast<int32>(EntryId.A), static_cast<int32>(EntryId.B),
+		static_cast<int32>(EntryId.C), static_cast<int32>(EntryId.D));
 }
 
 UTimelineTemplate* CreateDoorMotionTimeline(UBlueprint* Blueprint)

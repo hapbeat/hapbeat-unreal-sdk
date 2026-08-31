@@ -30,7 +30,7 @@ Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
 ## Showcase サンプル
 
 Z1〜Z5 の Actor / Component と Event Map の触覚配線、Details での調整は
-[Showcase の触覚配線ガイド](./showcase-codex.md)を参照してください。
+[Showcase の触覚配線ガイド](./showcase-unreal.md)を参照してください。
 
 主要な実装手法をゾーン別に確認できます。コンテンツブラウザの設定で **Show Plugin Content**
 （プラグインのコンテンツを表示）を有効にし、

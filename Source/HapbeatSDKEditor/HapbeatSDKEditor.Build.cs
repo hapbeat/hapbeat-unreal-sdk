@@ -32,6 +32,7 @@ public class HapbeatSDKEditor : ModuleRules
 			"ContentBrowser",// selected-asset lookup for the Markdown export
 			"AssetRegistry", // single-Event-Map fallback for the Markdown export
 			"HapbeatSDK",    // the runtime module this customizes
+			"HapbeatSDKSamples", // creates the two Blueprint-authored Showcase zones
 		});
 	}
 }

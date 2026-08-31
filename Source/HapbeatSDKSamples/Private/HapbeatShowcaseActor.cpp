@@ -7,9 +7,7 @@
 #include "HapbeatShowcaseCharacter.h"
 #include "HapbeatShowcaseZone.h"
 #include "HapbeatShowcaseZ1BowlingActor.h"
-#include "HapbeatShowcaseZ2DoorActor.h"
 #include "HapbeatShowcaseZ3FishingActor.h"
-#include "HapbeatShowcaseZ4StreamConsoleActor.h"
 #include "HapbeatShowcaseZ5ChargeShotActor.h"
 #include "HapbeatSubsystem.h"
 #include "SHapbeatShowcaseHud.h"
@@ -82,9 +80,16 @@ AHapbeatShowcaseActor::AHapbeatShowcaseActor()
 	// dropped into a level. Labels match the docs' zone table.
 	Zones.Reset(5);
 	Zones.Add(MakeZone(AHapbeatShowcaseZ1BowlingActor::StaticClass(), TEXT("Bowling")));
-	Zones.Add(MakeZone(AHapbeatShowcaseZ2DoorActor::StaticClass(), TEXT("Door")));
+	// Z2 and Z4 are authored as ordinary Blueprint assets.  Referencing the
+	// generated class here also keeps the spawn-only fallback equivalent to the
+	// placed Showcase map, rather than silently reverting to a separate C++ demo.
+	static ConstructorHelpers::FClassFinder<AActor> DoorBlueprint(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/BP_Z2_Door"));
+	Zones.Add(MakeZone(DoorBlueprint.Class, TEXT("Door")));
 	Zones.Add(MakeZone(AHapbeatShowcaseZ3FishingActor::StaticClass(), TEXT("Fishing")));
-	Zones.Add(MakeZone(AHapbeatShowcaseZ4StreamConsoleActor::StaticClass(), TEXT("Stream Console")));
+	static ConstructorHelpers::FClassFinder<AActor> StreamConsoleBlueprint(
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/BP_Z4_StreamConsole"));
+	Zones.Add(MakeZone(StreamConsoleBlueprint.Class, TEXT("Stream Console")));
 	Zones.Add(MakeZone(AHapbeatShowcaseZ5ChargeShotActor::StaticClass(), TEXT("Charge Shot")));
 
 	// Same authored asset the zones default to, so Q fires through the same

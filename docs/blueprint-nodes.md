@@ -188,7 +188,7 @@ Showcase はすべての node を並べる場所ではなく、実際の gamepla
 | Z2 Door | `Play Hapbeat Event` による単発 event の発火 |
 | Z4 Stream Console | Stream Playback、Parameter Binding、Tick Trigger による連続制御 |
 
-現在の `BP_Z2_HapticRattle` は C++ の `Rattle Locked Door` を呼ぶ bridge であり、上の直接 BP 例ではありません。SDK node を直接使う Z2 / Z4 の asset を追加する更新で、この表の実例も配置します。Collision / Sequence は Z1 / Z3 の C++ 実装でも component の設定と lifecycle を確認できます。接続・Target・診断はこのページと[応用](./advanced.md)で確認します。Showcase 内の Actor / Component と Event Map の配線は[Showcase の触覚配線ガイド](./showcase-unreal.md)を参照してください。
+`BP_Z2_Door` と `BP_Z4_StreamConsole` は Showcase map に配置済みの直接 BP 例です。前者は Event Graph の `Play Hapbeat Event`、後者は loop の開始・停止と tick の Event Map 呼び出しを示します。Z4 の Components には、次の拡張で使う `Hapbeat Sequence`、Gain/Pan の `Hapbeat Parameter Binding`、`Hapbeat Tick Trigger` も設定済みです。Collision / Sequence は Z1 / Z3 の C++ 実装でも component の設定と lifecycle を確認できます。接続・Target・診断はこのページと[応用](./advanced.md)で確認します。Showcase 内の Actor / Component と Event Map の配線は[Showcase の触覚配線ガイド](./showcase-unreal.md)を参照してください。
 
 ## 実装の参照先
 

@@ -55,7 +55,7 @@ Content Browser の **C++ Classes > HapbeatSDKSamples > Public** には、クラ
 
 ### SDK の接続を最短で確認する
 
-1. Content Browser で `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z2_Door` をダブルクリックします。
+1. World Outliner で `Z2_Door` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z2_Door` をダブルクリックします。
 2. 開いた Blueprint Editor の左上 **Components** パネルが component tree です。`DoorHinge`、`DoorLeafMesh`、`DoorHandleMesh` を確認します。
 3. 左の **My Blueprint > Graphs > EventGraph** を開きます。
 4. `F` または `G` の Input Key node から、次の一本の実行線をたどります。

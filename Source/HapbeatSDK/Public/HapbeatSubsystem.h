@@ -496,6 +496,13 @@ private:
 
 	/** FUdpSocketReceiver callback — runs on the receiver worker thread. */
 	void HandleReceivedData(const FArrayReaderPtr& Reader, const FIPv4Endpoint& Sender);
+	/**
+	 * Resolve PONG RTT on the game thread. An unsolicited PONG with timestamp 0
+	 * has no clock sample, so it intentionally reports 0 rather than treating
+	 * the Unix epoch as a multi-decade round trip.
+	 */
+	static int64 ResolvePongRttUs(TMap<uint16, int64>& InOutPendingPings,
+		uint16 PongSeq, int64 NowMonotonicUs, int64 EchoedTimestampUs, int64 NowUnixUs);
 
 	/** Apply a parsed PONG/ERROR result on the game thread (marshalled from the worker thread). */
 	void OnPongGameThread(const FString& Endpoint, int64 RttUs, const FString& DeviceName, const FString& Address, const FString& Firmware);

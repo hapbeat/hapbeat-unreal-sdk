@@ -144,7 +144,10 @@ uint32 FHapbeatStreamRunnable::Run()
 		return 1;
 	}
 
-	Streamer->Start(FPlatformTime::Seconds());
+	{
+		FScopeLock Lock(&StreamerMutex);
+		Streamer->Start(FPlatformTime::Seconds());
+	}
 
 	while (!Streamer->IsDone())
 	{
@@ -155,6 +158,7 @@ uint32 FHapbeatStreamRunnable::Run()
 			// taken per session (see the class doc's END-uniqueness argument).
 			if (!bAbandonRequested.load(std::memory_order_acquire))
 			{
+				FScopeLock Lock(&StreamerMutex);
 				Streamer->SendEnd();
 			}
 			break;
@@ -167,15 +171,19 @@ uint32 FHapbeatStreamRunnable::Run()
 		{
 			if (!bAbandonRequested.load(std::memory_order_acquire))
 			{
+				FScopeLock Lock(&StreamerMutex);
 				Streamer->SendEnd();
 			}
 			break;
 		}
 
-		const double IterationStart = FPlatformTime::Seconds();
-		Streamer->Tick(IterationStart);
 		TArray<FGuid> Finished;
-		Streamer->DrainFinishedSourceIds(Finished);
+		const double IterationStart = FPlatformTime::Seconds();
+		{
+			FScopeLock Lock(&StreamerMutex);
+			Streamer->Tick(IterationStart);
+			Streamer->DrainFinishedSourceIds(Finished);
+		}
 		if (Finished.Num() > 0)
 		{
 			FScopeLock Lock(&SourceMutex);
@@ -275,12 +283,19 @@ bool FHapbeatStreamRunnable::AddSource(
 
 void FHapbeatStreamRunnable::DetachSource(const FGuid& SourceId)
 {
-	FScopeLock Lock(&SourceMutex);
-	PendingSources.RemoveAllSwap([&SourceId](const FPendingSource& Pending)
 	{
-		return Pending.SourceId == SourceId;
-	}, /*bAllowShrinking=*/false);
-	PendingDetachedSourceIds.Add(SourceId);
+		FScopeLock Lock(&SourceMutex);
+		PendingSources.RemoveAllSwap([&SourceId](const FPendingSource& Pending)
+		{
+			return Pending.SourceId == SourceId;
+		}, /*bAllowShrinking=*/false);
+	}
+
+	// Wait for an in-flight Tick()/SendRaw() to complete, then remove the cursor
+	// before another packet can be built. SetAddressOverride relies on this being
+	// a synchronous boundary: no old-route STREAM_DATA may follow its return.
+	FScopeLock StreamerLock(&StreamerMutex);
+	Streamer->RemoveSource(SourceId);
 }
 
 void FHapbeatStreamRunnable::DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds)
@@ -292,12 +307,8 @@ void FHapbeatStreamRunnable::DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds)
 
 bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 {
-	FScopeLock Lock(&SourceMutex);
-	for (const FGuid& SourceId : PendingDetachedSourceIds)
-	{
-		Streamer->RemoveSource(SourceId);
-	}
-	PendingDetachedSourceIds.Reset();
+	FScopeLock SourceLock(&SourceMutex);
+	FScopeLock StreamerLock(&StreamerMutex);
 	for (FPendingSource& Pending : PendingSources)
 	{
 		Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.Mirror);

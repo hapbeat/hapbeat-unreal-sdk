@@ -10,6 +10,7 @@
 #include "HAL/PlatformTime.h"
 #include "HAL/RunnableThread.h"
 #include "Misc/AutomationTest.h"
+#include <thread>
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -56,11 +57,24 @@ namespace
 	{
 	public:
 		FRecordingStreamRunnable(const FGuid& SourceId, TArray<uint8>&& Pcm16,
-			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror)
+			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror,
+			const FString& Target = TEXT("player_1/pos_l_arm"))
 			: FHapbeatStreamRunnable(SourceId, MoveTemp(Pcm16), 16000, 2,
-				TEXT("player_1/pos_l_arm"), Mirror, []() { return static_cast<uint16>(1); },
+				Target, Mirror, []() { return static_cast<uint16>(1); },
 				nullptr, 7700, OneEndpoint(TEXT("192.0.2.10")), 0.05f)
 		{
+		}
+
+		void BlockFirstDataSend()
+		{
+			bBlockFirstData.store(true, std::memory_order_release);
+			bDataSendEntered.store(false, std::memory_order_release);
+			bReleaseBlockedData.store(false, std::memory_order_release);
+		}
+
+		void ReleaseBlockedDataSend()
+		{
+			bReleaseBlockedData.store(true, std::memory_order_release);
 		}
 
 		bool SnapshotEndpoint(FString& OutIp, int32& OutPort) const
@@ -71,6 +85,8 @@ namespace
 		std::atomic<int32> BeginCount{0};
 		std::atomic<int32> DataCount{0};
 		std::atomic<int32> EndCount{0};
+		std::atomic<int32> FirstDataOffset{-1};
+		std::atomic<bool> bDataSendEntered{false};
 
 	protected:
 		virtual void SendRaw(const TArray<uint8>& Packet) override
@@ -85,6 +101,23 @@ namespace
 			}
 			else if (Packet[3] == FHapbeatProtocol::CmdStreamData)
 			{
+				if (bBlockFirstData.exchange(false, std::memory_order_acq_rel))
+				{
+					bDataSendEntered.store(true, std::memory_order_release);
+					while (!bReleaseBlockedData.load(std::memory_order_acquire))
+					{
+						FPlatformProcess::Yield();
+					}
+				}
+				if (Packet.Num() >= FHapbeatProtocol::HeaderSize + 4)
+				{
+					const int32 Offset = static_cast<int32>(Packet[8])
+						| (static_cast<int32>(Packet[9]) << 8)
+						| (static_cast<int32>(Packet[10]) << 16)
+						| (static_cast<int32>(Packet[11]) << 24);
+					int32 Expected = -1;
+					FirstDataOffset.compare_exchange_strong(Expected, Offset, std::memory_order_relaxed);
+				}
 				DataCount.fetch_add(1, std::memory_order_relaxed);
 			}
 			else if (Packet[3] == FHapbeatProtocol::CmdStreamEnd)
@@ -92,6 +125,10 @@ namespace
 				EndCount.fetch_add(1, std::memory_order_relaxed);
 			}
 		}
+
+	private:
+		std::atomic<bool> bBlockFirstData{false};
+		std::atomic<bool> bReleaseBlockedData{false};
 	};
 }
 
@@ -328,6 +365,20 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("P1 -> known P2 stops old endpoint DATA"),
 		OverrideRunner.DataCount.load(std::memory_order_relaxed), 0);
 
+	// The known P2 endpoint starts a fresh endpoint session from the logical
+	// source's frame zero: one BEGIN, then DATA whose offset is zero. This is the
+	// in-memory seam for StartEndpointSession's socket-backed worker.
+	FRecordingStreamRunnable P2Rejoin(OverrideSourceId, TArray<uint8>(OverrideSource.CanonicalPcm16),
+		OverrideMirror, P2);
+	TestTrue(TEXT("known P2 rejoin runner initializes"), P2Rejoin.Init());
+	P2Rejoin.Run();
+	TestEqual(TEXT("known P2 rejoin sends one BEGIN"),
+		P2Rejoin.BeginCount.load(std::memory_order_relaxed), 1);
+	TestTrue(TEXT("known P2 rejoin sends DATA"),
+		P2Rejoin.DataCount.load(std::memory_order_relaxed) > 0);
+	TestEqual(TEXT("known P2 rejoin first DATA starts at frame zero"),
+		P2Rejoin.FirstDataOffset.load(std::memory_order_relaxed), 0);
+
 	OverrideRouting->SetAddressOverride(3, UHapbeatSubsystem::AddressOverrideDisabled);
 	TestEqual(TEXT("unknown P3 is Deferred"), OverridePlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
 	TestEqual(TEXT("unknown P3 requests one fake PING"), OverrideRouting->StreamDiscoveryRequestCount, 1);
@@ -356,6 +407,10 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("clear keeps second source on its authored endpoint"), SecondSource.EndpointKeys.Contains(P2Key));
 	TestEqual(TEXT("clear preserves independent logical source routing"),
 		OverrideSource.EndpointKeys.Num() + SecondSource.EndpointKeys.Num(), 2);
+
+	TMap<uint16, int64> UnsolicitedPings;
+	TestEqual(TEXT("timestamp-zero unsolicited PONG has no RTT estimate"),
+		UHapbeatSubsystem::ResolvePongRttUs(UnsolicitedPings, 42, 1'000, 0, 2'000'000), 0LL);
 	OverrideRouting->StreamSessions.Empty(); // OverrideRunner is stack-owned by this test.
 	return true;
 }
@@ -404,6 +459,49 @@ bool FHapbeatStreamRunnableLifecycleTest::RunTest(const FString& Parameters)
 		Detached.DataCount.load(std::memory_order_relaxed), 0);
 	TestEqual(TEXT("empty detached session closes normally"),
 		Detached.EndCount.load(std::memory_order_relaxed), 1);
+
+	// DetachSource must wait for the packet currently at the send boundary, then
+	// guarantee that the looping source produces no later DATA on this endpoint.
+	auto RaceMirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+	RaceMirror->bLoop.store(true, std::memory_order_relaxed);
+	const FGuid RaceId = FGuid::NewGuid();
+	FRecordingStreamRunnable Race(RaceId, MakeStereoPcm(1000, 160), RaceMirror);
+	Race.BlockFirstDataSend();
+	FRunnableThread* RaceThread = FRunnableThread::Create(&Race, TEXT("HapbeatDetachBarrierTest"));
+	TestNotNull(TEXT("race runner thread starts"), RaceThread);
+	if (RaceThread != nullptr)
+	{
+		const double SendDeadline = FPlatformTime::Seconds() + 1.0;
+		while (!Race.bDataSendEntered.load(std::memory_order_acquire)
+			&& FPlatformTime::Seconds() < SendDeadline)
+		{
+			FPlatformProcess::Yield();
+		}
+		TestTrue(TEXT("race runner reaches blocked DATA boundary"),
+			Race.bDataSendEntered.load(std::memory_order_acquire));
+
+		std::atomic<bool> bDetachReturned{false};
+		std::thread Detacher([&Race, RaceId, &bDetachReturned]()
+		{
+			Race.DetachSource(RaceId);
+			bDetachReturned.store(true, std::memory_order_release);
+		});
+		Race.ReleaseBlockedDataSend();
+		Detacher.join();
+		TestTrue(TEXT("detach returns after the packet boundary"),
+			bDetachReturned.load(std::memory_order_acquire));
+		const int32 DataAtDetachReturn = Race.DataCount.load(std::memory_order_acquire);
+		const double QuietDeadline = FPlatformTime::Seconds() + 0.100;
+		while (FPlatformTime::Seconds() < QuietDeadline)
+		{
+			FPlatformProcess::Yield();
+		}
+		TestEqual(TEXT("no STREAM_DATA follows detach return"),
+			Race.DataCount.load(std::memory_order_acquire), DataAtDetachReturn);
+		Race.Abandon();
+		RaceThread->Kill(true);
+		delete RaceThread;
+	}
 	return true;
 }
 

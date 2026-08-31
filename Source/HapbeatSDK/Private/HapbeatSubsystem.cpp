@@ -552,6 +552,21 @@ void UHapbeatSubsystem::Ping()
 	SendDiscoveryPacket(FHapbeatProtocol::BuildPing(PingSeq, TimestampUs));
 }
 
+int64 UHapbeatSubsystem::ResolvePongRttUs(TMap<uint16, int64>& InOutPendingPings,
+	uint16 PongSeq, int64 NowMonotonicUs, int64 EchoedTimestampUs, int64 NowUnixUs)
+{
+	int64 SentMonotonicUs = 0;
+	if (InOutPendingPings.RemoveAndCopyValue(PongSeq, SentMonotonicUs))
+	{
+		return FMath::Max<int64>(0, NowMonotonicUs - SentMonotonicUs);
+	}
+
+	// Firmware may announce itself with a PONG that was not caused by one of
+	// our PINGs. Timestamp 0 in that form is not a time sample; retain the PONG
+	// for endpoint/liveness discovery but do not fabricate an RTT from epoch 0.
+	return EchoedTimestampUs > 0 ? FMath::Max<int64>(0, NowUnixUs - EchoedTimestampUs) : 0;
+}
+
 UHapbeatStreamPlayback* UHapbeatSubsystem::GetActivePlayback() const
 {
 	for (UHapbeatStreamPlayback* Playback : ActivePlaybacks)
@@ -1249,21 +1264,8 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 				{
 					return;
 				}
-				int64 SentMono = 0;
-				int64 RttUs;
-				if (Self->PendingPings.RemoveAndCopyValue(PongSeq, SentMono))
-				{
-					RttUs = NowMono - SentMono;
-				}
-				else
-				{
-					// Echoed timestamp is Unix-epoch µs; compare against Unix now.
-					RttUs = Self->UnixMicros() - EchoedTs;
-				}
-				if (RttUs < 0)
-				{
-					RttUs = 0;
-				}
+				const int64 RttUs = ResolvePongRttUs(
+					Self->PendingPings, PongSeq, NowMono, EchoedTs, Self->UnixMicros());
 
 				Self->DevicePongTimes.Add(SenderIp, FPlatformTime::Seconds());
 

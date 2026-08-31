@@ -23,9 +23,11 @@ class FInternetAddr;
  * (commits 94ec760 / 7c0aafc); this is that fix, ported.
  *
  * Threading contract (read before touching this class):
- *   - Run() owns ALL of FHapbeatStreamer's mutable session state (byte cursor,
- *     wire offset, frames-sent, done flag) — single-writer, so no locks are
- *     needed for any of it.
+ *   - Run() owns FHapbeatStreamer's pacing and wire state. DetachSource() is
+ *     the one game-thread exception: it takes StreamerMutex before removing a
+ *     cursor, which is also held around every worker tick/send. Therefore when
+ *     DetachSource() returns, no STREAM_DATA containing that source can still
+ *     be sent on this endpoint.
  *   - The ONLY source state shared with the game thread is the
  *     Gain/Pan/Loop/bStopped
  *     ATOMIC mirror (FHapbeatStreamGainMirror — never the UHapbeatStreamPlayback
@@ -163,9 +165,14 @@ private:
 	 * STREAM_END; it is either drained or rejected and started as a new session.
 	 */
 	mutable FCriticalSection SourceMutex;
+	/**
+	 * Serializes every FHapbeatStreamer mutation/send with DetachSource(). It is
+	 * deliberately a packet boundary barrier, not a queued request: override
+	 * routing may return only after the retired endpoint cannot emit more DATA.
+	 */
+	mutable FCriticalSection StreamerMutex;
 	mutable FCriticalSection DestinationMutex;
 	TArray<FPendingSource> PendingSources;
-	TSet<FGuid> PendingDetachedSourceIds;
 	TArray<FGuid> FinishedSourceIds;
 	bool bAcceptingSources = true;
 	/** Empty endpoint sessions stay open briefly so adjacent sources share one wire stream. */

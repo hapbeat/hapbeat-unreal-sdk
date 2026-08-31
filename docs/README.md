@@ -16,7 +16,8 @@
 
 - [getting-started.md](./getting-started.md) — インストール / 最短の疎通確認 / EventMap とトリガの使い方
 - [advanced.md](./advanced.md) — address override、Target、Showcase の補足
-- [showcase-codex.md](./showcase-codex.md) — Showcase の起動、UE 用語、5 zone の実装と調整方法
+- [showcase-codex.md](./showcase-codex.md) — Showcase Z1〜Z5 の Actor / Component と Hapbeat Event Map の触覚配線
+- [unity-to-unreal-codex.md](./unity-to-unreal-codex.md) — Unity 経験者向けの Unreal Editor、PIE、Actor / Component の補足
 
 リポジトリ直下にも次がある:
 

@@ -360,6 +360,19 @@ void AHapbeatShowcaseZ3FishingActor::UpdateRodPreviewVisual()
 		return;
 	}
 
+#if WITH_EDITORONLY_DATA
+	if (RodPreviewMesh != nullptr && RodPreviewMesh->GetAttachParent() != RodPreviewMount)
+	{
+		// RodPreviewMesh existed on placed actors before RodPreviewMount was added.
+		// Their serialized attachment still points at RootComponent, and changing
+		// SetupAttachment in the native constructor does not replace that instance
+		// data. Repair the registered component graph during construction so the
+		// editor preview and its mesh-local marker use the same mount transform.
+		RodPreviewMesh->AttachToComponent(
+			RodPreviewMount, FAttachmentTransformRules::SnapToTargetIncludingScale);
+	}
+#endif
+
 	if (RodMeshAsset == nullptr)
 	{
 		RodPreviewMount->SetRelativeTransform(FTransform::Identity);

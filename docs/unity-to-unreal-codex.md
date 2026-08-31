@@ -51,4 +51,3 @@ Z1 pin、Z3 Shark、Z5 Target の Hapbeat Event Map / entry ID は `BeginPlay` �
 ## C++ を変更した後
 
 通常の Details / Event Map の編集は保存して PIE を再起動すれば反映されます。C++ を変更した場合は build が必要です。特に constructor で作る component、既定値、Class Default Object（CDO）を変更した時は、Live Coding だけで既存 Level の instance に反映されないことがあります。その場合は Editor を閉じて通常 build を行い、Editor を開き直してください。
-

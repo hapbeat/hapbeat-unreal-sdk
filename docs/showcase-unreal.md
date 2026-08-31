@@ -8,11 +8,13 @@ sidebar:
 
 Showcase は、Unreal Engine 5（UE5）で Hapbeat の触覚イベントをゲームの出来事へ接続する、5 つの実例です。このページは、まず **Editor 上で「どの Actor / Component が、どの Hapbeat Event Map entry を再生するか」** を確認・調整するための手引きです。
 
-Showcase の標準挙動は C++ で実装されています。通信、Event Map の解決、physics callback、状態機械を 1 本の実装に保つためです。Z2 には、同じ C++ の状態・触覚経路を Blueprint から呼ぶための `Rattle Locked Door` node も公開しています。各 zone の Details と component tree を起点に確認します。
+Showcase は C++ と Blueprint を役割で分けます。通信、Event Map の解決、physics callback、状態機械は C++ に 1 本だけ実装し、イベント駆動のゲーム固有配線は Blueprint からその入口を呼びます。Z2 には、この境界を確認できる child Blueprint の `BP_Z2_HapticRattle` と、同じ C++ の状態・触覚経路を呼ぶ `Rattle Locked Door` node があります。各 zone の Details と component tree を起点に確認します。
 
 ## C++ と Blueprint の使い分け
 
-SDK の transport、Event Map 解決、collision / sequence component、複数 frame にまたがる状態は C++ が担当します。Blueprint は level 固有の入力、UI、演出、gameplay event を既存の C++ entry point へ接続します。両方に同じ状態機械や衝突判定を実装し、Details の enum で選ぶ方式にはしません。二重発火、cooldown の差、修正漏れを防ぐためです。
+どちらかを常に優先する規則はありません。[Epic の C++ / Blueprint のガイド](https://dev.epicgames.com/documentation/en-us/unreal-engine/coding-in-unreal-engine-blueprint-vs-cplusplus)と[Blueprint のベストプラクティス](https://dev.epicgames.com/documentation/en-us/unreal-engine/blueprint-best-practices-in-unreal-engine)に沿い、Blueprint はイベント駆動の level 固有挙動、UI、演出、素早く反復する gameplay 配線に使います。C++ は、SDK の transport、Event Map 解決、collision / sequence component、外部ライブラリ、高頻度 Tick、大量処理、複数 frame にまたがる状態に使います。Blueprint の実行コストを理由に先回りして C++ 化するのではなく、計測でボトルネックが分かった箇所だけを C++ 化します。
+
+同じ状態機械や衝突判定を C++ と Blueprint の両方に持たせる方式にはしません。二重発火、cooldown の差、修正漏れを防ぐためです。Blueprint は公開した C++ entry point を呼び、C++ は必要な状態判定と触覚発火を 1 箇所で担います。
 
 Z2 はこの境界の例です。`Rattle Locked Door` は C++ の `RattleTrigger` をそのまま使うので、BP から呼んでも `z2_door_rattle` の Event Map entry、SFX、door の揺れを同じ gate で発火します。
 
@@ -101,10 +103,10 @@ pin 内部の collision setting 自体は `AHapbeatShowcaseZ1PinActor` の C++ c
 
 これは「ゲーム内の任意の Blueprint event を、既存の Z2 の触覚経路へ接続する」最小例です。
 
-1. Content Browser で右クリック → **Blueprint Class** → **All Classes** を開き、`HapbeatShowcaseZ2DoorActor` を親にして child Blueprint を作ります。
-2. child Blueprint を開き、**Event Graph** で任意の event（例: `T` キー、UI button の On Clicked、quest event）を置きます。
-3. `Z2_Door` の参照から **`Rattle Locked Door`** node を呼びます。
-4. `[Compile]` と保存後、level の `Z2_Door` をその child Blueprint に置き換えます。
+1. Content Browser の `HapbeatSamples/Showcase/BP_Z2_HapticRattle` を開きます。これは `HapbeatShowcaseZ2DoorActor` を親にした、配布済みの child Blueprint です。
+2. **Event Graph** の `Request Locked Door Rattle` は、C++ の **`Rattle Locked Door`** node へ配線済みです。任意の event（例: `T` キー、UI button の On Clicked、quest event）からこの custom event を呼ぶか、同じ C++ node へ接続します。
+3. 他の Blueprint から呼ぶときは、level 上の `Z2_Door` の参照から **`Rattle Locked Door`** node を呼びます。
+4. `[Compile]` と保存後、level の `Z2_Door` をこの child Blueprint に置き換えます。
 5. PIE で `L` を押して door を lock してから、作った event を発火します。door の揺れ、SFX、`z2_door_rattle` が同時に発火します。unlock / closed / opening / closing 中は node が no-op です。
 
 この node は `AHapbeatShowcaseZ2DoorActor::RattleLockedDoor()` です。BP は入力時点だけを決め、lock 状態の確認・rattle animation・`RattleTrigger->Fire()` は C++ の 1 箇所に残ります。自作 actor では、直接 **`Play Hapbeat Event`** node を使うのが対応する方法です。

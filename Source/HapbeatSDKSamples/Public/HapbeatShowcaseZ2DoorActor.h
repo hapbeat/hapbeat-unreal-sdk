@@ -117,6 +117,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Door")
 	void DebugSetDoorOpen(bool bOpen);
 
+	/**
+	 * Drive the locked-door rattle from a Blueprint event. This deliberately
+	 * shares the same state check, haptic trigger and SFX path as the G-key
+	 * action rather than making a second Blueprint-only playback implementation.
+	 * It is a no-op unless the door is currently Locked.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Door", meta = (DisplayName = "Rattle Locked Door"))
+	void RattleLockedDoor();
+
 	/** Yaw swing target for the Open state, degrees. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Door", meta = (ClampMin = "10.0", ClampMax = "170.0"))
 	float OpenYawDegrees = 90.0f;

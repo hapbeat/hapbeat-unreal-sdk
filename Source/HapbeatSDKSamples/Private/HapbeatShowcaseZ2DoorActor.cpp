@@ -455,19 +455,29 @@ void AHapbeatShowcaseZ2DoorActor::HandleActionKey()
 		break;
 
 	case EHapbeatZ2DoorState::Locked:
-		bRattling = true;
-		RattleElapsedSeconds = 0.0f;
-		if (RattleTrigger != nullptr)
-		{
-			RattleTrigger->Fire();
-		}
-		PlayDoorSound(RattleSound);
+		RattleLockedDoor();
 		break;
 
 	default:
 		// Closed(unlocked) has nothing to slam or rattle; Opening/Closing ignore input.
 		break;
 	}
+}
+
+void AHapbeatShowcaseZ2DoorActor::RattleLockedDoor()
+{
+	if (State != EHapbeatZ2DoorState::Locked)
+	{
+		return;
+	}
+
+	bRattling = true;
+	RattleElapsedSeconds = 0.0f;
+	if (RattleTrigger != nullptr)
+	{
+		RattleTrigger->Fire();
+	}
+	PlayDoorSound(RattleSound);
 }
 
 void AHapbeatShowcaseZ2DoorActor::HandleLockKey()

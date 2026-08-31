@@ -13,18 +13,22 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Curves/CurveFloat.h"
 #include "Editor.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/TimelineTemplate.h"
 #include "EngineUtils.h"
 #include "FileHelpers.h"
 #include "InputCoreTypes.h"
 #include "K2Node_CallFunction.h"
 #include "K2Node_InputKey.h"
+#include "K2Node_Timeline.h"
 #include "K2Node_VariableGet.h"
+#include "Kismet/KismetMathLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "UObject/Package.h"
@@ -75,6 +79,17 @@ UBlueprint* LoadOrCreateBlueprint(const TCHAR* AssetName)
 
 void ClearGeneratedGraph(UBlueprint* Blueprint)
 {
+	// Timeline templates are Blueprint-owned assets, not graph nodes.  Remove
+	// them explicitly so re-running the generator remains idempotent.
+	const TArray<TObjectPtr<UTimelineTemplate>> ExistingTimelines = Blueprint->Timelines;
+	for (UTimelineTemplate* Timeline : ExistingTimelines)
+	{
+		if (Timeline != nullptr)
+		{
+			FBlueprintEditorUtils::RemoveTimeline(Blueprint, Timeline, true);
+		}
+	}
+
 	for (UEdGraph* Graph : Blueprint->UbergraphPages)
 	{
 		if (Graph != nullptr)
@@ -148,6 +163,21 @@ UK2Node_CallFunction* AddCall(UEdGraph* Graph, UClass* Class, FName Function, in
 	return Node;
 }
 
+UK2Node_Timeline* AddTimeline(UEdGraph* Graph, UTimelineTemplate* Timeline, int32 X, int32 Y)
+{
+	check(Timeline != nullptr);
+	UK2Node_Timeline* Node = NewObject<UK2Node_Timeline>(Graph);
+	Node->TimelineName = Timeline->GetVariableName();
+	Node->TimelineGuid = Timeline->TimelineGuid;
+	Graph->AddNode(Node, false, false);
+	Node->NodePosX = X;
+	Node->NodePosY = Y;
+	Node->CreateNewGuid();
+	Node->PostPlacedNewNode();
+	Node->AllocateDefaultPins();
+	return Node;
+}
+
 UK2Node_VariableGet* AddComponentGet(UEdGraph* Graph, const TCHAR* ComponentName, int32 X, int32 Y)
 {
 	UK2Node_VariableGet* Node = AddNode<UK2Node_VariableGet>(Graph, X, Y);
@@ -177,6 +207,25 @@ void ConfigurePlayEvent(UK2Node_CallFunction* Node, UHapbeatEventMap* EventMap, 
 	// {xxxxxxxx-...} display form is not accepted by ImportText for a struct pin.
 	FindPinChecked(Node, TEXT("Entry"))->DefaultValue = FString::Printf(
 		TEXT("(EntryId=(A=%u,B=%u,C=%u,D=%u))"), EntryId.A, EntryId.B, EntryId.C, EntryId.D);
+}
+
+UTimelineTemplate* CreateDoorMotionTimeline(UBlueprint* Blueprint)
+{
+	UTimelineTemplate* Timeline = FBlueprintEditorUtils::AddNewTimeline(Blueprint, TEXT("DoorMotion"));
+	check(Timeline != nullptr);
+	Timeline->TimelineLength = 0.65f;
+	Timeline->LengthMode = TL_TimelineLength;
+
+	FTTFloatTrack OpenAlpha;
+	OpenAlpha.SetTrackName(TEXT("OpenAlpha"), Timeline);
+	OpenAlpha.CurveFloat = NewObject<UCurveFloat>(Blueprint->GeneratedClass, NAME_None, RF_Public);
+	const FKeyHandle ClosedKey = OpenAlpha.CurveFloat->FloatCurve.AddKey(0.0f, 0.0f);
+	const FKeyHandle OpenKey = OpenAlpha.CurveFloat->FloatCurve.AddKey(0.65f, 1.0f);
+	OpenAlpha.CurveFloat->FloatCurve.SetKeyInterpMode(ClosedKey, RCIM_Linear);
+	OpenAlpha.CurveFloat->FloatCurve.SetKeyInterpMode(OpenKey, RCIM_Linear);
+	Timeline->FloatTracks.Add(OpenAlpha);
+	Timeline->AddDisplayTrack(FTTTrackId(FTTTrackBase::TT_FloatInterp, 0));
+	return Timeline;
 }
 
 USCS_Node* AddSceneRoot(UBlueprint* Blueprint)
@@ -254,18 +303,33 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	const FGuid OpenId = FindEntryId(EventMap, TEXT("z2_door_open"));
 	const FGuid CloseId = FindEntryId(EventMap, TEXT("z2_door_close"));
 	const FGuid LockId = FindEntryId(EventMap, TEXT("z2_door_lock"));
+	UTimelineTemplate* DoorMotionTemplate = CreateDoorMotionTimeline(Blueprint);
+	UK2Node_Timeline* DoorMotion = AddTimeline(Graph, DoorMotionTemplate, 0, -120);
+	UK2Node_CallFunction* LerpRotation = AddCall(Graph, UKismetMathLibrary::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RLerp), 280, -120);
+	FindPinChecked(LerpRotation, TEXT("A"))->DefaultValue = TEXT("(Pitch=0.000000,Yaw=0.000000,Roll=0.000000)");
+	FindPinChecked(LerpRotation, TEXT("B"))->DefaultValue = TEXT("(Pitch=0.000000,Yaw=90.000000,Roll=0.000000)");
+	FindPinChecked(LerpRotation, TEXT("bShortestPath"))->DefaultValue = TEXT("false");
+	UK2Node_VariableGet* HingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 280, 40);
+	UK2Node_CallFunction* SetHingeRotation = AddCall(Graph, USceneComponent::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 560, -30);
+	ConnectPins(DoorMotion->GetUpdatePin(), SetHingeRotation->GetExecPin());
+	ConnectPins(DoorMotion->GetTrackPin(TEXT("OpenAlpha")), FindPinChecked(LerpRotation, TEXT("Alpha")));
+	ConnectPins(LerpRotation->GetReturnValuePin(), FindPinChecked(SetHingeRotation, TEXT("NewRotation")));
+	ConnectPins(FindPinChecked(HingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetHingeRotation));
 
-	auto AddDoorAction = [&](const FKey& Key, const FGuid& EventId, int32 Y)
+	auto AddDoorAction = [&](const FKey& Key, const FGuid& EventId, UEdGraphPin* MotionPin, int32 Y)
 	{
 		UK2Node_InputKey* Input = AddKeyEvent(Graph, Key, -800, Y);
 		UK2Node_CallFunction* Play = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
 			GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, PlayHapbeatEvent), -500, Y);
 		ConfigurePlayEvent(Play, EventMap, EventId);
 		ConnectPins(FindPinChecked(Input, TEXT("Pressed")), Play->GetExecPin());
+		ConnectPins(Play->GetThenPin(), MotionPin);
 	};
 
-	AddDoorAction(EKeys::F, OpenId, -180);
-	AddDoorAction(EKeys::G, CloseId, 20);
+	AddDoorAction(EKeys::F, OpenId, DoorMotion->GetPlayFromStartPin(), -180);
+	AddDoorAction(EKeys::G, CloseId, DoorMotion->GetReversePin(), 20);
 	UK2Node_InputKey* LockInput = AddKeyEvent(Graph, EKeys::L, -800, 220);
 	UK2Node_CallFunction* LockPlay = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, PlayHapbeatEvent), -500, 220);

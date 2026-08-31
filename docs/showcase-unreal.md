@@ -51,7 +51,32 @@ Content Browser の **C++ Classes > HapbeatSDKSamples > Public** には、クラ
 
 ## Z2 Swing Door — Blueprint からイベントを発火する
 
-`BP_Z2_Door` は、Event Graph から **Play Hapbeat Event** node を直接呼ぶ Blueprint 完結の例です。Content Browser の `HapbeatSamples/Showcase/BP_Z2_Door` を開くと、次の event を確認できます。
+`BP_Z2_Door` は、ドアの開閉と **Play Hapbeat Event** を同じ Event Graph で接続する Blueprint 完結の例です。
+
+### SDK の接続を最短で確認する
+
+1. Content Browser で `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z2_Door` をダブルクリックします。
+2. 開いた Blueprint Editor の左上 **Components** パネルが component tree です。`DoorHinge`、`DoorLeafMesh`、`DoorHandleMesh` を確認します。
+3. 左の **My Blueprint > Graphs > EventGraph** を開きます。
+4. `F` または `G` の Input Key node から、次の一本の実行線をたどります。
+
+```text
+F Pressed
+  → Play Hapbeat Event (z2_door_open)
+  → DoorMotion: Play from Start
+
+G Pressed
+  → Play Hapbeat Event (z2_door_close)
+  → DoorMotion: Reverse
+
+DoorMotion: Update
+  → Lerp (Rotator)
+  → Set Relative Rotation (Target: DoorHinge)
+```
+
+`DoorMotion` の float track `OpenAlpha` が 0.65 秒で 0 から 1 へ変化し、`DoorHinge` を Yaw 0° から 90° へ回転させます。開閉と触覚の開始点は、F/G の Input Key node で共通です。
+
+この Blueprint には `OpenTrigger` / `CloseTrigger` component はありません。ドアの可動部分は `DoorHinge` です。
 
 | Event | entry |
 | --- | --- |
@@ -59,7 +84,7 @@ Content Browser の **C++ Classes > HapbeatSDKSamples > Public** には、クラ
 | Close Door | `z2_door_close` |
 | Lock Door | `z2_door_lock` |
 
-`Z2_Door` を選び、Details の **Event Map Override** で使用する map を選びます。ドアの位置・開閉軸・回転量は同 Actor の Details で編集します。
+各 **Play Hapbeat Event** node の `Map` と `Entry` pin で再生先を確認します。entry の Clip、Gain、Target は `EM_Showcase` で編集します。
 
 ## Z3 Fishing — sequence と gain binding
 

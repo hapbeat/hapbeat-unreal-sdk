@@ -409,8 +409,11 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 		OverrideSource.EndpointKeys.Num() + SecondSource.EndpointKeys.Num(), 2);
 
 	TMap<uint16, int64> UnsolicitedPings;
+	UnsolicitedPings.Add(0, 500);
 	TestEqual(TEXT("timestamp-zero unsolicited PONG has no RTT estimate"),
-		UHapbeatSubsystem::ResolvePongRttUs(UnsolicitedPings, 42, 1'000, 0, 2'000'000), 0LL);
+		UHapbeatSubsystem::ResolvePongRttUs(UnsolicitedPings, 0, 1'000, 0, 2'000'000), 0LL);
+	TestTrue(TEXT("timestamp-zero unsolicited PONG preserves wrapped pending PING"),
+		UnsolicitedPings.Contains(0));
 	OverrideRouting->StreamSessions.Empty(); // OverrideRunner is stack-owned by this test.
 	return true;
 }

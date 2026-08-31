@@ -555,16 +555,22 @@ void UHapbeatSubsystem::Ping()
 int64 UHapbeatSubsystem::ResolvePongRttUs(TMap<uint16, int64>& InOutPendingPings,
 	uint16 PongSeq, int64 NowMonotonicUs, int64 EchoedTimestampUs, int64 NowUnixUs)
 {
+	// Timestamp 0 is the protocol sentinel for an unsolicited PONG. It takes
+	// priority over the sequence number because the uint16 sequence can wrap;
+	// consuming a coincident pending entry would turn discovery into a false RTT
+	// sample and lose the real PING's measurement.
+	if (EchoedTimestampUs <= 0)
+	{
+		return 0;
+	}
+
 	int64 SentMonotonicUs = 0;
 	if (InOutPendingPings.RemoveAndCopyValue(PongSeq, SentMonotonicUs))
 	{
 		return FMath::Max<int64>(0, NowMonotonicUs - SentMonotonicUs);
 	}
 
-	// Firmware may announce itself with a PONG that was not caused by one of
-	// our PINGs. Timestamp 0 in that form is not a time sample; retain the PONG
-	// for endpoint/liveness discovery but do not fabricate an RTT from epoch 0.
-	return EchoedTimestampUs > 0 ? FMath::Max<int64>(0, NowUnixUs - EchoedTimestampUs) : 0;
+	return FMath::Max<int64>(0, NowUnixUs - EchoedTimestampUs);
 }
 
 UHapbeatStreamPlayback* UHapbeatSubsystem::GetActivePlayback() const

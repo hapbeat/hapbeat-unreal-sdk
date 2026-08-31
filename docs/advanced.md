@@ -23,6 +23,9 @@ Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
 
 ## Showcase サンプル
 
+起動、UE 用語、5 zone の時系列、EventMap / stream と Details 調整は
+[Showcase サンプルガイド](./showcase-codex.md) を参照してください。
+
 主要な実装手法をゾーン別に確認できます。コンテンツブラウザの設定で **Show Plugin Content**
 （プラグインのコンテンツを表示）を有効にし、
 `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Maps/Showcase` を開いて ▶ Play します。

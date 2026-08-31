@@ -15,6 +15,8 @@
 ## 収録ドキュメント
 
 - [getting-started.md](./getting-started.md) — インストール / 最短の疎通確認 / EventMap とトリガの使い方
+- [advanced.md](./advanced.md) — address override、Target、Showcase の補足
+- [showcase-codex.md](./showcase-codex.md) — Showcase の起動、UE 用語、5 zone の実装と調整方法
 
 リポジトリ直下にも次がある:
 

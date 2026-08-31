@@ -430,6 +430,10 @@ private:
 	 */
 	bool StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPlayback* Playback, const FString& Target, bool bLoop);
 	void RegisterStreamEndpoint(const FString& Ip, int32 InPort, const FString& Address, double NowSeconds);
+	/** Recompute each active source's effective target from its authored target and the live override. */
+	void RefreshStreamSourceTargets();
+	/** Request immediate discovery only while an active source has no matching exact endpoint. */
+	void RequestStreamDiscoveryForDeferredSources();
 	void ReconcileStreamSources();
 	void StopStreamSession(const FString& EndpointKey);
 	void AbandonStreamSession(const FString& EndpointKey);
@@ -629,6 +633,9 @@ private:
 	struct FStreamSource
 	{
 		TArray<uint8> CanonicalPcm16;
+		/** Immutable target supplied by StreamClip/EventMap; overrides never mutate this authored value. */
+		FString AuthoredTarget;
+		/** Effective target used to assign this logical source to PONG-confirmed endpoint sessions. */
 		FString ResolvedTarget;
 		TWeakObjectPtr<UHapbeatStreamPlayback> Playback;
 		TSet<FString> EndpointKeys;
@@ -679,4 +686,10 @@ private:
 	 * the same IPs may belong to different devices.
 	 */
 	TMap<FString, FString> DeviceAddresses;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** Test-only discovery seam: records a request without opening or sending on a UDP socket. */
+	bool bSuppressStreamDiscoveryForAutomationTest = false;
+	int32 StreamDiscoveryRequestCount = 0;
+#endif
 };

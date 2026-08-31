@@ -286,6 +286,77 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("detached old-address source emits no DATA"),
 		Runner.DataCount.load(std::memory_order_relaxed), 0);
 	Migrating->StreamSessions.Empty(); // Runner is stack-owned by this test.
+
+	// Address overrides re-route ACTIVE logical sources without restarting
+	// playback. The fake discovery seam proves an unknown target asks for a PING
+	// without opening a socket or emitting a real UDP packet.
+	UHapbeatSubsystem* OverrideRouting = NewTestSubsystem();
+	OverrideRouting->bSuppressStreamDiscoveryForAutomationTest = true;
+	const double OverrideNow = FPlatformTime::Seconds();
+	const FString P1 = TEXT("player_1/pos_l_arm");
+	const FString P2 = TEXT("player_2/pos_l_arm");
+	const FString P3 = TEXT("player_3/pos_l_arm");
+	const FString P1Key = TEXT("192.0.2.60:7700|player_1/pos_l_arm");
+	const FString P2Key = TEXT("192.0.2.61:7700|player_2/pos_l_arm");
+	const FString P3Key = TEXT("192.0.2.62:7700|player_3/pos_l_arm");
+	OverrideRouting->RegisterStreamEndpoint(TEXT("192.0.2.60"), 7700, P1, OverrideNow);
+	OverrideRouting->RegisterStreamEndpoint(TEXT("192.0.2.61"), 7700, P2, OverrideNow);
+
+	UHapbeatStreamPlayback* OverridePlayback = NewObject<UHapbeatStreamPlayback>(OverrideRouting);
+	OverridePlayback->Init(1.0f, 1.0f);
+	OverridePlayback->SetActive();
+	const FGuid OverrideSourceId = OverridePlayback->Id;
+	UHapbeatSubsystem::FStreamSource& OverrideSource = OverrideRouting->StreamSources.Add(OverrideSourceId);
+	OverrideSource.CanonicalPcm16 = MakeStereoPcm(1000, 160);
+	OverrideSource.AuthoredTarget = P1;
+	OverrideSource.ResolvedTarget = P1;
+	OverrideSource.Playback = OverridePlayback;
+	OverrideSource.EndpointKeys.Add(P1Key);
+	OverrideRouting->ActivePlaybacks.Add(OverridePlayback);
+	auto OverrideMirror = OverridePlayback->GetMirror();
+	FRecordingStreamRunnable OverrideRunner(OverrideSourceId, MakeStereoPcm(1000, 160), OverrideMirror);
+	TestTrue(TEXT("override runner initializes"), OverrideRunner.Init());
+	UHapbeatSubsystem::FStreamSession& OverrideSession = OverrideRouting->StreamSessions.Add(P1Key);
+	OverrideSession.Runnable = &OverrideRunner;
+	OverrideSession.SourceIds.Add(OverrideSourceId);
+
+	OverrideRouting->SetAddressOverride(2, UHapbeatSubsystem::AddressOverrideDisabled);
+	TestEqual(TEXT("P1 -> known P2 updates effective target"), OverrideSource.ResolvedTarget, P2);
+	TestTrue(TEXT("P1 -> known P2 joins immediately"), OverrideSource.EndpointKeys.Contains(P2Key));
+	TestFalse(TEXT("P1 -> known P2 leaves old endpoint"), OverrideSource.EndpointKeys.Contains(P1Key));
+	OverrideRunner.Run();
+	TestEqual(TEXT("P1 -> known P2 stops old endpoint DATA"),
+		OverrideRunner.DataCount.load(std::memory_order_relaxed), 0);
+
+	OverrideRouting->SetAddressOverride(3, UHapbeatSubsystem::AddressOverrideDisabled);
+	TestEqual(TEXT("unknown P3 is Deferred"), OverridePlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
+	TestEqual(TEXT("unknown P3 requests one fake PING"), OverrideRouting->StreamDiscoveryRequestCount, 1);
+	OverrideRouting->RegisterStreamEndpoint(TEXT("192.0.2.62"), 7700, P3, OverrideNow + 0.01);
+	OverrideRouting->ReconcileStreamSources();
+	TestTrue(TEXT("PONG-equivalent P3 registration joins without replay"),
+		OverrideSource.EndpointKeys.Contains(P3Key));
+	TestEqual(TEXT("PONG-equivalent P3 registration activates playback"),
+		OverridePlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
+
+	UHapbeatStreamPlayback* SecondPlayback = NewObject<UHapbeatStreamPlayback>(OverrideRouting);
+	SecondPlayback->Init(1.0f, 1.0f);
+	SecondPlayback->SetActive();
+	UHapbeatSubsystem::FStreamSource& SecondSource = OverrideRouting->StreamSources.Add(SecondPlayback->Id);
+	SecondSource.CanonicalPcm16 = MakeStereoPcm(500, 160);
+	SecondSource.AuthoredTarget = P2;
+	SecondSource.ResolvedTarget = P3;
+	SecondSource.Playback = SecondPlayback;
+	SecondSource.EndpointKeys.Add(P3Key);
+	OverrideRouting->ActivePlaybacks.Add(SecondPlayback);
+	OverrideRouting->SetAddressOverride(UHapbeatSubsystem::AddressOverrideDisabled,
+		UHapbeatSubsystem::AddressOverrideDisabled);
+	TestEqual(TEXT("clear restores first authored target"), OverrideSource.ResolvedTarget, P1);
+	TestEqual(TEXT("clear restores second authored target"), SecondSource.ResolvedTarget, P2);
+	TestTrue(TEXT("clear keeps first source on its authored endpoint"), OverrideSource.EndpointKeys.Contains(P1Key));
+	TestTrue(TEXT("clear keeps second source on its authored endpoint"), SecondSource.EndpointKeys.Contains(P2Key));
+	TestEqual(TEXT("clear preserves independent logical source routing"),
+		OverrideSource.EndpointKeys.Num() + SecondSource.EndpointKeys.Num(), 2);
+	OverrideRouting->StreamSessions.Empty(); // OverrideRunner is stack-owned by this test.
 	return true;
 }
 

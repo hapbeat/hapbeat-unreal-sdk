@@ -625,6 +625,7 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 	ActivePlaybacks.Add(Playback);
 	FStreamSource& Source = StreamSources.Add(Playback->Id);
 	Source.CanonicalPcm16 = MoveTemp(CanonicalPcm16);
+	Source.AuthoredTarget = Target;
 	Source.ResolvedTarget = ResolvedTarget;
 	Source.Playback = Playback;
 
@@ -641,6 +642,42 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 		ResolvedTarget.IsEmpty() ? TEXT("all") : *ResolvedTarget, bLoop ? 1 : 0);
 
 	return true;
+}
+
+void UHapbeatSubsystem::RefreshStreamSourceTargets()
+{
+	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
+	{
+		FStreamSource& Source = Pair.Value;
+		if (UHapbeatStreamPlayback* Playback = Source.Playback.Get(); Playback != nullptr && !Playback->IsStopped())
+		{
+			Source.ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(
+				Source.AuthoredTarget, OverridePlayer, OverrideGroup);
+		}
+	}
+}
+
+void UHapbeatSubsystem::RequestStreamDiscoveryForDeferredSources()
+{
+	for (const TPair<FGuid, FStreamSource>& Pair : StreamSources)
+	{
+		const FStreamSource& Source = Pair.Value;
+		UHapbeatStreamPlayback* Playback = Source.Playback.Get();
+		if (Playback == nullptr || Playback->IsStopped() || Source.EndpointKeys.Num() != 0)
+		{
+			continue;
+		}
+
+#if WITH_DEV_AUTOMATION_TESTS
+		if (bSuppressStreamDiscoveryForAutomationTest)
+		{
+			++StreamDiscoveryRequestCount;
+			return;
+		}
+#endif
+		Ping();
+		return;
+	}
 }
 
 bool UHapbeatSubsystem::NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const
@@ -1076,6 +1113,15 @@ void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPe
 {
 	OverridePlayer = NormalizeAddressOverride(Player);
 	OverrideGroup = NormalizeAddressOverride(InGroup);
+
+	// STREAM packets carry no target and must never be broadcast. Keep the
+	// authored source target intact, then atomically reassign each active source
+	// to the exact PONG-confirmed endpoint(s) for the new effective target. A
+	// source with no match stays Deferred and requests a PING; the normal PONG
+	// path registers that endpoint and reconciles it without replaying the clip.
+	RefreshStreamSourceTargets();
+	ReconcileStreamSources();
+	RequestStreamDiscoveryForDeferredSources();
 
 	if (bPersist)
 	{

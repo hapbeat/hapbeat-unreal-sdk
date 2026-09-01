@@ -6,6 +6,18 @@
 #include "HapbeatShowcaseZone.h"
 #include "HapbeatShowcaseBlueprintZoneActor.generated.h"
 
+/** State owned by the Blueprint-authored Z2 door. The graph selects actions with Switch on Door State. */
+UENUM(BlueprintType)
+enum class EHapbeatShowcaseDoorState : uint8
+{
+	Closed,
+	Opening,
+	Open,
+	Closing,
+	Slamming,
+	Locked,
+};
+
 /**
  * Minimal Showcase shell for a zone authored in Blueprint.
  *

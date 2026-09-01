@@ -30,8 +30,8 @@
 #include "FileHelpers.h"
 #include "InputCoreTypes.h"
 #include "K2Node_CallFunction.h"
-#include "K2Node_IfThenElse.h"
 #include "K2Node_InputKey.h"
+#include "K2Node_SwitchEnum.h"
 #include "K2Node_Timeline.h"
 #include "K2Node_VariableGet.h"
 #include "K2Node_VariableSet.h"
@@ -92,7 +92,7 @@ void ClearGeneratedGraph(UBlueprint* Blueprint)
 	// These are state variables owned by the generated Z2 graph.  Remove them
 	// before rebuilding so the command is idempotent and their defaults cannot
 	// drift from the graph it creates.
-	for (const FName VariableName : { FName(TEXT("bDoorOpen")), FName(TEXT("bDoorLocked")), FName(TEXT("bDoorMoving")) })
+	for (const FName VariableName : { FName(TEXT("DoorState")), FName(TEXT("bDoorOpen")), FName(TEXT("bDoorLocked")), FName(TEXT("bDoorMoving")) })
 	{
 		FBlueprintEditorUtils::RemoveMemberVariable(Blueprint, VariableName);
 	}
@@ -213,22 +213,15 @@ UK2Node_VariableGet* AddSelfVariableGet(UEdGraph* Graph, const TCHAR* VariableNa
 	return Node;
 }
 
-UK2Node_VariableSet* AddBoolSet(UEdGraph* Graph, const TCHAR* VariableName, bool bValue, int32 X, int32 Y)
+UK2Node_SwitchEnum* AddDoorStateSwitch(UEdGraph* Graph, int32 X, int32 Y)
 {
-	UK2Node_VariableSet* Node = AddNode<UK2Node_VariableSet>(Graph, X, Y);
-	Node->VariableReference.SetSelfMember(FName(VariableName));
+	UK2Node_SwitchEnum* Node = AddNode<UK2Node_SwitchEnum>(Graph, X, Y);
+	// UK2Node_SwitchEnum::SetEnum is not exported from BlueprintGraph. Assigning
+	// the public enum field then reconstructing is the same initialization path:
+	// CreateCasePins() refreshes the case list from this enum.
+	Node->Enum = StaticEnum<EHapbeatShowcaseDoorState>();
 	Node->ReconstructNode();
-	// UK2Node_Variable::GetValuePin() is intentionally getter-only.  A setter
-	// owns an input pin with the member's name instead.
-	UEdGraphPin* ValuePin = Node->FindPin(FName(VariableName), EGPD_Input);
-	checkf(ValuePin != nullptr, TEXT("Expected value input for generated bool '%s'."), VariableName);
-	ValuePin->DefaultValue = bValue ? TEXT("true") : TEXT("false");
 	return Node;
-}
-
-UK2Node_IfThenElse* AddBranch(UEdGraph* Graph, int32 X, int32 Y)
-{
-	return AddNode<UK2Node_IfThenElse>(Graph, X, Y);
 }
 
 void AddComment(UEdGraph* Graph, const TCHAR* Title, int32 X, int32 Y, int32 Width, int32 Height,
@@ -242,12 +235,24 @@ void AddComment(UEdGraph* Graph, const TCHAR* Title, int32 X, int32 Y, int32 Wid
 	Node->MoveMode = ECommentBoxMode::NoGroupMovement;
 }
 
-void AddBoolMember(UBlueprint* Blueprint, const TCHAR* VariableName)
+void AddDoorStateMember(UBlueprint* Blueprint)
 {
-	FEdGraphPinType BoolType;
-	BoolType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
-	checkf(FBlueprintEditorUtils::AddMemberVariable(Blueprint, FName(VariableName), BoolType, TEXT("false")),
-		TEXT("Could not add generated boolean '%s'."), VariableName);
+	FEdGraphPinType EnumType;
+	EnumType.PinCategory = UEdGraphSchema_K2::PC_Byte;
+	EnumType.PinSubCategoryObject = StaticEnum<EHapbeatShowcaseDoorState>();
+	checkf(FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("DoorState"), EnumType, TEXT("Closed")),
+		TEXT("Could not add generated DoorState enum."));
+}
+
+UK2Node_VariableSet* AddDoorStateSet(UEdGraph* Graph, EHapbeatShowcaseDoorState Value, int32 X, int32 Y)
+{
+	UK2Node_VariableSet* Node = AddNode<UK2Node_VariableSet>(Graph, X, Y);
+	Node->VariableReference.SetSelfMember(TEXT("DoorState"));
+	Node->ReconstructNode();
+	UEdGraphPin* ValuePin = Node->FindPin(TEXT("DoorState"), EGPD_Input);
+	check(ValuePin != nullptr);
+	ValuePin->DefaultValue = StaticEnum<EHapbeatShowcaseDoorState>()->GetNameStringByValue(static_cast<int64>(Value));
+	return Node;
 }
 
 void ConnectPins(UEdGraphPin* From, UEdGraphPin* To)
@@ -423,9 +428,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	const FGuid LockId = FindEntryId(EventMap, TEXT("z2_door_lock"));
 	const FGuid UnlockId = FindEntryId(EventMap, TEXT("z2_door_unlock"));
 	const FGuid RattleId = FindEntryId(EventMap, TEXT("z2_door_rattle"));
-	AddBoolMember(Blueprint, TEXT("bDoorOpen"));
-	AddBoolMember(Blueprint, TEXT("bDoorLocked"));
-	AddBoolMember(Blueprint, TEXT("bDoorMoving"));
+	AddDoorStateMember(Blueprint);
 
 	// Z2 is deliberately a Blueprint-complete example.  The three motion
 	// timelines preserve the prior C++ timings: open (2.0 s), normal close
@@ -435,36 +438,40 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	UTimelineTemplate* CloseTemplate = CreateDoorMotionTimeline(Blueprint, TEXT("DoorClose"), 2.2f, 1.0f, 0.0f);
 	UTimelineTemplate* SlamTemplate = CreateDoorMotionTimeline(Blueprint, TEXT("DoorSlam"), 0.117f, 1.0f, 0.0f);
 	UTimelineTemplate* RattleTemplate = CreateDoorRattleTimeline(Blueprint);
-	// Each action occupies one horizontal lane: its haptic entry is visible next
-	// to the matching timeline rather than collected in an unrelated node pile.
-	// The graph remains Blueprint-complete, but can now be read as action ->
-	// Play Hapbeat Event -> state -> visual timeline.
-	AddComment(Graph, TEXT("OPEN  |  z2_door_open  ->  Play Hapbeat Event"), -360, -585, 800, 190,
+	// Each action occupies one horizontal lane. The input paths use one enum and
+	// Switch on Door State rather than three interdependent bool branches.
+	AddComment(Graph, TEXT("OPEN  |  z2_door_open  ->  Play Hapbeat Event"), -360, -585, 1640, 190,
 		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("CLOSE  |  z2_door_close  ->  Play Hapbeat Event"), -360, -335, 800, 190,
+	AddComment(Graph, TEXT("CLOSE  |  z2_door_close  ->  Play Hapbeat Event"), -360, -335, 1640, 190,
 		FLinearColor(0.12f, 0.30f, 0.52f));
-	AddComment(Graph, TEXT("SLAM  |  z2_door_slam  ->  Play Hapbeat Event"), -360, -85, 800, 190,
+	AddComment(Graph, TEXT("SLAM  |  z2_door_slam  ->  Play Hapbeat Event"), -360, -85, 1640, 190,
 		FLinearColor(0.62f, 0.25f, 0.08f));
-	AddComment(Graph, TEXT("LOCKED RATTLE  |  z2_door_rattle  ->  Play Hapbeat Event"), -360, 165, 800, 220,
+	AddComment(Graph, TEXT("LOCKED RATTLE  |  z2_door_rattle  ->  Play Hapbeat Event"), -360, 165, 1640, 220,
 		FLinearColor(0.50f, 0.15f, 0.15f));
-	AddComment(Graph, TEXT("LOCK / UNLOCK  |  z2_door_lock / z2_door_unlock  ->  Play Hapbeat Event"), -360, 445, 560, 300,
+	AddComment(Graph, TEXT("LOCK / UNLOCK  |  z2_door_lock / z2_door_unlock  ->  Play Hapbeat Event"), -360, 445, 760, 300,
 		FLinearColor(0.35f, 0.25f, 0.58f));
+	AddComment(Graph, TEXT("F  |  Switch on Door State"), -1390, -485, 710, 250,
+		FLinearColor(0.18f, 0.18f, 0.18f));
+	AddComment(Graph, TEXT("G  |  Switch on Door State"), -1390, -35, 710, 220,
+		FLinearColor(0.18f, 0.18f, 0.18f));
+	AddComment(Graph, TEXT("L  |  Switch on Door State"), -1390, 430, 710, 250,
+		FLinearColor(0.18f, 0.18f, 0.18f));
 
-	UK2Node_Timeline* DoorOpen = AddTimeline(Graph, OpenTemplate, 250, -500);
-	UK2Node_Timeline* DoorClose = AddTimeline(Graph, CloseTemplate, 250, -250);
-	UK2Node_Timeline* DoorSlam = AddTimeline(Graph, SlamTemplate, 250, 0);
-	UK2Node_Timeline* DoorRattle = AddTimeline(Graph, RattleTemplate, 250, 250);
-	UK2Node_VariableGet* HingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 640, -580);
+	UK2Node_Timeline* DoorOpen = AddTimeline(Graph, OpenTemplate, 200, -500);
+	UK2Node_Timeline* DoorClose = AddTimeline(Graph, CloseTemplate, 200, -250);
+	UK2Node_Timeline* DoorSlam = AddTimeline(Graph, SlamTemplate, 200, 0);
+	UK2Node_Timeline* DoorRattle = AddTimeline(Graph, RattleTemplate, 200, 250);
 
 	auto AddMotionRotation = [&](UK2Node_Timeline* Timeline, int32 Y)
 	{
 		UK2Node_CallFunction* LerpRotation = AddCall(Graph, UKismetMathLibrary::StaticClass(),
-			GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RLerp), 620, Y);
+			GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RLerp), 500, Y);
 		FindPinChecked(LerpRotation, TEXT("A"))->DefaultValue = TEXT("0.000000,-90.000000,0.000000");
 		FindPinChecked(LerpRotation, TEXT("B"))->DefaultValue = TEXT("0.000000,0.000000,0.000000");
 		FindPinChecked(LerpRotation, TEXT("bShortestPath"))->DefaultValue = TEXT("false");
 		UK2Node_CallFunction* SetRotation = AddCall(Graph, USceneComponent::StaticClass(),
-			GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 900, Y);
+			GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 800, Y);
+		UK2Node_VariableGet* HingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 680, Y + 100);
 		ConnectPins(Timeline->GetUpdatePin(), SetRotation->GetExecPin());
 		ConnectPins(FindPinChecked(Timeline, TEXT("OpenAlpha")), FindPinChecked(LerpRotation, TEXT("Alpha")));
 		ConnectPins(LerpRotation->GetReturnValuePin(), FindPinChecked(SetRotation, TEXT("NewRotation")));
@@ -487,13 +494,14 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	ConnectPins(FindPinChecked(DoorRattle, TEXT("RattleYaw")), FindPinChecked(AddRattleYaw, TEXT("B")));
 	ConnectPins(AddRattleYaw->GetReturnValuePin(), FindPinChecked(MakeRattleRotation, TEXT("Yaw")));
 	ConnectPins(MakeRattleRotation->GetReturnValuePin(), FindPinChecked(SetRattleRotation, TEXT("NewRotation")));
-	ConnectPins(FindPinChecked(HingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetRattleRotation));
+	UK2Node_VariableGet* RattleHingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 680, 350);
+	ConnectPins(FindPinChecked(RattleHingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetRattleRotation));
 
 	// Moving input is ignored, matching the previous C++ state machine.  Each
 	// terminal timeline clears the guard when it reaches its closed/open state.
-	UK2Node_VariableSet* StopOpening = AddBoolSet(Graph, TEXT("bDoorMoving"), false, 1180, -500);
-	UK2Node_VariableSet* StopClosing = AddBoolSet(Graph, TEXT("bDoorMoving"), false, 1180, -250);
-	UK2Node_VariableSet* StopSlamming = AddBoolSet(Graph, TEXT("bDoorMoving"), false, 1180, 0);
+	UK2Node_VariableSet* StopOpening = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Open, 1100, -500);
+	UK2Node_VariableSet* StopClosing = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 1100, -250);
+	UK2Node_VariableSet* StopSlamming = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 1100, 0);
 	ConnectPins(DoorOpen->GetFinishedPin(), StopOpening->GetExecPin());
 	ConnectPins(DoorClose->GetFinishedPin(), StopClosing->GetExecPin());
 	ConnectPins(DoorSlam->GetFinishedPin(), StopSlamming->GetExecPin());
@@ -513,81 +521,51 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	};
 
 	// F: open when closed, close when open, and rattle while locked.
-	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::F, -1250, -220);
-	UK2Node_IfThenElse* ToggleMoving = AddBranch(Graph, -1040, -220);
-	UK2Node_VariableGet* ToggleMovingGet = AddSelfVariableGet(Graph, TEXT("bDoorMoving"), -1040, -130);
-	UK2Node_IfThenElse* ToggleLocked = AddBranch(Graph, -800, -220);
-	UK2Node_VariableGet* ToggleLockedGet = AddSelfVariableGet(Graph, TEXT("bDoorLocked"), -800, -130);
-	UK2Node_IfThenElse* ToggleOpen = AddBranch(Graph, -540, -220);
-	UK2Node_VariableGet* ToggleOpenGet = AddSelfVariableGet(Graph, TEXT("bDoorOpen"), -540, -130);
+	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::F, -1350, -400);
+	UK2Node_SwitchEnum* ToggleState = AddDoorStateSwitch(Graph, -1000, -400);
+	UK2Node_VariableGet* ToggleStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1000, -300);
 	UK2Node_CallFunction* ToggleRattle = AddRattle(-300, 200);
 	UK2Node_CallFunction* ClosePlay = AddPlay(CloseId, -300, -250);
-	UK2Node_VariableSet* SetClosed = AddBoolSet(Graph, TEXT("bDoorOpen"), false, -80, -250);
-	UK2Node_VariableSet* StartClosing = AddBoolSet(Graph, TEXT("bDoorMoving"), true, 80, -250);
+	UK2Node_VariableSet* StartClosing = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closing, -80, -250);
 	UK2Node_CallFunction* OpenPlay = AddPlay(OpenId, -300, -500);
-	UK2Node_VariableSet* SetOpen = AddBoolSet(Graph, TEXT("bDoorOpen"), true, -80, -500);
-	UK2Node_VariableSet* StartOpening = AddBoolSet(Graph, TEXT("bDoorMoving"), true, 80, -500);
-	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), ToggleMoving->GetExecPin());
-	ConnectPins(ToggleMovingGet->GetValuePin(), ToggleMoving->GetConditionPin());
-	ConnectPins(ToggleMoving->GetElsePin(), ToggleLocked->GetExecPin());
-	ConnectPins(ToggleLockedGet->GetValuePin(), ToggleLocked->GetConditionPin());
-	ConnectPins(ToggleLocked->GetThenPin(), ToggleRattle->GetExecPin());
-	ConnectPins(ToggleLocked->GetElsePin(), ToggleOpen->GetExecPin());
-	ConnectPins(ToggleOpenGet->GetValuePin(), ToggleOpen->GetConditionPin());
-	ConnectPins(ToggleOpen->GetThenPin(), ClosePlay->GetExecPin());
-	ConnectPins(ClosePlay->GetThenPin(), SetClosed->GetExecPin());
-	ConnectPins(SetClosed->GetThenPin(), StartClosing->GetExecPin());
+	UK2Node_VariableSet* StartOpening = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Opening, -80, -500);
+	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), ToggleState->GetExecPin());
+	ConnectPins(ToggleStateGet->GetValuePin(), FindPinChecked(ToggleState, TEXT("Selection")));
+	ConnectPins(FindPinChecked(ToggleState, TEXT("Locked")), ToggleRattle->GetExecPin());
+	ConnectPins(FindPinChecked(ToggleState, TEXT("Open")), ClosePlay->GetExecPin());
+	ConnectPins(ClosePlay->GetThenPin(), StartClosing->GetExecPin());
 	ConnectPins(StartClosing->GetThenPin(), DoorClose->GetPlayFromStartPin());
-	ConnectPins(ToggleOpen->GetElsePin(), OpenPlay->GetExecPin());
-	ConnectPins(OpenPlay->GetThenPin(), SetOpen->GetExecPin());
-	ConnectPins(SetOpen->GetThenPin(), StartOpening->GetExecPin());
+	ConnectPins(FindPinChecked(ToggleState, TEXT("Closed")), OpenPlay->GetExecPin());
+	ConnectPins(OpenPlay->GetThenPin(), StartOpening->GetExecPin());
 	ConnectPins(StartOpening->GetThenPin(), DoorOpen->GetPlayFromStartPin());
 
 	// G: slam only while open; it uses the same closed state as a normal close.
-	UK2Node_InputKey* SlamInput = AddKeyEvent(Graph, EKeys::G, -1250, 40);
-	UK2Node_IfThenElse* SlamMoving = AddBranch(Graph, -1040, 40);
-	UK2Node_VariableGet* SlamMovingGet = AddSelfVariableGet(Graph, TEXT("bDoorMoving"), -1040, 130);
-	UK2Node_IfThenElse* SlamLocked = AddBranch(Graph, -800, 40);
-	UK2Node_VariableGet* SlamLockedGet = AddSelfVariableGet(Graph, TEXT("bDoorLocked"), -800, 130);
-	UK2Node_IfThenElse* SlamOpen = AddBranch(Graph, -540, 40);
-	UK2Node_VariableGet* SlamOpenGet = AddSelfVariableGet(Graph, TEXT("bDoorOpen"), -540, 130);
+	UK2Node_InputKey* SlamInput = AddKeyEvent(Graph, EKeys::G, -1350, 30);
+	UK2Node_SwitchEnum* SlamState = AddDoorStateSwitch(Graph, -1000, 30);
+	UK2Node_VariableGet* SlamStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1000, 130);
 	UK2Node_CallFunction* SlamRattle = AddRattle(-300, 300);
 	UK2Node_CallFunction* SlamPlay = AddPlay(SlamId, -300, 0);
-	UK2Node_VariableSet* SlamClosed = AddBoolSet(Graph, TEXT("bDoorOpen"), false, -80, 0);
-	UK2Node_VariableSet* StartSlam = AddBoolSet(Graph, TEXT("bDoorMoving"), true, 80, 0);
-	ConnectPins(FindPinChecked(SlamInput, TEXT("Pressed")), SlamMoving->GetExecPin());
-	ConnectPins(SlamMovingGet->GetValuePin(), SlamMoving->GetConditionPin());
-	ConnectPins(SlamMoving->GetElsePin(), SlamLocked->GetExecPin());
-	ConnectPins(SlamLockedGet->GetValuePin(), SlamLocked->GetConditionPin());
-	ConnectPins(SlamLocked->GetThenPin(), SlamRattle->GetExecPin());
-	ConnectPins(SlamLocked->GetElsePin(), SlamOpen->GetExecPin());
-	ConnectPins(SlamOpenGet->GetValuePin(), SlamOpen->GetConditionPin());
-	ConnectPins(SlamOpen->GetThenPin(), SlamPlay->GetExecPin());
-	ConnectPins(SlamPlay->GetThenPin(), SlamClosed->GetExecPin());
-	ConnectPins(SlamClosed->GetThenPin(), StartSlam->GetExecPin());
+	UK2Node_VariableSet* StartSlam = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Slamming, -80, 0);
+	ConnectPins(FindPinChecked(SlamInput, TEXT("Pressed")), SlamState->GetExecPin());
+	ConnectPins(SlamStateGet->GetValuePin(), FindPinChecked(SlamState, TEXT("Selection")));
+	ConnectPins(FindPinChecked(SlamState, TEXT("Locked")), SlamRattle->GetExecPin());
+	ConnectPins(FindPinChecked(SlamState, TEXT("Open")), SlamPlay->GetExecPin());
+	ConnectPins(SlamPlay->GetThenPin(), StartSlam->GetExecPin());
 	ConnectPins(StartSlam->GetThenPin(), DoorSlam->GetPlayFromStartPin());
 
 	// L: lock/unlock only while the leaf is closed; the active transition is a no-op.
-	UK2Node_InputKey* LockInput = AddKeyEvent(Graph, EKeys::L, -1250, 300);
-	UK2Node_IfThenElse* LockMoving = AddBranch(Graph, -1040, 300);
-	UK2Node_VariableGet* LockMovingGet = AddSelfVariableGet(Graph, TEXT("bDoorMoving"), -1040, 390);
-	UK2Node_IfThenElse* LockOpen = AddBranch(Graph, -800, 300);
-	UK2Node_VariableGet* LockOpenGet = AddSelfVariableGet(Graph, TEXT("bDoorOpen"), -800, 390);
-	UK2Node_IfThenElse* LockLocked = AddBranch(Graph, -540, 300);
-	UK2Node_VariableGet* LockLockedGet = AddSelfVariableGet(Graph, TEXT("bDoorLocked"), -540, 390);
+	UK2Node_InputKey* LockInput = AddKeyEvent(Graph, EKeys::L, -1350, 500);
+	UK2Node_SwitchEnum* LockState = AddDoorStateSwitch(Graph, -1000, 500);
+	UK2Node_VariableGet* LockStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1000, 600);
 	UK2Node_CallFunction* UnlockPlay = AddPlay(UnlockId, -300, 650);
-	UK2Node_VariableSet* SetUnlocked = AddBoolSet(Graph, TEXT("bDoorLocked"), false, -80, 650);
+	UK2Node_VariableSet* SetUnlocked = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, -80, 650);
 	UK2Node_CallFunction* LockPlay = AddPlay(LockId, -300, 500);
-	UK2Node_VariableSet* SetLocked = AddBoolSet(Graph, TEXT("bDoorLocked"), true, -80, 500);
-	ConnectPins(FindPinChecked(LockInput, TEXT("Pressed")), LockMoving->GetExecPin());
-	ConnectPins(LockMovingGet->GetValuePin(), LockMoving->GetConditionPin());
-	ConnectPins(LockMoving->GetElsePin(), LockOpen->GetExecPin());
-	ConnectPins(LockOpenGet->GetValuePin(), LockOpen->GetConditionPin());
-	ConnectPins(LockOpen->GetElsePin(), LockLocked->GetExecPin());
-	ConnectPins(LockLockedGet->GetValuePin(), LockLocked->GetConditionPin());
-	ConnectPins(LockLocked->GetThenPin(), UnlockPlay->GetExecPin());
+	UK2Node_VariableSet* SetLocked = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Locked, -80, 500);
+	ConnectPins(FindPinChecked(LockInput, TEXT("Pressed")), LockState->GetExecPin());
+	ConnectPins(LockStateGet->GetValuePin(), FindPinChecked(LockState, TEXT("Selection")));
+	ConnectPins(FindPinChecked(LockState, TEXT("Locked")), UnlockPlay->GetExecPin());
 	ConnectPins(UnlockPlay->GetThenPin(), SetUnlocked->GetExecPin());
-	ConnectPins(LockLocked->GetElsePin(), LockPlay->GetExecPin());
+	ConnectPins(FindPinChecked(LockState, TEXT("Closed")), LockPlay->GetExecPin());
 	ConnectPins(LockPlay->GetThenPin(), SetLocked->GetExecPin());
 
 	SetMetadata(Blueprint, 2, TEXT("Door"), FVector(-400.0f, 20.0f, 0.0f),

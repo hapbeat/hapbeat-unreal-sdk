@@ -89,11 +89,11 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 1. World Outliner で `Z2_Door` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z2_Door` をダブルクリックします。
 2. 開いた Blueprint Editor の左上 **Components** パネルが component tree です。`DoorHinge`、`DoorLeafMesh`、`DoorHandleMesh` を確認します。
 3. 左の **My Blueprint > Graphs > EventGraph** を開きます。
-4. `F`、`G`、`L` の Input Key node から、Branch と **Play Hapbeat Event** をたどります。
+4. `F`、`G`、`L` の Input Key node から **Switch on Door State** と **Play Hapbeat Event** をたどります。
 
 ```text
 F / G / L Pressed
-  → state Branch
+  → Switch on Door State
   → DoorOpen / DoorClose / DoorSlam / DoorRattle / Lock / Unlock
   → 対応する z2_door_* entry の Play Hapbeat Event
   → DoorHinge の Timeline

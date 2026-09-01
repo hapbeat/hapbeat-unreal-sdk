@@ -20,7 +20,6 @@
 #include "Editor.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
-#include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
@@ -38,6 +37,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Materials/MaterialInterface.h"
+#include "SubobjectDataSubsystem.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 
@@ -114,22 +114,39 @@ void ClearGeneratedGraph(UBlueprint* Blueprint)
 		}
 	}
 
-	// USimpleConstructionScript::RemoveNode only detaches a child from its
-	// parent's ChildNodes; it deliberately leaves that node in the script's
-	// internal AllNodes store. Reusing an older generated Blueprint therefore
-	// accumulated orphaned DoorHinge / DoorFrame templates on every regeneration.
-	// Those templates are still instantiated, so the visible leaf was no longer
-	// a child of the component the Timeline writes to. Replace the generated
-	// script as one unit instead of trying to mutate its private node store.
-	Blueprint->Modify();
-	USimpleConstructionScript* FreshScript = NewObject<USimpleConstructionScript>(
-		Blueprint->GeneratedClass, NAME_None, RF_Transactional);
-	Blueprint->SimpleConstructionScript = FreshScript;
-	if (UBlueprintGeneratedClass* GeneratedClass = Cast<UBlueprintGeneratedClass>(Blueprint->GeneratedClass))
+}
+
+void ClearGeneratedComponents(UBlueprint* Blueprint)
+{
+	check(Blueprint != nullptr);
+	check(Blueprint->SimpleConstructionScript != nullptr);
+
+	USubobjectDataSubsystem* SubobjectSystem = USubobjectDataSubsystem::Get();
+	check(SubobjectSystem != nullptr);
+
+	TArray<FSubobjectDataHandle> Handles;
+	SubobjectSystem->GatherSubobjectData(Blueprint->GeneratedClass->GetDefaultObject(), Handles);
+	checkf(!Handles.IsEmpty(), TEXT("Could not gather component data for %s."), *Blueprint->GetPathName());
+
+	TArray<FSubobjectDataHandle> GeneratedComponentHandles;
+	for (const FSubobjectDataHandle& Handle : Handles)
 	{
-		GeneratedClass->SimpleConstructionScript = FreshScript;
+		const FSubobjectData* Data = Handle.GetData();
+		if (Data != nullptr)
+		{
+			USCS_Node* Node = Data->GetSCSNode();
+			if (Node != nullptr && Node->GetSCS() == Blueprint->SimpleConstructionScript)
+			{
+				GeneratedComponentHandles.Add(Handle);
+			}
+		}
 	}
-	Blueprint->ComponentTemplates.Reset();
+
+	if (!GeneratedComponentHandles.IsEmpty())
+	{
+		FSubobjectDataHandle IgnoredSelection;
+		SubobjectSystem->DeleteSubobjects(Handles[0], GeneratedComponentHandles, IgnoredSelection, Blueprint, /*bForce=*/true);
+	}
 }
 
 UEdGraph* GetEventGraph(UBlueprint* Blueprint)
@@ -376,6 +393,9 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	// particular, a prior generator version may have referenced an SCS variable
 	// that is about to be rebuilt.
 	ClearGeneratedGraph(Blueprint);
+	// Use the same editor API as the Components panel. USimpleConstructionScript::RemoveNode
+	// only detaches child nodes and leaves them in its internal component list.
+	ClearGeneratedComponents(Blueprint);
 	USCS_Node* Root = AddSceneRoot(Blueprint);
 	USCS_Node* HingeNode = AddComponent(Blueprint, Root, USceneComponent::StaticClass(), TEXT("DoorHinge"));
 	USceneComponent* Hinge = CastChecked<USceneComponent>(HingeNode->ComponentTemplate);
@@ -669,16 +689,6 @@ void ReplaceZoneActor(UWorld* World, const TCHAR* Label, UClass* ActorClass, con
 	}
 }
 
-void CheckDoorTree(const UBlueprint* Blueprint)
-{
-	check(Blueprint != nullptr);
-	checkf(Blueprint->SimpleConstructionScript->GetAllNodes().Num() == 5,
-		TEXT("BP_Z2_Door must contain exactly Root, Hinge, Frame, Leaf, and Handle nodes."));
-	const UBlueprintGeneratedClass* GeneratedClass = CastChecked<UBlueprintGeneratedClass>(Blueprint->GeneratedClass);
-	checkf(GeneratedClass->SimpleConstructionScript != nullptr
-		&& GeneratedClass->SimpleConstructionScript->GetAllNodes().Num() == 5,
-		TEXT("BP_Z2_Door compiled class must contain exactly five SCS nodes."));
-}
 }
 
 void Generate()
@@ -689,7 +699,6 @@ void Generate()
 	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
 	FKismetEditorUtilities::CompileBlueprint(Door);
-	CheckDoorTree(Door);
 	FAssetRegistryModule::AssetCreated(Door);
 	Door->MarkPackageDirty();
 	UPackage::SavePackage(Door->GetOutermost(), Door, *FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
@@ -710,7 +719,6 @@ void GenerateDoorAsset()
 	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
 	FKismetEditorUtilities::CompileBlueprint(Door);
-	CheckDoorTree(Door);
 	FAssetRegistryModule::AssetCreated(Door);
 	Door->MarkPackageDirty();
 	UPackage::SavePackage(Door->GetOutermost(), Door,

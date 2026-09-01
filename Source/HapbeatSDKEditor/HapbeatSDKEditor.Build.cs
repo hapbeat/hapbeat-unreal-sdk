@@ -29,6 +29,7 @@ public class HapbeatSDKEditor : ModuleRules
 			"Projects",      // IPluginManager (bundled-sample WAV dialog default / plugin Content manifest scan)
 			"ToolMenus",     // Tools menu entries (update check)
 			"Settings",      // Project Settings > Plugins > Hapbeat shortcut
+			"SubobjectDataInterface", // Blueprint component deletion through the Components-panel API
 			"HTTP",          // release-feed query (DEC-053 update notification)
 			"ContentBrowser",// selected-asset lookup for the Markdown export
 			"AssetRegistry", // single-Event-Map fallback for the Markdown export

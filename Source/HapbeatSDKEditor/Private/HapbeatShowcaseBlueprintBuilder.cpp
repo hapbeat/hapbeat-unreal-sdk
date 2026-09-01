@@ -36,6 +36,7 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
+#include "Materials/MaterialInterface.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 
@@ -357,8 +358,14 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	USCS_Node* Root = AddSceneRoot(Blueprint);
 	USCS_Node* HingeNode = AddComponent(Blueprint, Root, USceneComponent::StaticClass(), TEXT("DoorHinge"));
 	USceneComponent* Hinge = CastChecked<USceneComponent>(HingeNode->ComponentTemplate);
+	// The timelines rotate this pivot at runtime. Scene components default to
+	// Static, which silently rejects those updates even when the leaf itself is
+	// Movable.
+	Hinge->SetMobility(EComponentMobility::Movable);
 	Hinge->SetRelativeLocation(FVector(0.0f, -66.1f, 0.0f));
 	Hinge->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
+	UMaterialInterface* DoorMaterial = LoadObject<UMaterialInterface>(nullptr,
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_DefaultMaterial.MI_DefaultMaterial"));
 
 	USCS_Node* FrameNode = AddComponent(Blueprint, Root, UStaticMeshComponent::StaticClass(), TEXT("DoorFrameMesh"));
 	UStaticMeshComponent* Frame = CastChecked<UStaticMeshComponent>(FrameNode->ComponentTemplate);
@@ -366,6 +373,8 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_DoorFrame.SM_DoorFrame")));
 	Frame->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 	Frame->SetCollisionProfileName(TEXT("BlockAll"));
+	Frame->SetMobility(EComponentMobility::Movable);
+	Frame->SetMaterial(0, DoorMaterial);
 
 	USCS_Node* LeafNode = AddComponent(Blueprint, HingeNode, UStaticMeshComponent::StaticClass(), TEXT("DoorLeafMesh"));
 	UStaticMeshComponent* Leaf = CastChecked<UStaticMeshComponent>(LeafNode->ComponentTemplate);
@@ -374,12 +383,15 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	Leaf->SetRelativeLocation(FVector(-66.1f, 0.0f, 0.0f));
 	Leaf->SetCollisionProfileName(TEXT("BlockAll"));
 	Leaf->SetMobility(EComponentMobility::Movable);
+	Leaf->SetMaterial(0, DoorMaterial);
 
 	USCS_Node* HandleNode = AddComponent(Blueprint, LeafNode, UStaticMeshComponent::StaticClass(), TEXT("DoorHandleMesh"));
 	UStaticMeshComponent* Handle = CastChecked<UStaticMeshComponent>(HandleNode->ComponentTemplate);
 	Handle->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_DoorHandle.SM_DoorHandle")));
 	Handle->SetCollisionProfileName(TEXT("NoCollision"));
+	Handle->SetMobility(EComponentMobility::Movable);
+	Handle->SetMaterial(0, DoorMaterial);
 
 	// Compile once after creating SCS variables so the graph's component-get
 	// nodes resolve their generated member references before we wire them.

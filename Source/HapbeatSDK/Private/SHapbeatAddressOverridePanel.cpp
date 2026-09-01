@@ -98,6 +98,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
 						[
 							SNew(SButton)
+							.IsFocusable(false)
 							.Text(LOCTEXT("Apply", "Apply"))
 							.ToolTipText(LOCTEXT("ApplyTooltip", "Send every later command to this player / group."))
 							.OnClicked(this, &SHapbeatAddressOverridePanel::OnApplyClicked)
@@ -105,6 +106,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
 						[
 							SNew(SButton)
+							.IsFocusable(false)
 							.Text(LOCTEXT("Test", "Test"))
 							.ToolTipText(LOCTEXT("TestTooltip", "Fire one event so you can feel which device you are addressing."))
 							.OnClicked(this, &SHapbeatAddressOverridePanel::OnTestClicked)
@@ -112,6 +114,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
 						[
 							SNew(SButton)
+							.IsFocusable(false)
 							.Text(LOCTEXT("Clear", "Clear"))
 							.ToolTipText(LOCTEXT("ClearTooltip", "Turn both axes off and forget the saved choice."))
 							.OnClicked(this, &SHapbeatAddressOverridePanel::OnClearClicked)
@@ -119,6 +122,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 					+ SHorizontalBox::Slot().AutoWidth()
 						[
 							SNew(SButton)
+							.IsFocusable(false)
 							.Text(LOCTEXT("Close", "Close"))
 							.OnClicked(this, &SHapbeatAddressOverridePanel::OnCloseClicked)
 						]
@@ -144,6 +148,7 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 		+ SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
 			[
 				SNew(SButton)
+				.IsFocusable(false)
 				.Text(LOCTEXT("Minus", "-"))
 				.IsEnabled(IsEditable)
 				.OnClicked_Lambda([OnStep] { OnStep(-1); return FReply::Handled(); })
@@ -162,6 +167,7 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 		+ SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
 			[
 				SNew(SButton)
+				.IsFocusable(false)
 				.Text(LOCTEXT("Plus", "+"))
 				.IsEnabled(IsEditable)
 				.OnClicked_Lambda([OnStep] { OnStep(1); return FReply::Handled(); })

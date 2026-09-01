@@ -39,14 +39,11 @@ ball が pin に Hit
 
 ### C++ 実装を確認する
 
-Unreal Editor から、関連する C++ ファイルを設定済みのコードエディタへ直接開けます。エクスプローラーを経由する必要はありません。
+`Z1_Bowling` の右クリックメニューには、このプロジェクトで使える C++ を開く項目はありません。
 
-1. World Outliner で `Z1_Bowling` を選択し、右クリックします。
-2. **Go to C++ Code for Actor** を選びます。
+上部の **Tools → Open Visual Studio**（表示名は設定済み IDE に応じて変わります）でプロジェクト全体を開きます。開いた IDE の Solution Explorer で `Plugins/HapbeatSDK/Source/HapbeatSDKSamples/Private` を開くと、対応する `.cpp` 実装を確認できます。
 
-選択した Actor の C++ ヘッダが、Visual Studio など Editor Preferences で選んだ **Source Code Editor** に開きます。メニューが表示されない場合は、上部の **Tools → Open Visual Studio**（表示名は設定済み IDE に応じて変わります）でプロジェクト全体を開いてください。
-
-Unreal Editor 自体は C++ の編集画面を内蔵していません。ヘッダを開いた後、同じ IDE の Solution Explorer で `Plugins/HapbeatSDK/Source/HapbeatSDKSamples/Private` を開くと、対応する `.cpp` 実装を確認できます。
+**Open Visual Studio** が Tools にない場合は、エクスプローラーで `.uproject` と同じフォルダの `.sln` を開きます。
 
 - `Source/HapbeatSDKSamples/Public/HapbeatShowcaseZ1BowlingActor.h` — Details に出る `Event Map`、`Pin Hit Event` と pin slot の定義
 - `Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ1BowlingActor.cpp` — ball launch、pin の生成、hit を entry 発火へ結ぶ処理

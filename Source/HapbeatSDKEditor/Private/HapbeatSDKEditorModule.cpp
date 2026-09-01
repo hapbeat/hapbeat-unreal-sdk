@@ -91,11 +91,11 @@ void FHapbeatSDKEditorModule::StartupModule()
 		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset));
 	// ExecCmds is evaluated before Editor modules at LoadingPhase=Default are
 	// available. This flag is the deterministic no-UI route for local authoring:
-	// wait for engine initialization, generate only the requested asset, then
-	// exit without entering PIE.
+	// wait until engine initialization is complete (not merely PostEngineInit),
+	// generate only the requested asset, then exit without entering PIE.
 	if (FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintDoorAsset")))
 	{
-		PostEngineInitHandle = FCoreDelegates::OnPostEngineInit.AddLambda([]
+		EngineLoopInitCompleteHandle = FCoreDelegates::OnFEngineLoopInitComplete.AddLambda([]
 		{
 			HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset();
 			FPlatformMisc::RequestExit(false);
@@ -120,8 +120,8 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 {
 	FEditorDelegates::EndPIE.Remove(EndPieHandle);
 	EndPieHandle.Reset();
-	FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
-	PostEngineInitHandle.Reset();
+	FCoreDelegates::OnFEngineLoopInitComplete.Remove(EngineLoopInitCompleteHandle);
+	EngineLoopInitCompleteHandle.Reset();
 
 	SHapbeatEventMapWindow::UnregisterTabSpawner();
 	SHapbeatRuntimeStatusWindow::UnregisterTabSpawner();

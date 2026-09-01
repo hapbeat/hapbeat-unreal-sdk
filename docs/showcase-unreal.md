@@ -130,6 +130,10 @@ Shark の速度
 
 `Z3_Fishing` の **Hook Wiring** では、start / loop / release の entry を確認できます。竿、`RodTipMarker`、釣り糸、Shark slot の位置は Details で編集します。
 
+### Details で触覚の接続を確認する
+
+`Z3_Fishing` の Details では、**Hapbeat > Event Map Override** と **Hapbeat > Fishing > Hook Wiring** を確認します。後者には実際に解決された start / loop / release の entry 名が表示されます。
+
 ### C++ 実装を確認する
 
 **Tools → Open Visual Studio** を選び、次の SDK ファイルを開きます。
@@ -144,8 +148,6 @@ Plugins
       └ Private
         └ HapbeatShowcaseZ3FishingActor.cpp
 ```
-
-`Z3_Fishing` の Details では、**Hapbeat > Event Map Override** と **Hapbeat > Fishing > Hook Wiring** を確認します。後者には実際に解決された start / loop / release の entry 名が表示されます。
 
 | 確認したい配線 | `.h` の識別子 | `.cpp` の関数 |
 | --- | --- | --- |
@@ -181,6 +183,10 @@ projectile が target に Hit
 
 `Z5_ChargeShot` の **Haptic Wiring** で、charge、shot、target hit の entry を確認します。charge 時間、launch speed、target slot は同 Actor の Details で変更できます。触覚の Clip、Gain、Target、loop は Event Map で変更します。
 
+### Details で触覚の接続を確認する
+
+`Z5_ChargeShot` の Details では、**Hapbeat > Event Map Override** と **Hapbeat > Showcase > Haptic Wiring** を確認します。後者には charge、shot、target hit の解決済み entry 名が表示されます。
+
 ### C++ 実装を確認する
 
 **Tools → Open Visual Studio** を選び、次の SDK ファイルを開きます。
@@ -195,8 +201,6 @@ Plugins
       └ Private
         └ HapbeatShowcaseZ5ChargeShotActor.cpp
 ```
-
-`Z5_ChargeShot` の Details では、**Hapbeat > Event Map Override** と **Hapbeat > Showcase > Haptic Wiring** を確認します。後者には charge、shot、target hit の解決済み entry 名が表示されます。
 
 | 確認したい配線 | `.h` の識別子 | `.cpp` の関数 |
 | --- | --- | --- |

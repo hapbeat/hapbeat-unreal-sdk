@@ -668,6 +668,17 @@ void ReplaceZoneActor(UWorld* World, const TCHAR* Label, UClass* ActorClass, con
 		}
 	}
 }
+
+void CheckDoorTree(const UBlueprint* Blueprint)
+{
+	check(Blueprint != nullptr);
+	checkf(Blueprint->SimpleConstructionScript->GetAllNodes().Num() == 5,
+		TEXT("BP_Z2_Door must contain exactly Root, Hinge, Frame, Leaf, and Handle nodes."));
+	const UBlueprintGeneratedClass* GeneratedClass = CastChecked<UBlueprintGeneratedClass>(Blueprint->GeneratedClass);
+	checkf(GeneratedClass->SimpleConstructionScript != nullptr
+		&& GeneratedClass->SimpleConstructionScript->GetAllNodes().Num() == 5,
+		TEXT("BP_Z2_Door compiled class must contain exactly five SCS nodes."));
+}
 }
 
 void Generate()
@@ -677,9 +688,8 @@ void Generate()
 	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"));
 	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
-	checkf(Door->SimpleConstructionScript->GetAllNodes().Num() == 5,
-		TEXT("BP_Z2_Door regeneration must produce exactly Root, Hinge, Frame, Leaf, and Handle."));
 	FKismetEditorUtilities::CompileBlueprint(Door);
+	CheckDoorTree(Door);
 	FAssetRegistryModule::AssetCreated(Door);
 	Door->MarkPackageDirty();
 	UPackage::SavePackage(Door->GetOutermost(), Door, *FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
@@ -699,9 +709,8 @@ void GenerateDoorAsset()
 	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"));
 	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
-	checkf(Door->SimpleConstructionScript->GetAllNodes().Num() == 5,
-		TEXT("BP_Z2_Door regeneration must produce exactly Root, Hinge, Frame, Leaf, and Handle."));
 	FKismetEditorUtilities::CompileBlueprint(Door);
+	CheckDoorTree(Door);
 	FAssetRegistryModule::AssetCreated(Door);
 	Door->MarkPackageDirty();
 	UPackage::SavePackage(Door->GetOutermost(), Door,

@@ -22,6 +22,8 @@ class HAPBEATSDKSAMPLES_API AHapbeatShowcaseBlueprintZoneActor
 public:
 	AHapbeatShowcaseBlueprintZoneActor();
 
+	virtual void BeginPlay() override;
+
 	virtual int32 GetZoneIndex() const override { return ZoneIndex; }
 	virtual FText GetZoneLabel() const override { return ZoneLabel; }
 	virtual TArray<FHapbeatShowcaseHudCommand> GetHudCommands() const override { return HudCommands; }

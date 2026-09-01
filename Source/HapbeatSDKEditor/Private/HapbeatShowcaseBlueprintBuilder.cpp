@@ -335,6 +335,24 @@ USCS_Node* AddComponent(UBlueprint* Blueprint, USCS_Node* Parent, UClass* Compon
 	return Node;
 }
 
+void ApplyMaterialToAllSlots(UStaticMeshComponent* Component, UMaterialInterface* Material)
+{
+	check(Component != nullptr);
+	if (Material == nullptr)
+	{
+		return;
+	}
+
+	// A mesh's material-slot count belongs to the mesh, not to its component
+	// override array.  Applying only slot 0 left the decorative frame's other
+	// authored slots on their import material, which made it visibly differ
+	// from the leaf despite using the same Showcase material by design.
+	for (int32 SlotIndex = 0; SlotIndex < Component->GetNumMaterials(); ++SlotIndex)
+	{
+		Component->SetMaterial(SlotIndex, Material);
+	}
+}
+
 void SetMetadata(UBlueprint* Blueprint, int32 ZoneIndex, const TCHAR* Label,
 	const FVector& SpawnLocation, TArray<FHapbeatShowcaseHudCommand> Commands)
 {
@@ -374,7 +392,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	Frame->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 	Frame->SetCollisionProfileName(TEXT("BlockAll"));
 	Frame->SetMobility(EComponentMobility::Movable);
-	Frame->SetMaterial(0, DoorMaterial);
+	ApplyMaterialToAllSlots(Frame, DoorMaterial);
 
 	USCS_Node* LeafNode = AddComponent(Blueprint, HingeNode, UStaticMeshComponent::StaticClass(), TEXT("DoorLeafMesh"));
 	UStaticMeshComponent* Leaf = CastChecked<UStaticMeshComponent>(LeafNode->ComponentTemplate);
@@ -383,7 +401,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	Leaf->SetRelativeLocation(FVector(-66.1f, 0.0f, 0.0f));
 	Leaf->SetCollisionProfileName(TEXT("BlockAll"));
 	Leaf->SetMobility(EComponentMobility::Movable);
-	Leaf->SetMaterial(0, DoorMaterial);
+	ApplyMaterialToAllSlots(Leaf, DoorMaterial);
 
 	USCS_Node* HandleNode = AddComponent(Blueprint, LeafNode, UStaticMeshComponent::StaticClass(), TEXT("DoorHandleMesh"));
 	UStaticMeshComponent* Handle = CastChecked<UStaticMeshComponent>(HandleNode->ComponentTemplate);
@@ -391,7 +409,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_DoorHandle.SM_DoorHandle")));
 	Handle->SetCollisionProfileName(TEXT("NoCollision"));
 	Handle->SetMobility(EComponentMobility::Movable);
-	Handle->SetMaterial(0, DoorMaterial);
+	ApplyMaterialToAllSlots(Handle, DoorMaterial);
 
 	// Compile once after creating SCS variables so the graph's component-get
 	// nodes resolve their generated member references before we wire them.

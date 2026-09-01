@@ -20,6 +20,7 @@
 #include "Editor.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
@@ -112,6 +113,23 @@ void ClearGeneratedGraph(UBlueprint* Blueprint)
 			Graph->Nodes.Reset();
 		}
 	}
+
+	// USimpleConstructionScript::RemoveNode only detaches a child from its
+	// parent's ChildNodes; it deliberately leaves that node in the script's
+	// internal AllNodes store. Reusing an older generated Blueprint therefore
+	// accumulated orphaned DoorHinge / DoorFrame templates on every regeneration.
+	// Those templates are still instantiated, so the visible leaf was no longer
+	// a child of the component the Timeline writes to. Replace the generated
+	// script as one unit instead of trying to mutate its private node store.
+	Blueprint->Modify();
+	USimpleConstructionScript* FreshScript = NewObject<USimpleConstructionScript>(
+		Blueprint->GeneratedClass, NAME_None, RF_Transactional);
+	Blueprint->SimpleConstructionScript = FreshScript;
+	if (UBlueprintGeneratedClass* GeneratedClass = Cast<UBlueprintGeneratedClass>(Blueprint->GeneratedClass))
+	{
+		GeneratedClass->SimpleConstructionScript = FreshScript;
+	}
+	Blueprint->ComponentTemplates.Reset();
 }
 
 UEdGraph* GetEventGraph(UBlueprint* Blueprint)
@@ -308,21 +326,6 @@ USCS_Node* AddSceneRoot(UBlueprint* Blueprint)
 {
 	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
 	check(SCS != nullptr);
-
-	// Removing just a root node does not remove its descendants from the SCS's
-	// flat node store.  Re-running the generator then instantiates the detached
-	// templates as well as the fresh three nodes, which is how a single door
-	// accumulated overlapping leaves. Remove every existing node, children first,
-	// before creating the replacement root.
-	const TArray<USCS_Node*> ExistingNodes = SCS->GetAllNodes();
-	for (int32 Index = ExistingNodes.Num() - 1; Index >= 0; --Index)
-	{
-		if (USCS_Node* Node = ExistingNodes[Index]; Node != nullptr && SCS->GetAllNodes().Contains(Node))
-		{
-			SCS->RemoveNode(Node, /*bValidateSceneRootNodes=*/false);
-		}
-	}
-	SCS->ValidateSceneRootNodes();
 	USCS_Node* Root = SCS->CreateNode(USceneComponent::StaticClass(), TEXT("Root"));
 	SCS->AddNode(Root);
 	return Root;
@@ -674,6 +677,8 @@ void Generate()
 	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"));
 	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
+	checkf(Door->SimpleConstructionScript->GetAllNodes().Num() == 5,
+		TEXT("BP_Z2_Door regeneration must produce exactly Root, Hinge, Frame, Leaf, and Handle."));
 	FKismetEditorUtilities::CompileBlueprint(Door);
 	FAssetRegistryModule::AssetCreated(Door);
 	Door->MarkPackageDirty();
@@ -694,6 +699,8 @@ void GenerateDoorAsset()
 	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"));
 	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
+	checkf(Door->SimpleConstructionScript->GetAllNodes().Num() == 5,
+		TEXT("BP_Z2_Door regeneration must produce exactly Root, Hinge, Frame, Leaf, and Handle."));
 	FKismetEditorUtilities::CompileBlueprint(Door);
 	FAssetRegistryModule::AssetCreated(Door);
 	Door->MarkPackageDirty();

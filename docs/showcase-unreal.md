@@ -8,6 +8,14 @@ sidebar:
 
 Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルです。各 zone Actor の Details と `EM_Showcase` を開くと、再生する触覚とその設定を確認・変更できます。
 
+| Zone | 実装方法 | 確認できる触覚配線 |
+| --- | --- | --- |
+| Z1 Bowling | C++ Actor + collision trigger | pin の衝突から `z1_pin_hit` を発火する配線 |
+| Z2 Swing Door | Blueprint Event Graph | ドアの Timeline と `Play Hapbeat Event` を同じ操作分岐から始める配線 |
+| Z3 Fishing | C++ Actor + Sequence / Parameter Binding | hook の開始・loop・解除と、魚の速度を loop Gain へ送る配線 |
+| Z4 Stream Console | C++ Actor + trigger / Parameter Binding | stream の開始・停止と、UI の Gain / Pan を再生中 stream へ送る配線 |
+| Z5 Target Range | C++ Actor + collision trigger | charge・shot の直接 SDK 呼び出しと、target hit の light / heavy 分岐 |
+
 ## 最初に見る場所
 
 1. Content Browser の Settings で **Show Plugin Content** を有効にします。
@@ -74,7 +82,7 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 
 ## Z2 Swing Door — Blueprint からイベントを発火する
 
-`BP_Z2_Door` は、ドアの開閉と **Play Hapbeat Event** を同じ Event Graph で接続する Blueprint 完結の例です。
+`BP_Z2_Door` は、ドアの開閉と **Play Hapbeat Event** を同じ Event Graph で接続する Blueprint 完結の例です。Graph 内では各動作を `DoorOpen | z2_door_open -> Play Hapbeat Event` のように色付きの枠で分けています。
 
 ### SDK の接続を最短で確認する
 
@@ -84,23 +92,11 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 4. `F`、`G`、`L` の Input Key node から、Branch と **Play Hapbeat Event** をたどります。
 
 ```text
-F Pressed
-  → bDoorMoving / bDoorLocked / bDoorOpen の Branch
-  → z2_door_open または z2_door_close または z2_door_rattle
-  → DoorOpen / DoorClose / DoorRattle
-
-G Pressed
-  → bDoorMoving / bDoorLocked / bDoorOpen の Branch
-  → z2_door_slam または z2_door_rattle
-  → DoorSlam / DoorRattle
-
-L Pressed
-  → bDoorMoving / bDoorOpen / bDoorLocked の Branch
-  → z2_door_lock または z2_door_unlock
-
-DoorOpen / DoorClose / DoorSlam: Update
-  → Lerp (Rotator)
-  → Set Relative Rotation (Target: DoorHinge)
+F / G / L Pressed
+  → state Branch
+  → DoorOpen / DoorClose / DoorSlam / DoorRattle / Lock / Unlock
+  → 対応する z2_door_* entry の Play Hapbeat Event
+  → DoorHinge の Timeline
 ```
 
 F は閉じたドアを開き、開いたドアを通常速度で閉じます。ロック中の F は `DoorRattle` を再生します。G は開いたドアだけを 0.117 秒で閉じ、ロック中は同じくラトルを再生します。L は閉じた状態だけで lock / unlock を切り替えます。動作中の入力は受け付けません。
@@ -134,9 +130,35 @@ Shark の速度
 
 `Z3_Fishing` の **Hook Wiring** では、start / loop / release の entry を確認できます。竿、`RodTipMarker`、釣り糸、Shark slot の位置は Details で編集します。
 
+### C++ 実装を確認する
+
+**Tools → Open Visual Studio** を選び、次の SDK ファイルを開きます。
+
+```text
+Plugins
+└ HapbeatSDK
+  └ Source
+    └ HapbeatSDKSamples
+      ├ Public
+      │ └ HapbeatShowcaseZ3FishingActor.h
+      └ Private
+        └ HapbeatShowcaseZ3FishingActor.cpp
+```
+
+`Z3_Fishing` の Details では、**Hapbeat > Event Map Override** と **Hapbeat > Fishing > Hook Wiring** を確認します。後者には実際に解決された start / loop / release の entry 名が表示されます。
+
+| 確認したい配線 | `.h` の識別子 | `.cpp` の関数 |
+| --- | --- | --- |
+| Event Map と 3 entry の解決 | `EventMapOverride`、`ResolvedHook*EntryName` | `AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics` |
+| sequence への map / entry の代入 | `SharkSlot`、`AHapbeatShowcaseZ3SharkActor::HookSequence` | `BuildEventMapAndHaptics` |
+| 魚の速度から loop Gain を更新 | `HookVelocityBinding` | `AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor` |
+| 左クリックで sequence を開始・停止 | — | `HandleFirePressed`、`HandleFireReleased`、`SetHooked` |
+
+`BuildEventMapAndHaptics` の `WiredShark->HookSequence` への `EventMap`、`EntryId`、`StartEntryId`、`StopEntryId` の代入が、Details の entry と sequence をつなぐ箇所です。`SetHooked` が `Fire()` と `Stop()` を呼びます。
+
 ## Z4 Stream Console — loop と runtime parameter
 
-`BP_Z4_StreamConsole` は、Blueprint から stream entry を開始・停止する例です。
+`Z4_StreamConsole` は、C++ Actor の trigger と parameter binding で stream entry を開始・停止する例です。
 
 ```text
 F → z4_stream_loop を開始
@@ -158,6 +180,32 @@ projectile が target に Hit
 ```
 
 `Z5_ChargeShot` の **Haptic Wiring** で、charge、shot、target hit の entry を確認します。charge 時間、launch speed、target slot は同 Actor の Details で変更できます。触覚の Clip、Gain、Target、loop は Event Map で変更します。
+
+### C++ 実装を確認する
+
+**Tools → Open Visual Studio** を選び、次の SDK ファイルを開きます。
+
+```text
+Plugins
+└ HapbeatSDK
+  └ Source
+    └ HapbeatSDKSamples
+      ├ Public
+      │ └ HapbeatShowcaseZ5ChargeShotActor.h
+      └ Private
+        └ HapbeatShowcaseZ5ChargeShotActor.cpp
+```
+
+`Z5_ChargeShot` の Details では、**Hapbeat > Event Map Override** と **Hapbeat > Showcase > Haptic Wiring** を確認します。後者には charge、shot、target hit の解決済み entry 名が表示されます。
+
+| 確認したい配線 | `.h` の識別子 | `.cpp` の関数 |
+| --- | --- | --- |
+| Event Map と 6 entry の解決 | `EventMapOverride`、`Resolved*EntryName` | `AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap` |
+| charge 開始・threshold・release | `ChargeLoopEntryId`、`ChargeThresholdEntryId` | `HandleChargeBegin`、`Tick`、`HandleChargeRelease` |
+| light / heavy shot の直接再生 | `ShotLightEntryId`、`ShotHeavyEntryId` | `FireShotAfterDelay`、`FireOneShotEntry` |
+| target hit の collision trigger | `TargetSlot`、`LightHitTrigger`、`HeavyHitTrigger` | `SetUpTarget` |
+
+`SetUpTarget` では `Target->LightHitTrigger` と `Target->HeavyHitTrigger` に Event Map と entry を代入します。`FireOneShotEntry` は charge / shot の entry を SDK の再生 API で直接発火する箇所です。
 
 ## 変更場所
 

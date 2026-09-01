@@ -38,7 +38,6 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Materials/MaterialInterface.h"
-#include "SubobjectDataSubsystem.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
 
@@ -69,8 +68,9 @@ FGuid FindEntryId(const UHapbeatEventMap* Map, const TCHAR* EventName)
 	return FGuid();
 }
 
-UBlueprint* LoadOrCreateBlueprint(const TCHAR* AssetName)
+UBlueprint* LoadOrCreateBlueprint(const TCHAR* AssetName, bool& bWasCreated)
 {
+	bWasCreated = false;
 	const FString ObjectPath = FString::Printf(TEXT("%s/%s.%s"), AssetFolder, AssetName, AssetName);
 	if (UBlueprint* Existing = LoadObject<UBlueprint>(nullptr, *ObjectPath))
 	{
@@ -79,6 +79,7 @@ UBlueprint* LoadOrCreateBlueprint(const TCHAR* AssetName)
 
 	const FString PackageName = FString::Printf(TEXT("%s/%s"), AssetFolder, AssetName);
 	UPackage* Package = CreatePackage(*PackageName);
+	bWasCreated = true;
 	return FKismetEditorUtilities::CreateBlueprint(
 		AHapbeatShowcaseBlueprintZoneActor::StaticClass(), Package, FName(AssetName),
 		BPTYPE_Normal, UBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass(),
@@ -115,35 +116,6 @@ void ClearGeneratedGraph(UBlueprint* Blueprint)
 		}
 	}
 
-}
-
-void ClearGeneratedComponents(UBlueprint* Blueprint)
-{
-	check(Blueprint != nullptr);
-	check(Blueprint->SimpleConstructionScript != nullptr);
-
-	USubobjectDataSubsystem* SubobjectSystem = USubobjectDataSubsystem::Get();
-	check(SubobjectSystem != nullptr);
-
-	TArray<FSubobjectDataHandle> Handles;
-	SubobjectSystem->GatherSubobjectData(Blueprint->GeneratedClass->GetDefaultObject(), Handles);
-	checkf(!Handles.IsEmpty(), TEXT("Could not gather component data for %s."), *Blueprint->GetPathName());
-
-	TArray<FSubobjectDataHandle> GeneratedComponentHandles;
-	for (const FSubobjectDataHandle& Handle : Handles)
-	{
-		const FSubobjectData* Data = Handle.GetData();
-		if (Data != nullptr && Data->IsComponent() && Data->GetBlueprint() == Blueprint)
-		{
-			GeneratedComponentHandles.Add(Handle);
-		}
-	}
-
-	if (!GeneratedComponentHandles.IsEmpty())
-	{
-		FSubobjectDataHandle IgnoredSelection;
-		SubobjectSystem->DeleteSubobjects(Handles[0], GeneratedComponentHandles, IgnoredSelection, Blueprint, /*bForce=*/true);
-	}
 }
 
 UEdGraph* GetEventGraph(UBlueprint* Blueprint)
@@ -390,9 +362,6 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	// particular, a prior generator version may have referenced an SCS variable
 	// that is about to be rebuilt.
 	ClearGeneratedGraph(Blueprint);
-	// Use the same editor API as the Components panel. USimpleConstructionScript::RemoveNode
-	// only detaches child nodes and leaves them in its internal component list.
-	ClearGeneratedComponents(Blueprint);
 	USCS_Node* Root = AddSceneRoot(Blueprint);
 	USCS_Node* HingeNode = AddComponent(Blueprint, Root, USceneComponent::StaticClass(), TEXT("DoorHinge"));
 	USceneComponent* Hinge = CastChecked<USceneComponent>(HingeNode->ComponentTemplate);
@@ -703,14 +672,18 @@ void Generate()
 {
 	UHapbeatEventMap* EventMap = GetShowcaseEventMap();
 	checkf(EventMap != nullptr, TEXT("Could not load EM_Showcase."));
-	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"));
+	bool bDoorWasCreated = false;
+	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"), bDoorWasCreated);
 	check(Door != nullptr);
-	CreateDoorBlueprint(Door, EventMap);
-	FKismetEditorUtilities::CompileBlueprint(Door);
+	if (bDoorWasCreated)
+	{
+		CreateDoorBlueprint(Door, EventMap);
+		FKismetEditorUtilities::CompileBlueprint(Door);
+		FAssetRegistryModule::AssetCreated(Door);
+		Door->MarkPackageDirty();
+		UPackage::SavePackage(Door->GetOutermost(), Door, *FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
+	}
 	CheckDoorComponentTree(Door);
-	FAssetRegistryModule::AssetCreated(Door);
-	Door->MarkPackageDirty();
-	UPackage::SavePackage(Door->GetOutermost(), Door, *FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	checkf(World != nullptr && World->GetOutermost()->GetName() == MapPath, TEXT("Open the Showcase map before running Hapbeat.GenerateBlueprintShowcase."));
@@ -724,16 +697,20 @@ void GenerateDoorAsset()
 {
 	UHapbeatEventMap* EventMap = GetShowcaseEventMap();
 	checkf(EventMap != nullptr, TEXT("Could not load EM_Showcase."));
-	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"));
+	bool bDoorWasCreated = false;
+	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"), bDoorWasCreated);
 	check(Door != nullptr);
-	CreateDoorBlueprint(Door, EventMap);
-	FKismetEditorUtilities::CompileBlueprint(Door);
+	if (bDoorWasCreated)
+	{
+		CreateDoorBlueprint(Door, EventMap);
+		FKismetEditorUtilities::CompileBlueprint(Door);
+		FAssetRegistryModule::AssetCreated(Door);
+		Door->MarkPackageDirty();
+		UPackage::SavePackage(Door->GetOutermost(), Door,
+			*FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()),
+			FSavePackageArgs());
+	}
 	CheckDoorComponentTree(Door);
-	FAssetRegistryModule::AssetCreated(Door);
-	Door->MarkPackageDirty();
-	UPackage::SavePackage(Door->GetOutermost(), Door,
-		*FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()),
-		FSavePackageArgs());
 	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated BP_Z2_Door without changing the Showcase map."));
 }
 

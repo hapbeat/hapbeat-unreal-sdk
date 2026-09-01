@@ -28,7 +28,7 @@ private:
 	FDelegateHandle EndPieHandle;
 
 	/** Used only by the headless Blueprint-authoring command-line switch. */
-	FDelegateHandle EngineLoopInitCompleteHandle;
+	FDelegateHandle EditorInitializedHandle;
 
 	/** Registered from this module so editor-startup console commands are always available. */
 	class IConsoleObject* GenerateShowcaseCommand = nullptr;

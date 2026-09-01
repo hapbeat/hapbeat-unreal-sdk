@@ -20,6 +20,7 @@
 #include "Editor.h"
 #include "EdGraphSchema_K2.h"
 #include "Engine/Blueprint.h"
+#include "Engine/BlueprintGeneratedClass.h"
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/StaticMesh.h"
@@ -685,6 +686,17 @@ void ReplaceZoneActor(UWorld* World, const TCHAR* Label, UClass* ActorClass, con
 	}
 }
 
+void CheckDoorComponentTree(const UBlueprint* Blueprint)
+{
+	check(Blueprint != nullptr);
+	checkf(Blueprint->SimpleConstructionScript->GetAllNodes().Num() == 5,
+		TEXT("BP_Z2_Door must contain exactly Root, DoorHinge, DoorFrameMesh, DoorLeafMesh, and DoorHandleMesh."));
+	const UBlueprintGeneratedClass* GeneratedClass = CastChecked<UBlueprintGeneratedClass>(Blueprint->GeneratedClass);
+	checkf(GeneratedClass->SimpleConstructionScript != nullptr
+		&& GeneratedClass->SimpleConstructionScript->GetAllNodes().Num() == 5,
+		TEXT("BP_Z2_Door's generated class must contain exactly five SCS nodes."));
+}
+
 }
 
 void Generate()
@@ -695,6 +707,7 @@ void Generate()
 	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
 	FKismetEditorUtilities::CompileBlueprint(Door);
+	CheckDoorComponentTree(Door);
 	FAssetRegistryModule::AssetCreated(Door);
 	Door->MarkPackageDirty();
 	UPackage::SavePackage(Door->GetOutermost(), Door, *FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
@@ -715,6 +728,7 @@ void GenerateDoorAsset()
 	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
 	FKismetEditorUtilities::CompileBlueprint(Door);
+	CheckDoorComponentTree(Door);
 	FAssetRegistryModule::AssetCreated(Door);
 	Door->MarkPackageDirty();
 	UPackage::SavePackage(Door->GetOutermost(), Door,

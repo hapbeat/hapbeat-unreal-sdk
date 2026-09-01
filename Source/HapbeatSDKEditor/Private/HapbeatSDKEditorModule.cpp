@@ -10,6 +10,7 @@
 #include "HapbeatEntryRef.h"
 #include "HapbeatEntryRefCustomization.h"
 #include "HapbeatEntryRefPinFactory.h"
+#include "HapbeatShowcaseBlueprintBuilder.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatTriggerComponentCustomization.h"
 #include "HapbeatUpdateCheck.h"
@@ -20,6 +21,7 @@
 #include "Editor.h"
 #include "IAssetTools.h"
 #include "EdGraphUtilities.h"
+#include "HAL/IConsoleManager.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 #include "ToolMenus.h"
@@ -76,6 +78,14 @@ void FHapbeatSDKEditorModule::StartupModule()
 	// several Event Maps, which is how the Unity window is used in practice.
 	SHapbeatEventMapWindow::RegisterTabSpawner();
 	SHapbeatRuntimeStatusWindow::RegisterTabSpawner();
+	GenerateShowcaseCommand = IConsoleManager::Get().RegisterConsoleCommand(
+		TEXT("Hapbeat.GenerateBlueprintShowcase"),
+		TEXT("Generate the two Blueprint-authored Showcase zones and replace their map actors."),
+		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::Generate));
+	GenerateDoorAssetCommand = IConsoleManager::Get().RegisterConsoleCommand(
+		TEXT("Hapbeat.GenerateBlueprintDoorAsset"),
+		TEXT("Generate BP_Z2_Door without changing the Showcase map."),
+		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset));
 
 	// Tools menu entries + the once-per-session release-feed notice (DEC-053).
 	// Deferred until menus exist: StartupModule can run before UToolMenus is ready.
@@ -98,6 +108,16 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 
 	SHapbeatEventMapWindow::UnregisterTabSpawner();
 	SHapbeatRuntimeStatusWindow::UnregisterTabSpawner();
+	if (GenerateShowcaseCommand != nullptr)
+	{
+		IConsoleManager::Get().UnregisterConsoleObject(GenerateShowcaseCommand);
+		GenerateShowcaseCommand = nullptr;
+	}
+	if (GenerateDoorAssetCommand != nullptr)
+	{
+		IConsoleManager::Get().UnregisterConsoleObject(GenerateDoorAssetCommand);
+		GenerateDoorAssetCommand = nullptr;
+	}
 	FHapbeatUpdateCheck::Unregister();
 
 	if (EntryRefPinFactory.IsValid())

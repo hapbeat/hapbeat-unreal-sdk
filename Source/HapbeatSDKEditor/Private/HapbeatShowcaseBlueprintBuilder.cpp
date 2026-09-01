@@ -3,6 +3,7 @@
 /** Editor-only authoring command for the two Blueprint-complete Showcase zones. */
 
 #include "HapbeatShowcaseBlueprintZoneActor.h"
+#include "HapbeatShowcaseBlueprintBuilder.h"
 
 #include "HapbeatBlueprintLibrary.h"
 #include "HapbeatEventMap.h"
@@ -661,13 +662,4 @@ void GenerateDoorAsset()
 	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated BP_Z2_Door without changing the Showcase map."));
 }
 
-static FAutoConsoleCommand GenerateCommand(
-	TEXT("Hapbeat.GenerateBlueprintShowcase"),
-	TEXT("Generate the two Blueprint-authored Showcase zones and replace their map actors."),
-	FConsoleCommandDelegate::CreateStatic(&Generate));
-
-static FAutoConsoleCommand GenerateDoorAssetCommand(
-	TEXT("Hapbeat.GenerateBlueprintDoorAsset"),
-	TEXT("Generate BP_Z2_Door without changing the Showcase map."),
-	FConsoleCommandDelegate::CreateStatic(&GenerateDoorAsset));
 }

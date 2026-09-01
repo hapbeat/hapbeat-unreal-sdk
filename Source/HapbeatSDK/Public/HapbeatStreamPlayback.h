@@ -130,8 +130,8 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")
 	bool IsStopped() const;
 
-	/** True while the stream is still active (not stopped). */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+/** True only while this source's StreamClip is actively producing haptic chunks. */
+UFUNCTION(BlueprintPure, Category = "Hapbeat")
 	bool IsActive() const { return Status == EHapbeatStreamPlaybackStatus::Active && !IsStopped(); }
 
 	UFUNCTION(BlueprintPure, Category = "Hapbeat")

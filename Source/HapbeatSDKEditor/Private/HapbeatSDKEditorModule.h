@@ -33,4 +33,5 @@ private:
 	/** Registered from this module so editor-startup console commands are always available. */
 	class IConsoleObject* GenerateShowcaseCommand = nullptr;
 	class IConsoleObject* GenerateDoorAssetCommand = nullptr;
+	class IConsoleObject* GenerateStreamConsoleAssetsCommand = nullptr;
 };

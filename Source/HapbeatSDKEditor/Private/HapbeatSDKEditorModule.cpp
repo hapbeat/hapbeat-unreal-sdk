@@ -89,19 +89,28 @@ void FHapbeatSDKEditorModule::StartupModule()
 		TEXT("Hapbeat.GenerateBlueprintDoorAsset"),
 		TEXT("Generate BP_Z2_Door without changing the Showcase map."),
 		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset));
+	GenerateStreamConsoleAssetsCommand = IConsoleManager::Get().RegisterConsoleCommand(
+		TEXT("Hapbeat.GenerateBlueprintZ4Assets"),
+		TEXT("Generate BP_Z4_StreamConsole and its Widget Blueprint without changing the Showcase map."),
+		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::GenerateStreamConsoleAssets));
 	// ExecCmds is evaluated before Editor modules at LoadingPhase=Default are
 	// available. These flags are the deterministic no-UI routes for local
 	// authoring: wait until the Editor has completed its initial map load, run
 	// the requested generator, then exit without entering PIE.
 	const bool bGenerateDoorAsset = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintDoorAsset"));
+	const bool bGenerateStreamConsoleAssets = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintZ4Assets"));
 	const bool bGenerateShowcase = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintShowcase"));
-	if (bGenerateDoorAsset || bGenerateShowcase)
+	if (bGenerateDoorAsset || bGenerateStreamConsoleAssets || bGenerateShowcase)
 	{
-		EditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddLambda([bGenerateShowcase](double /*Duration*/)
+		EditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddLambda([bGenerateShowcase, bGenerateStreamConsoleAssets](double /*Duration*/)
 		{
 			if (bGenerateShowcase)
 			{
 				HapbeatShowcaseBlueprintBuilder::Generate();
+			}
+			else if (bGenerateStreamConsoleAssets)
+			{
+				HapbeatShowcaseBlueprintBuilder::GenerateStreamConsoleAssets();
 			}
 			else
 			{
@@ -143,6 +152,11 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 	{
 		IConsoleManager::Get().UnregisterConsoleObject(GenerateDoorAssetCommand);
 		GenerateDoorAssetCommand = nullptr;
+	}
+	if (GenerateStreamConsoleAssetsCommand != nullptr)
+	{
+		IConsoleManager::Get().UnregisterConsoleObject(GenerateStreamConsoleAssetsCommand);
+		GenerateStreamConsoleAssetsCommand = nullptr;
 	}
 	FHapbeatUpdateCheck::Unregister();
 

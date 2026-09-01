@@ -22,6 +22,8 @@ public class HapbeatSDKEditor : ModuleRules
 			"PropertyEditor",// IDetailCustomization, FPropertyEditorModule
 			"GraphEditor",   // SGraphPin (the FHapbeatEntryRef by-name entry pin)
 			"BlueprintGraph",// UEdGraphSchema_K2::PC_Struct (pin-type match in the pin factory)
+			"UMG",          // UUserWidget / UWidgetBlueprintLibrary used by generated Z4 graphs
+			"UMGEditor",    // creates the generated Z4 Widget Blueprint asset
 			"Slate",         // SButton / SComboBox / SHorizontalBox
 			"SlateCore",     // STextBlock, FAppStyle (Runtime/SlateCore)
 			"InputCore",     // EKeys::* referenced by SComboBox/SListView templates instantiated in this module

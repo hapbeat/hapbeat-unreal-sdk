@@ -2,8 +2,10 @@
 
 /** Editor-only authoring command for the two Blueprint-complete Showcase zones. */
 
-#include "HapbeatShowcaseBlueprintZoneActor.h"
 #include "HapbeatShowcaseBlueprintBuilder.h"
+
+#include "HapbeatShowcaseBlueprintZoneActor.h"
+#include "HapbeatShowcaseZ4StreamConsoleActor.h"
 
 #include "HapbeatBlueprintLibrary.h"
 #include "HapbeatEventMap.h"
@@ -305,11 +307,21 @@ USCS_Node* AddSceneRoot(UBlueprint* Blueprint)
 {
 	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
 	check(SCS != nullptr);
-	const TArray<USCS_Node*> ExistingRoots = SCS->GetRootNodes();
-	for (USCS_Node* RootNode : ExistingRoots)
+
+	// Removing just a root node does not remove its descendants from the SCS's
+	// flat node store.  Re-running the generator then instantiates the detached
+	// templates as well as the fresh three nodes, which is how a single door
+	// accumulated overlapping leaves. Remove every existing node, children first,
+	// before creating the replacement root.
+	const TArray<USCS_Node*> ExistingNodes = SCS->GetAllNodes();
+	for (int32 Index = ExistingNodes.Num() - 1; Index >= 0; --Index)
 	{
-		SCS->RemoveNode(RootNode);
+		if (USCS_Node* Node = ExistingNodes[Index]; Node != nullptr && SCS->GetAllNodes().Contains(Node))
+		{
+			SCS->RemoveNode(Node, /*bValidateSceneRootNodes=*/false);
+		}
 	}
+	SCS->ValidateSceneRootNodes();
 	USCS_Node* Root = SCS->CreateNode(USceneComponent::StaticClass(), TEXT("Root"));
 	SCS->AddNode(Root);
 	return Root;
@@ -597,8 +609,9 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* Event
 		  { FText::FromString(TEXT("Components")), FText::FromString(TEXT("Sequence, Gain/Pan bindings, Tick Trigger are editable on this Blueprint")) } });
 }
 
-void ReplaceZoneActor(UWorld* World, const TCHAR* Label, UBlueprint* Blueprint, const FVector& DefaultLocation)
+void ReplaceZoneActor(UWorld* World, const TCHAR* Label, UClass* ActorClass, const FVector& DefaultLocation)
 {
+	check(ActorClass != nullptr);
 	FTransform Transform(FRotator::ZeroRotator, DefaultLocation);
 	TArray<TWeakObjectPtr<AActor>> OldActors;
 	for (TActorIterator<AActor> It(World); It; ++It)
@@ -611,7 +624,7 @@ void ReplaceZoneActor(UWorld* World, const TCHAR* Label, UBlueprint* Blueprint, 
 		}
 	}
 	FActorSpawnParameters Params;
-	AActor* Replacement = World->SpawnActor<AActor>(Blueprint->GeneratedClass, Transform, Params);
+	AActor* Replacement = World->SpawnActor<AActor>(ActorClass, Transform, Params);
 	checkf(Replacement != nullptr, TEXT("Could not spawn %s"), Label);
 	Replacement->SetActorLabel(Label);
 	for (const TWeakObjectPtr<AActor> OldActor : OldActors)
@@ -629,25 +642,19 @@ void Generate()
 	UHapbeatEventMap* EventMap = GetShowcaseEventMap();
 	checkf(EventMap != nullptr, TEXT("Could not load EM_Showcase."));
 	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"));
-	UBlueprint* Stream = LoadOrCreateBlueprint(TEXT("BP_Z4_StreamConsole"));
-	check(Door != nullptr && Stream != nullptr);
+	check(Door != nullptr);
 	CreateDoorBlueprint(Door, EventMap);
-	CreateStreamConsoleBlueprint(Stream, EventMap);
 	FKismetEditorUtilities::CompileBlueprint(Door);
-	FKismetEditorUtilities::CompileBlueprint(Stream);
 	FAssetRegistryModule::AssetCreated(Door);
-	FAssetRegistryModule::AssetCreated(Stream);
 	Door->MarkPackageDirty();
-	Stream->MarkPackageDirty();
 	UPackage::SavePackage(Door->GetOutermost(), Door, *FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
-	UPackage::SavePackage(Stream->GetOutermost(), Stream, *FPackageName::LongPackageNameToFilename(Stream->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
 	checkf(World != nullptr && World->GetOutermost()->GetName() == MapPath, TEXT("Open the Showcase map before running Hapbeat.GenerateBlueprintShowcase."));
-	ReplaceZoneActor(World, TEXT("Z2_Door"), Door, FVector(0.0f, 3000.0f, 0.0f));
-	ReplaceZoneActor(World, TEXT("Z4_StreamConsole"), Stream, FVector(0.0f, 9000.0f, 0.0f));
+	ReplaceZoneActor(World, TEXT("Z2_Door"), Door->GeneratedClass, FVector(0.0f, 3000.0f, 0.0f));
+	ReplaceZoneActor(World, TEXT("Z4_StreamConsole"), AHapbeatShowcaseZ4StreamConsoleActor::StaticClass(), FVector(0.0f, 9000.0f, 0.0f));
 	FEditorFileUtils::SaveLevel(World->PersistentLevel);
-	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated BP_Z2_Door and BP_Z4_StreamConsole; replaced the two Showcase actors."));
+	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated BP_Z2_Door and restored the C++ Z4 Stream Console in the Showcase map."));
 }
 
 void GenerateDoorAsset()

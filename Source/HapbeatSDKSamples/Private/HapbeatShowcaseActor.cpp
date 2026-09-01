@@ -8,6 +8,7 @@
 #include "HapbeatShowcaseZone.h"
 #include "HapbeatShowcaseZ1BowlingActor.h"
 #include "HapbeatShowcaseZ3FishingActor.h"
+#include "HapbeatShowcaseZ4StreamConsoleActor.h"
 #include "HapbeatShowcaseZ5ChargeShotActor.h"
 #include "HapbeatSubsystem.h"
 #include "SHapbeatShowcaseHud.h"
@@ -87,9 +88,11 @@ AHapbeatShowcaseActor::AHapbeatShowcaseActor()
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/BP_Z2_Door"));
 	Zones.Add(MakeZone(DoorBlueprint.Class, TEXT("Door")));
 	Zones.Add(MakeZone(AHapbeatShowcaseZ3FishingActor::StaticClass(), TEXT("Fishing")));
-	static ConstructorHelpers::FClassFinder<AActor> StreamConsoleBlueprint(
-		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/BP_Z4_StreamConsole"));
-	Zones.Add(MakeZone(StreamConsoleBlueprint.Class, TEXT("Stream Console")));
+	// Z4 is the C++-complete Showcase example: its Slate UI and the SDK Address
+	// Override panel are created at runtime, while Z2 remains the BP-complete
+	// counterpart. Keeping the fallback aligned with the placed map avoids a
+	// missing UI when a user drops only the switcher into a fresh level.
+	Zones.Add(MakeZone(AHapbeatShowcaseZ4StreamConsoleActor::StaticClass(), TEXT("Stream Console")));
 	Zones.Add(MakeZone(AHapbeatShowcaseZ5ChargeShotActor::StaticClass(), TEXT("Charge Shot")));
 
 	// Same authored asset the zones default to, so Q fires through the same

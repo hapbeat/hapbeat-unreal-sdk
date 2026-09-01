@@ -90,14 +90,23 @@ void FHapbeatSDKEditorModule::StartupModule()
 		TEXT("Generate BP_Z2_Door without changing the Showcase map."),
 		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset));
 	// ExecCmds is evaluated before Editor modules at LoadingPhase=Default are
-	// available. This flag is the deterministic no-UI route for local authoring:
-	// wait until the Editor has completed its initial map load, generate only the
-	// requested asset, then exit without entering PIE.
-	if (FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintDoorAsset")))
+	// available. These flags are the deterministic no-UI routes for local
+	// authoring: wait until the Editor has completed its initial map load, run
+	// the requested generator, then exit without entering PIE.
+	const bool bGenerateDoorAsset = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintDoorAsset"));
+	const bool bGenerateShowcase = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintShowcase"));
+	if (bGenerateDoorAsset || bGenerateShowcase)
 	{
-		EditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddLambda([](double /*Duration*/)
+		EditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddLambda([bGenerateShowcase](double /*Duration*/)
 		{
-			HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset();
+			if (bGenerateShowcase)
+			{
+				HapbeatShowcaseBlueprintBuilder::Generate();
+			}
+			else
+			{
+				HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset();
+			}
 			FPlatformMisc::RequestExit(false);
 		});
 	}

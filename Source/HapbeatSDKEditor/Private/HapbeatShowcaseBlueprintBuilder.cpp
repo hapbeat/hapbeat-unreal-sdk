@@ -45,6 +45,7 @@
 #include "K2Node_VariableSet.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Materials/MaterialInterface.h"
@@ -145,6 +146,19 @@ void ClearGeneratedGraph(UBlueprint* Blueprint)
 		}
 	}
 
+}
+
+void ClearGeneratedComponentTree(UBlueprint* Blueprint)
+{
+	check(Blueprint != nullptr);
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+	check(SCS != nullptr);
+	const TArray<USCS_Node*> Nodes = SCS->GetAllNodes();
+	for (int32 Index = Nodes.Num() - 1; Index >= 0; --Index)
+	{
+		SCS->RemoveNode(Nodes[Index], false);
+	}
+	SCS->ValidateSceneRootNodes();
 }
 
 UEdGraph* GetEventGraph(UBlueprint* Blueprint)
@@ -693,6 +707,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 {
 	check(WidgetBlueprint != nullptr);
 	ClearGeneratedGraph(Blueprint);
+	ClearGeneratedComponentTree(Blueprint);
 	USCS_Node* Root = AddSceneRoot(Blueprint);
 	const FGuid LoopId = FindEntryId(EventMap, TEXT("z4_stream_loop"));
 	const FGuid TickId = FindEntryId(EventMap, TEXT("z4_slider_tick"));
@@ -826,16 +841,23 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	UK2Node_CallFunction* StopForDeactivate = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), -960, 230);
 	UK2Node_VariableGet* StoredWidget = AddSelfVariableGet(Graph, TEXT("ConsoleWidget"), -720, 330);
+	UK2Node_CallFunction* IsWidgetValid = AddCall(Graph, UKismetSystemLibrary::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -700, 230);
+	UK2Node_IfThenElse* HasConsoleWidget = AddNode<UK2Node_IfThenElse>(Graph, -480, 230);
 	UK2Node_CallFunction* RemoveWidget = AddCall(Graph, UUserWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UUserWidget, RemoveFromParent), -480, 230);
-	UK2Node_VariableGet* AddressForHide = AddComponentGet(Graph, TEXT("AddressPanel"), -240, 330);
+		GET_FUNCTION_NAME_CHECKED(UUserWidget, RemoveFromParent), -230, 180);
+	UK2Node_VariableGet* AddressForHide = AddComponentGet(Graph, TEXT("AddressPanel"), 0, 330);
 	UK2Node_CallFunction* HideAddress = AddCall(Graph, UHapbeatAddressOverridePanelComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Hide), 0, 230);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Hide), 240, 230);
 	ConnectPins(Deactivated->GetThenPin(), StopForDeactivate->GetExecPin());
 	ConnectPins(LoopForDeactivate->GetValuePin(), FindTargetPinChecked(StopForDeactivate));
-	ConnectPins(StopForDeactivate->GetThenPin(), RemoveWidget->GetExecPin());
+	ConnectPins(StopForDeactivate->GetThenPin(), HasConsoleWidget->GetExecPin());
+	ConnectPins(StoredWidget->GetValuePin(), FindPinChecked(IsWidgetValid, TEXT("Object")));
+	ConnectPins(IsWidgetValid->GetReturnValuePin(), HasConsoleWidget->GetConditionPin());
+	ConnectPins(HasConsoleWidget->GetThenPin(), RemoveWidget->GetExecPin());
 	ConnectPins(StoredWidget->GetValuePin(), FindTargetPinChecked(RemoveWidget));
 	ConnectPins(RemoveWidget->GetThenPin(), HideAddress->GetExecPin());
+	ConnectPins(HasConsoleWidget->GetElsePin(), HideAddress->GetExecPin());
 	ConnectPins(AddressForHide->GetValuePin(), FindTargetPinChecked(HideAddress));
 
 	SetMetadata(Blueprint, 4, TEXT("Stream Console"), FVector(-250.0f, 0.0f, 0.0f),
@@ -959,6 +981,25 @@ void GenerateStreamConsoleAssets()
 	}
 	CheckStreamConsoleComponentTree(Stream);
 	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated Z4 Stream Console Blueprint assets without changing the Showcase map."));
+}
+
+void RebuildStreamConsoleAssets()
+{
+	UHapbeatEventMap* EventMap = GetShowcaseEventMap();
+	checkf(EventMap != nullptr, TEXT("Could not load EM_Showcase."));
+	bool bWidgetWasCreated = false;
+	UWidgetBlueprint* StreamWidget = LoadOrCreateWidgetBlueprint(TEXT("BP_Z4_StreamConsoleWidget"), bWidgetWasCreated);
+	check(StreamWidget != nullptr);
+	CreateStreamConsoleWidgetBlueprint(StreamWidget);
+	SaveBlueprintAsset(StreamWidget);
+
+	bool bStreamWasCreated = false;
+	UBlueprint* Stream = LoadOrCreateBlueprint(TEXT("BP_Z4_StreamConsole"), bStreamWasCreated);
+	check(Stream != nullptr);
+	CreateStreamConsoleBlueprint(Stream, StreamWidget, EventMap);
+	SaveBlueprintAsset(Stream);
+	CheckStreamConsoleComponentTree(Stream);
+	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Rebuilt Z4 Stream Console Blueprint assets without changing the Showcase map."));
 }
 
 void GenerateDoorAsset()

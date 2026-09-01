@@ -39,16 +39,38 @@ ball が pin に Hit
 
 ### C++ 実装を確認する
 
-`Z1_Bowling` の右クリックメニューには、このプロジェクトで使える C++ を開く項目はありません。
+上部の **Tools → Open Visual Studio**（表示名は設定済み IDE に応じて変わります）でプロジェクトを開きます。メニューがない場合は、`.uproject` と同じフォルダの `.sln` を開きます。
 
-上部の **Tools → Open Visual Studio**（表示名は設定済み IDE に応じて変わります）でプロジェクト全体を開きます。開いた IDE の Solution Explorer で `Plugins/HapbeatSDK/Source/HapbeatSDKSamples/Private` を開くと、対応する `.cpp` 実装を確認できます。
+Solution Explorer では、次の順で開きます。
 
-**Open Visual Studio** が Tools にない場合は、エクスプローラーで `.uproject` と同じフォルダの `.sln` を開きます。
+```text
+Plugins
+└ HapbeatSDK
+  └ Source
+    └ HapbeatSDKSamples
+      ├ Public
+      │ └ HapbeatShowcaseZ1BowlingActor.h
+      └ Private
+        └ HapbeatShowcaseZ1BowlingActor.cpp
+```
 
-- `Source/HapbeatSDKSamples/Public/HapbeatShowcaseZ1BowlingActor.h` — Details に出る `Event Map`、`Pin Hit Event` と pin slot の定義
-- `Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ1BowlingActor.cpp` — ball launch、pin の生成、hit を entry 発火へ結ぶ処理
+最初に `Public/HapbeatShowcaseZ1BowlingActor.h` を開き、Details に表示される項目の宣言を確認します。その後、同名の `Private/HapbeatShowcaseZ1BowlingActor.cpp` を開き、実行時にそれらを pin の trigger へ渡す処理を確認します。
 
-`Public` / `Private` はエンジンの表示可否ではなく、他の Unreal module から include できるヘッダか、module 内部の実装かを分けるフォルダです。どちらも SDK のソースとして確認・変更できます。Content Browser の **C++ Classes** は主に `Public` のクラスをたどる入口なので、`.cpp` は IDE 側で開きます。
+| Editor の項目 | ヘッダの宣言 | `.cpp` で確認する関数 | 内容 |
+| --- | --- | --- | --- |
+| **Event Map** | `EventMapOverride` | `AHapbeatShowcaseZ1BowlingActor::BuildEventMap` | 使用する Event Map を `EventMap` に解決します。 |
+| **Pin Hit Event** | `PinHitEvent` | `AHapbeatShowcaseZ1BowlingActor::BuildEventMap` | 選んだ entry の ID を `PinHitEntryId` に解決します。 |
+| pin の配置 | `PinSlots` | `AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor` | 6 個の `UChildActorComponent` を作成します。 |
+| pin への触覚配線 | `AHapbeatShowcaseZ1PinActor::HitTrigger` | `AHapbeatShowcaseZ1BowlingActor::SetUpPins` | 各 pin の `HitTrigger->EventMap` と `HitTrigger->EntryId` に、解決済みの map と entry を代入します。 |
+
+`SetUpPins` 内の次の 2 行が、Details の選択を実際の pin 衝突 trigger へ接続する箇所です。
+
+```cpp
+Pin->HitTrigger->EventMap = EventMap;
+Pin->HitTrigger->EntryId = PinHitEntryId;
+```
+
+衝突条件そのものは、同じ `.cpp` の `AHapbeatShowcaseZ1PinActor::AHapbeatShowcaseZ1PinActor` で `HitTrigger` に設定されています。
 
 Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-behavior.md) を参照してください。
 

@@ -22,6 +22,9 @@
 #include "IAssetTools.h"
 #include "EdGraphUtilities.h"
 #include "HAL/IConsoleManager.h"
+#include "HAL/PlatformMisc.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 #include "ToolMenus.h"
@@ -86,6 +89,18 @@ void FHapbeatSDKEditorModule::StartupModule()
 		TEXT("Hapbeat.GenerateBlueprintDoorAsset"),
 		TEXT("Generate BP_Z2_Door without changing the Showcase map."),
 		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset));
+	// ExecCmds is evaluated before Editor modules at LoadingPhase=Default are
+	// available. This flag is the deterministic no-UI route for local authoring:
+	// wait for engine initialization, generate only the requested asset, then
+	// exit without entering PIE.
+	if (FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintDoorAsset")))
+	{
+		PostEngineInitHandle = FCoreDelegates::OnPostEngineInit.AddLambda([]
+		{
+			HapbeatShowcaseBlueprintBuilder::GenerateDoorAsset();
+			FPlatformMisc::RequestExit(false);
+		});
+	}
 
 	// Tools menu entries + the once-per-session release-feed notice (DEC-053).
 	// Deferred until menus exist: StartupModule can run before UToolMenus is ready.
@@ -105,6 +120,8 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 {
 	FEditorDelegates::EndPIE.Remove(EndPieHandle);
 	EndPieHandle.Reset();
+	FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
+	PostEngineInitHandle.Reset();
 
 	SHapbeatEventMapWindow::UnregisterTabSpawner();
 	SHapbeatRuntimeStatusWindow::UnregisterTabSpawner();

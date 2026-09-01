@@ -27,6 +27,9 @@ private:
 	/** FEditorDelegates::EndPIE handle, so the editor Test Play socket is closed when a PIE session ends (belt-and-braces; see FHapbeatEditorSender's class doc for why this can't actually collide with the runtime socket). */
 	FDelegateHandle EndPieHandle;
 
+	/** Used only by the headless Blueprint-authoring command-line switch. */
+	FDelegateHandle PostEngineInitHandle;
+
 	/** Registered from this module so editor-startup console commands are always available. */
 	class IConsoleObject* GenerateShowcaseCommand = nullptr;
 	class IConsoleObject* GenerateDoorAssetCommand = nullptr;

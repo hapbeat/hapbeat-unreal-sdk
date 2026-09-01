@@ -13,7 +13,7 @@ Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続
 | Z1 Bowling | C++ Actor + collision trigger | pin の衝突から `z1_pin_hit` を発火する配線 |
 | Z2 Swing Door | Blueprint Event Graph | ドアの Timeline と `Play Hapbeat Event` を同じ操作分岐から始める配線 |
 | Z3 Fishing | C++ Actor + Sequence / Parameter Binding | hook の開始・loop・解除と、魚の速度を loop Gain へ送る配線 |
-| Z4 Stream Console | C++ Actor + trigger / Parameter Binding | stream の開始・停止と、UI の Gain / Pan を再生中 stream へ送る配線 |
+| Z4 Stream Console | Blueprint Event Graph + Widget Blueprint | stream の開始・停止、UI の Gain / Pan、tick、Address Override の配線 |
 | Z5 Target Range | C++ Actor + collision trigger | charge・shot の直接 SDK 呼び出しと、target hit の light / heavy 分岐 |
 
 ## 最初に見る場所
@@ -160,15 +160,32 @@ Plugins
 
 ## Z4 Stream Console — loop と runtime parameter
 
-`Z4_StreamConsole` は、C++ Actor の trigger と parameter binding で stream entry を開始・停止する例です。
+`BP_Z4_StreamConsole` と `BP_Z4_StreamConsoleWidget` は、stream の開始・停止、runtime parameter、tick、Address Override を Blueprint で接続する例です。
 
 ```text
-F → z4_stream_loop を開始
-G → z4_stream_loop を停止
-T → z4_slider_tick を発火
+Space
+  → LoopTrigger.Get Active Playback
+  → Is Active
+  → Stop または Fire
+
+Gain / Pan slider
+  → GainBinding / PanBinding.Set Value
+
+slider detent
+  → Play Sound 2D
+  → TickTrigger.Fire
 ```
 
-Component tree の `GainBinding` と `PanBinding` は、再生中 stream の Gain と Pan を更新する設定です。`LoopTrigger` と `TickTrigger` の Details から Event Map entry を確認できます。
+### SDK の接続を最短で確認する
+
+1. World Outliner で `Z4_StreamConsole` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z4_StreamConsole` を開きます。
+2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickTrigger`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。
+3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から `LoopTrigger` の `Fire` / `Stop` を、`On Showcase Zone Activated` から `Create Widget` と `AddressPanel.Show` を確認します。
+4. `BP_Z4_StreamConsoleWidget` を開き、**My Blueprint > Graphs > EventGraph** を開きます。`Handle Gain Value Changed`、`Handle Pan Value Changed`、`Handle Tick` が、`Set Value` と `TickTrigger.Fire` に接続されています。
+
+`LoopTrigger` は `z4_stream_loop`、`TickTrigger` は `z4_slider_tick` を指します。各 trigger の Details で **Event Map** と entry を変更できます。`GainBinding` と `PanBinding` は **Source = External** と **Target Trigger = LoopTrigger** を使用し、Widget Blueprint が `Set Value` を呼びます。
+
+`AddressPanel` は Zone が表示中に `Show`、非表示時に `Hide` されます。Player / Group の選択はこの component の UI で Apply します。
 
 ## Z5 Target Range — charge / shot と target hit
 

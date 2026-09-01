@@ -210,7 +210,11 @@ UK2Node_VariableSet* AddBoolSet(UEdGraph* Graph, const TCHAR* VariableName, bool
 	UK2Node_VariableSet* Node = AddNode<UK2Node_VariableSet>(Graph, X, Y);
 	Node->VariableReference.SetSelfMember(FName(VariableName));
 	Node->ReconstructNode();
-	Node->GetValuePin()->DefaultValue = bValue ? TEXT("true") : TEXT("false");
+	// UK2Node_Variable::GetValuePin() is intentionally getter-only.  A setter
+	// owns an input pin with the member's name instead.
+	UEdGraphPin* ValuePin = Node->FindPin(FName(VariableName), EGPD_Input);
+	checkf(ValuePin != nullptr, TEXT("Expected value input for generated bool '%s'."), VariableName);
+	ValuePin->DefaultValue = bValue ? TEXT("true") : TEXT("false");
 	return Node;
 }
 

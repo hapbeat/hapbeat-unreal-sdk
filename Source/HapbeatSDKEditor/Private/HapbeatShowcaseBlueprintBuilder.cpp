@@ -132,13 +132,9 @@ void ClearGeneratedComponents(UBlueprint* Blueprint)
 	for (const FSubobjectDataHandle& Handle : Handles)
 	{
 		const FSubobjectData* Data = Handle.GetData();
-		if (Data != nullptr)
+		if (Data != nullptr && Data->IsComponent() && Data->GetBlueprint() == Blueprint)
 		{
-			USCS_Node* Node = Data->GetSCSNode();
-			if (Node != nullptr && Node->GetSCS() == Blueprint->SimpleConstructionScript)
-			{
-				GeneratedComponentHandles.Add(Handle);
-			}
+			GeneratedComponentHandles.Add(Handle);
 		}
 	}
 

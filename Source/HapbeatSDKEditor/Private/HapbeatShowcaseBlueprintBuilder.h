@@ -7,5 +7,4 @@ namespace HapbeatShowcaseBlueprintBuilder
 void Generate();
 void GenerateDoorAsset();
 void GenerateStreamConsoleAssets();
-void RebuildStreamConsoleAssets();
 }

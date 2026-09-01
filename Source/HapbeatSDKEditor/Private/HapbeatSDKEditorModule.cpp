@@ -93,21 +93,16 @@ void FHapbeatSDKEditorModule::StartupModule()
 		TEXT("Hapbeat.GenerateBlueprintZ4Assets"),
 		TEXT("Generate BP_Z4_StreamConsole and its Widget Blueprint without changing the Showcase map."),
 		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::GenerateStreamConsoleAssets));
-	RebuildStreamConsoleAssetsCommand = IConsoleManager::Get().RegisterConsoleCommand(
-		TEXT("Hapbeat.RebuildBlueprintZ4Assets"),
-		TEXT("Rebuild BP_Z4_StreamConsole and its Widget Blueprint from the Showcase source."),
-		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::RebuildStreamConsoleAssets));
 	// ExecCmds is evaluated before Editor modules at LoadingPhase=Default are
 	// available. These flags are the deterministic no-UI routes for local
 	// authoring: wait until the Editor has completed its initial map load, run
 	// the requested generator, then exit without entering PIE.
 	const bool bGenerateDoorAsset = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintDoorAsset"));
 	const bool bGenerateStreamConsoleAssets = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintZ4Assets"));
-	const bool bRebuildStreamConsoleAssets = FParse::Param(FCommandLine::Get(), TEXT("HapbeatRebuildBlueprintZ4Assets"));
 	const bool bGenerateShowcase = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintShowcase"));
-	if (bGenerateDoorAsset || bGenerateStreamConsoleAssets || bRebuildStreamConsoleAssets || bGenerateShowcase)
+	if (bGenerateDoorAsset || bGenerateStreamConsoleAssets || bGenerateShowcase)
 	{
-		EditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddLambda([bGenerateShowcase, bGenerateStreamConsoleAssets, bRebuildStreamConsoleAssets](double /*Duration*/)
+		EditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddLambda([bGenerateShowcase, bGenerateStreamConsoleAssets](double /*Duration*/)
 		{
 			if (bGenerateShowcase)
 			{
@@ -116,10 +111,6 @@ void FHapbeatSDKEditorModule::StartupModule()
 			else if (bGenerateStreamConsoleAssets)
 			{
 				HapbeatShowcaseBlueprintBuilder::GenerateStreamConsoleAssets();
-			}
-			else if (bRebuildStreamConsoleAssets)
-			{
-				HapbeatShowcaseBlueprintBuilder::RebuildStreamConsoleAssets();
 			}
 			else
 			{
@@ -166,11 +157,6 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 	{
 		IConsoleManager::Get().UnregisterConsoleObject(GenerateStreamConsoleAssetsCommand);
 		GenerateStreamConsoleAssetsCommand = nullptr;
-	}
-	if (RebuildStreamConsoleAssetsCommand != nullptr)
-	{
-		IConsoleManager::Get().UnregisterConsoleObject(RebuildStreamConsoleAssetsCommand);
-		RebuildStreamConsoleAssetsCommand = nullptr;
 	}
 	FHapbeatUpdateCheck::Unregister();
 

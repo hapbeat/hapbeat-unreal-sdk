@@ -148,19 +148,6 @@ void ClearGeneratedGraph(UBlueprint* Blueprint)
 
 }
 
-void ClearGeneratedComponentTree(UBlueprint* Blueprint)
-{
-	check(Blueprint != nullptr);
-	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
-	check(SCS != nullptr);
-	const TArray<USCS_Node*> Nodes = SCS->GetAllNodes();
-	for (int32 Index = Nodes.Num() - 1; Index >= 0; --Index)
-	{
-		SCS->RemoveNode(Nodes[Index], false);
-	}
-	SCS->ValidateSceneRootNodes();
-}
-
 UEdGraph* GetEventGraph(UBlueprint* Blueprint)
 {
 	check(Blueprint != nullptr);
@@ -707,7 +694,6 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 {
 	check(WidgetBlueprint != nullptr);
 	ClearGeneratedGraph(Blueprint);
-	ClearGeneratedComponentTree(Blueprint);
 	USCS_Node* Root = AddSceneRoot(Blueprint);
 	const FGuid LoopId = FindEntryId(EventMap, TEXT("z4_stream_loop"));
 	const FGuid TickId = FindEntryId(EventMap, TEXT("z4_slider_tick"));
@@ -981,25 +967,6 @@ void GenerateStreamConsoleAssets()
 	}
 	CheckStreamConsoleComponentTree(Stream);
 	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated Z4 Stream Console Blueprint assets without changing the Showcase map."));
-}
-
-void RebuildStreamConsoleAssets()
-{
-	UHapbeatEventMap* EventMap = GetShowcaseEventMap();
-	checkf(EventMap != nullptr, TEXT("Could not load EM_Showcase."));
-	bool bWidgetWasCreated = false;
-	UWidgetBlueprint* StreamWidget = LoadOrCreateWidgetBlueprint(TEXT("BP_Z4_StreamConsoleWidget"), bWidgetWasCreated);
-	check(StreamWidget != nullptr);
-	CreateStreamConsoleWidgetBlueprint(StreamWidget);
-	SaveBlueprintAsset(StreamWidget);
-
-	bool bStreamWasCreated = false;
-	UBlueprint* Stream = LoadOrCreateBlueprint(TEXT("BP_Z4_StreamConsole"), bStreamWasCreated);
-	check(Stream != nullptr);
-	CreateStreamConsoleBlueprint(Stream, StreamWidget, EventMap);
-	SaveBlueprintAsset(Stream);
-	CheckStreamConsoleComponentTree(Stream);
-	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Rebuilt Z4 Stream Console Blueprint assets without changing the Showcase map."));
 }
 
 void GenerateDoorAsset()

@@ -34,5 +34,4 @@ private:
 	class IConsoleObject* GenerateShowcaseCommand = nullptr;
 	class IConsoleObject* GenerateDoorAssetCommand = nullptr;
 	class IConsoleObject* GenerateStreamConsoleAssetsCommand = nullptr;
-	class IConsoleObject* RebuildStreamConsoleAssetsCommand = nullptr;
 };

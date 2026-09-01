@@ -108,6 +108,7 @@ void FHapbeatEventMapCustomization::CustomizeDetails(IDetailLayoutBuilder& Detai
 				[
 					SNew(SButton)
 					.Text(LOCTEXT("TestPlay", "Test Play"))
+					.ClickMethod(EButtonClickMethod::MouseDown)
 					.IsEnabled(this, &FHapbeatEventMapCustomization::IsTestPlayEnabled)
 					.ToolTipText(this, &FHapbeatEventMapCustomization::GetTestPlayTooltip)
 					.OnClicked(this, &FHapbeatEventMapCustomization::OnTestPlayClicked)

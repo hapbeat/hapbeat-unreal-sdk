@@ -6,6 +6,8 @@
 #include "HapbeatNetInterfaces.h"
 #include "HapbeatProtocol.h"
 #include "HapbeatStreamRunnable.h"
+#include "HapbeatSubsystem.h"
+#include "HapbeatTargetLibrary.h"
 #include "Common/UdpSocketBuilder.h"
 #include "HAL/RunnableThread.h"
 #include "Interfaces/IPv4/IPv4Address.h"
@@ -36,6 +38,28 @@ namespace
 	 * this simply drops back to broadcast.
 	 */
 	constexpr double EditorDeviceTtlSeconds = 15.0;
+
+	/** Resolve the authored target exactly as the next runtime launch will.
+	 * Test Play is an editor transport, but it must not silently bypass the
+	 * per-machine routing chosen in Hapbeat Runtime Status. */
+	FString ResolveEditorTarget(const FString& AuthoredTarget)
+	{
+		int32 SavedPlayer = UHapbeatSubsystem::AddressOverrideDisabled;
+		int32 SavedGroup = UHapbeatSubsystem::AddressOverrideDisabled;
+		UHapbeatSubsystem::TryGetPersistedAddressOverride(SavedPlayer, SavedGroup);
+
+		const UHapbeatConfig* Config = GetDefault<UHapbeatConfig>();
+		const int32 ForcedPlayer = Config != nullptr
+			? UHapbeatSubsystem::NormalizeAddressOverride(Config->ForcedOverridePlayer)
+			: UHapbeatSubsystem::AddressOverrideDisabled;
+		const int32 ForcedGroup = Config != nullptr
+			? UHapbeatSubsystem::NormalizeAddressOverride(Config->ForcedOverrideGroup)
+			: UHapbeatSubsystem::AddressOverrideDisabled;
+
+		return UHapbeatTargetLibrary::ResolveTarget(AuthoredTarget,
+			ForcedPlayer >= 1 ? ForcedPlayer : UHapbeatSubsystem::NormalizeAddressOverride(SavedPlayer),
+			ForcedGroup >= 1 ? ForcedGroup : UHapbeatSubsystem::NormalizeAddressOverride(SavedGroup));
+	}
 }
 
 bool FHapbeatEditorSender::EnsureSocket()
@@ -255,7 +279,7 @@ void FHapbeatEditorSender::SendPlay(const FString& EventId, float Gain, const FS
 	}
 	// The caller passes the ENTRY's authored pan: Test Play auditions what the
 	// entry says, without the per-call value a runtime node would add on top.
-	SendRouted(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, Target, /*TargetTimeUs=*/0, Gain, Pan));
+	SendRouted(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolveEditorTarget(Target), /*TargetTimeUs=*/0, Gain, Pan));
 }
 
 void FHapbeatEditorSender::SendStop(const FString& EventId, const FString& Target)
@@ -264,12 +288,12 @@ void FHapbeatEditorSender::SendStop(const FString& EventId, const FString& Targe
 	{
 		return;
 	}
-	SendRouted(FHapbeatProtocol::BuildStop(NextSeq(), EventId, Target));
+	SendRouted(FHapbeatProtocol::BuildStop(NextSeq(), EventId, ResolveEditorTarget(Target)));
 }
 
 void FHapbeatEditorSender::SendStopAll(const FString& Target)
 {
-	SendRouted(FHapbeatProtocol::BuildStopAll(NextSeq(), Target));
+	SendRouted(FHapbeatProtocol::BuildStopAll(NextSeq(), ResolveEditorTarget(Target)));
 }
 
 void FHapbeatEditorSender::SendPing()
@@ -373,7 +397,7 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 		TArray<uint8>(Clip->Pcm16),
 		Clip->SampleRate,
 		Clip->NumChannels,
-		Target,
+		ResolveEditorTarget(Target),
 		StreamMirror.ToSharedRef(),
 		[]() { return NextSeq(); },
 		Socket,

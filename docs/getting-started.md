@@ -69,7 +69,12 @@ Kit の要否は再生方式で変わります。ここが最初のつまずき�
 
 ### 設定項目の場所
 
-**Edit → Project Settings → Plugins → Hapbeat**（`UHapbeatConfig`）。
+エディタ上部の **Tools → Hapbeat → Hapbeat Settings** を選びます。
+これは **Edit → Project Settings → Plugins → Hapbeat**（`UHapbeatConfig`）を直接開くショートカットです。
+Port、App Name、Command Unicast、遅延、ビルド固定の Address Override をここで確認・編集します。
+
+端末ごとの Address Override と、PIE 中の実効値は **Tools → Hapbeat → Hapbeat Runtime Status** で確認します。
+PIE 外でも `Player` / `Group` を保存でき、PIE 中に保存した場合はその場で送信先にも反映されます。
 最初は**すべて既定値のままで動きます**。
 
 | 項目 | 既定値 | 意味 |

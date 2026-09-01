@@ -28,6 +28,7 @@ public class HapbeatSDKEditor : ModuleRules
 			"DesktopPlatform", // IDesktopPlatform::OpenFileDialog (UHapbeatClip WAV import)
 			"Projects",      // IPluginManager (bundled-sample WAV dialog default / plugin Content manifest scan)
 			"ToolMenus",     // Tools menu entries (update check)
+			"Settings",      // Project Settings > Plugins > Hapbeat shortcut
 			"HTTP",          // release-feed query (DEC-053 update notification)
 			"ContentBrowser",// selected-asset lookup for the Markdown export
 			"AssetRegistry", // single-Event-Map fallback for the Markdown export

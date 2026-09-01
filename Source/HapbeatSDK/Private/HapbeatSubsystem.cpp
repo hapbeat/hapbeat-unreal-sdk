@@ -1132,8 +1132,15 @@ void UHapbeatSubsystem::StopStream()
 
 void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPersist)
 {
-	OverridePlayer = NormalizeAddressOverride(Player);
-	OverrideGroup = NormalizeAddressOverride(InGroup);
+	const UHapbeatConfig* Config = GetDefault<UHapbeatConfig>();
+	const int32 ForcedPlayer = Config != nullptr ? NormalizeAddressOverride(Config->ForcedOverridePlayer) : AddressOverrideDisabled;
+	const int32 ForcedGroup = Config != nullptr ? NormalizeAddressOverride(Config->ForcedOverrideGroup) : AddressOverrideDisabled;
+
+	// A build-pinned axis is intentionally not mutable at runtime. This has to
+	// live at the one send-boundary state owner, not merely in the Slate panel:
+	// Blueprint callers and C++ callers must obey the same deployment contract.
+	OverridePlayer = ForcedPlayer >= 1 ? ForcedPlayer : NormalizeAddressOverride(Player);
+	OverrideGroup = ForcedGroup >= 1 ? ForcedGroup : NormalizeAddressOverride(InGroup);
 
 	// STREAM packets carry no target and must never be broadcast. Keep the
 	// authored source target intact, then atomically reassign each active source
@@ -1146,9 +1153,7 @@ void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPe
 
 	if (bPersist)
 	{
-		GConfig->SetInt(AddressOverrideConfigSection, AddressOverridePlayerKey, OverridePlayer, GGameUserSettingsIni);
-		GConfig->SetInt(AddressOverrideConfigSection, AddressOverrideGroupKey, OverrideGroup, GGameUserSettingsIni);
-		GConfig->Flush(false, GGameUserSettingsIni);
+		SavePersistedAddressOverride(Player, InGroup);
 	}
 
 	UE_LOG(LogHapbeat, Log, TEXT("Address override set: player=%d, group=%d, persist=%d"),
@@ -1165,9 +1170,7 @@ void UHapbeatSubsystem::SetAddressOverride(int32 Player, int32 InGroup, bool bPe
 
 void UHapbeatSubsystem::ClearPersistedAddressOverride()
 {
-	GConfig->RemoveKey(AddressOverrideConfigSection, AddressOverridePlayerKey, GGameUserSettingsIni);
-	GConfig->RemoveKey(AddressOverrideConfigSection, AddressOverrideGroupKey, GGameUserSettingsIni);
-	GConfig->Flush(false, GGameUserSettingsIni);
+	RemovePersistedAddressOverride();
 
 	// Reuses SetAddressOverride (bPersist: false, so the just-cleared keys
 	// aren't immediately re-saved) to push the reverted values to the runtime
@@ -1191,6 +1194,35 @@ bool UHapbeatSubsystem::TryGetPersistedAddressOverride(int32& OutPlayer, int32& 
 	const bool bHasGroup =
 		GConfig->GetInt(AddressOverrideConfigSection, AddressOverrideGroupKey, OutGroup, GGameUserSettingsIni);
 	return bHasPlayer || bHasGroup;
+}
+
+void UHapbeatSubsystem::SavePersistedAddressOverride(int32 Player, int32 InGroup)
+{
+	const UHapbeatConfig* Config = GetDefault<UHapbeatConfig>();
+	const bool bPlayerForced = Config != nullptr && NormalizeAddressOverride(Config->ForcedOverridePlayer) >= 1;
+	const bool bGroupForced = Config != nullptr && NormalizeAddressOverride(Config->ForcedOverrideGroup) >= 1;
+
+	// Do not create a hidden per-machine fallback underneath a build-pinned
+	// axis. If a later build deliberately removes the pin, its Addressing
+	// defaults remain the only project-authored source of truth.
+	if (!bPlayerForced)
+	{
+		GConfig->SetInt(AddressOverrideConfigSection, AddressOverridePlayerKey,
+			NormalizeAddressOverride(Player), GGameUserSettingsIni);
+	}
+	if (!bGroupForced)
+	{
+		GConfig->SetInt(AddressOverrideConfigSection, AddressOverrideGroupKey,
+			NormalizeAddressOverride(InGroup), GGameUserSettingsIni);
+	}
+	GConfig->Flush(false, GGameUserSettingsIni);
+}
+
+void UHapbeatSubsystem::RemovePersistedAddressOverride()
+{
+	GConfig->RemoveKey(AddressOverrideConfigSection, AddressOverridePlayerKey, GGameUserSettingsIni);
+	GConfig->RemoveKey(AddressOverrideConfigSection, AddressOverrideGroupKey, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
 }
 
 bool UHapbeatSubsystem::TickKeepAlive(float /*DeltaSeconds*/)

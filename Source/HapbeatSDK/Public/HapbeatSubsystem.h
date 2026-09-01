@@ -322,6 +322,22 @@ public:
 	 */
 	static bool TryGetPersistedAddressOverride(int32& OutPlayer, int32& OutGroup);
 
+	/**
+	 * Save the per-machine address override without requiring a running game
+	 * instance. Editor tooling uses this to prepare the next PIE or packaged
+	 * launch. Build-pinned axes are deliberately left out of the saved value:
+	 * their value always comes from UHapbeatConfig instead.
+	 *
+	 * When a game is already running, call SetAddressOverride(..., true)
+	 * instead so the new value takes effect immediately as well as persisting.
+	 */
+	static void SavePersistedAddressOverride(int32 Player, int32 InGroup);
+
+	/** Remove the per-machine override written by SavePersistedAddressOverride.
+	 * This does not change an already-running subsystem; use
+	 * ClearPersistedAddressOverride() for that case. */
+	static void RemovePersistedAddressOverride();
+
 	/** Currently effective forced player number, or AddressOverrideDisabled (-1) if this axis doesn't override the target's player. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat|Target")
 	int32 GetOverridePlayer() const { return OverridePlayer; }

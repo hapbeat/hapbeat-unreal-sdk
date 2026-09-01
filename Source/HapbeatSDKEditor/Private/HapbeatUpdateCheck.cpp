@@ -2,12 +2,14 @@
 #include "HapbeatUpdateCheck.h"
 
 #include "HapbeatEditorTools.h"
+#include "SHapbeatRuntimeStatusWindow.h"
 #include "SHapbeatEventMapWindow.h"
 
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
 #include "Interfaces/IPluginManager.h"
+#include "ISettingsModule.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/DateTime.h"
 #include "Misc/Paths.h"
@@ -204,6 +206,24 @@ void FHapbeatUpdateCheck::Register()
 		FUIAction(FExecuteAction::CreateLambda([]
 		{
 			FGlobalTabmanager::Get()->TryInvokeTab(SHapbeatEventMapWindow::TabId);
+		})));
+
+	Section.AddMenuEntry("HapbeatSettings",
+		LOCTEXT("OpenSettings", "Hapbeat Settings"),
+		LOCTEXT("OpenSettingsTooltip", "Open the project-wide Hapbeat SDK configuration, including UDP port and routing defaults."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ProjectSettings.TabIcon"),
+		FUIAction(FExecuteAction::CreateLambda([]
+		{
+			FModuleManager::LoadModuleChecked<ISettingsModule>("Settings").ShowViewer("Project", "Plugins", "Hapbeat");
+		})));
+
+	Section.AddMenuEntry("HapbeatRuntimeStatus",
+		LOCTEXT("OpenRuntimeStatus", "Hapbeat Runtime Status"),
+		LOCTEXT("OpenRuntimeStatusTooltip", "Inspect and save this machine's Address Override. During PIE, shows the currently effective runtime value."),
+		FSlateIcon(FAppStyle::GetAppStyleSetName(), "LevelEditor.Tabs.Details"),
+		FUIAction(FExecuteAction::CreateLambda([]
+		{
+			FGlobalTabmanager::Get()->TryInvokeTab(SHapbeatRuntimeStatusWindow::TabId);
 		})));
 
 	Section.AddMenuEntry("HapbeatCheckForUpdates",

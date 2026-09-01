@@ -37,6 +37,16 @@ ball が pin に Hit
 
 `Pin Hit Event` は Actor に保存される編集可能な参照です。`EM_Showcase` 側で `z1_pin_hit` の Clip、Gain、Target を変えることも、別の entry を `Pin Hit Event` に選び直すこともできます。
 
+### C++ 実装を確認する
+
+エディタの **C++ Classes** は `UCLASS` の宣言ヘッダを表示する入口です。Showcase の Z1 は
+`HapbeatShowcaseZ1BowlingActor` を開きます。実行処理は同名の `.cpp` にあり、IDE の Solution Explorer から次を開きます。
+
+- `Source/HapbeatSDKSamples/Public/HapbeatShowcaseZ1BowlingActor.h` — Details に出る `Event Map`、`Pin Hit Event` と pin slot の定義
+- `Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ1BowlingActor.cpp` — ball launch、pin の生成、hit を entry 発火へ結ぶ処理
+
+`Public` / `Private` はエンジンの表示可否ではなく、他の Unreal module から include できるヘッダか、module 内部の実装かを分けるフォルダです。どちらも SDK のソースとして確認・変更できます。
+
 Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-behavior.md) を参照してください。
 
 ## Z2 Swing Door — Blueprint からイベントを発火する
@@ -48,23 +58,31 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 1. World Outliner で `Z2_Door` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z2_Door` をダブルクリックします。
 2. 開いた Blueprint Editor の左上 **Components** パネルが component tree です。`DoorHinge`、`DoorLeafMesh`、`DoorHandleMesh` を確認します。
 3. 左の **My Blueprint > Graphs > EventGraph** を開きます。
-4. `F` または `G` の Input Key node から、次の一本の実行線をたどります。
+4. `F`、`G`、`L` の Input Key node から、Branch と **Play Hapbeat Event** をたどります。
 
 ```text
 F Pressed
-  → Play Hapbeat Event (z2_door_open)
-  → DoorMotion: Play from Start
+  → bDoorMoving / bDoorLocked / bDoorOpen の Branch
+  → z2_door_open または z2_door_close または z2_door_rattle
+  → DoorOpen / DoorClose / DoorRattle
 
 G Pressed
-  → Play Hapbeat Event (z2_door_close)
-  → DoorMotion: Reverse
+  → bDoorMoving / bDoorLocked / bDoorOpen の Branch
+  → z2_door_slam または z2_door_rattle
+  → DoorSlam / DoorRattle
 
-DoorMotion: Update
+L Pressed
+  → bDoorMoving / bDoorOpen / bDoorLocked の Branch
+  → z2_door_lock または z2_door_unlock
+
+DoorOpen / DoorClose / DoorSlam: Update
   → Lerp (Rotator)
   → Set Relative Rotation (Target: DoorHinge)
 ```
 
-`DoorMotion` の float track `OpenAlpha` が 0.65 秒で 0 から 1 へ変化し、`DoorHinge` を Yaw 0° から 90° へ回転させます。開閉と触覚の開始点は、F/G の Input Key node で共通です。
+F は閉じたドアを開き、開いたドアを通常速度で閉じます。ロック中の F は `DoorRattle` を再生します。G は開いたドアだけを 0.117 秒で閉じ、ロック中は同じくラトルを再生します。L は閉じた状態だけで lock / unlock を切り替えます。動作中の入力は受け付けません。
+
+`DoorOpen`、`DoorClose`、`DoorSlam` の float track `OpenAlpha` が `DoorHinge` を閉じた Yaw -90° と開いた Yaw 0° の間で回転させます。各 Timeline と触覚イベントは同じ分岐から開始するため、視覚と触覚の開始点を Event Graph で確認できます。
 
 この Blueprint には `OpenTrigger` / `CloseTrigger` component はありません。ドアの可動部分は `DoorHinge` です。
 
@@ -72,7 +90,10 @@ DoorMotion: Update
 | --- | --- |
 | Open Door | `z2_door_open` |
 | Close Door | `z2_door_close` |
+| Slam Door | `z2_door_slam` |
 | Lock Door | `z2_door_lock` |
+| Unlock Door | `z2_door_unlock` |
+| Locked Rattle | `z2_door_rattle` |
 
 各 **Play Hapbeat Event** node の `Map` と `Entry` pin で再生先を確認します。entry の Clip、Gain、Target は `EM_Showcase` で編集します。
 
@@ -124,6 +145,15 @@ projectile が target に Hit
 | 実行時の送信先 | Address Override |
 
 `Target` は送信先を表す論理フィルタです。Address Override は Event Map や Actor の配線を変更しません。
+
+## SDK の接続設定と確認
+
+エディタ上部の **Tools → Hapbeat** から次を開けます。
+
+- **Hapbeat Settings** — Port、App Name、Command Unicast、タイミング、ビルド固定の Address Override を編集します。
+- **Hapbeat Runtime Status** — この PC に保存する Address Override と、PIE 中の実効 Player / Group、socket 状態を確認します。PIE 外で保存した値は次回の PIE / packaged launch に使われ、PIE 中に保存した値は即時反映されます。
+
+Event Map の **Test Play** は、同じ保存済み Address Override と build-pinned override を解決してから送信します。Test Play はボタンを押した時点で送信されます。
 
 ## 関連資料
 

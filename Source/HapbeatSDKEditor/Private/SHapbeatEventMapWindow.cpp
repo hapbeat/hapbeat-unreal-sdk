@@ -1290,6 +1290,7 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildTestSection()
 					[
 						SNew(SButton)
 						.Text(LOCTEXT("TestPlay", "Test Play"))
+						.ClickMethod(EButtonClickMethod::MouseDown)
 						.ButtonColorAndOpacity(TestPlayColor)
 						.IsEnabled_Lambda([this] { return FindSelectedEntry() != nullptr; })
 						.ToolTipText_Lambda([this]

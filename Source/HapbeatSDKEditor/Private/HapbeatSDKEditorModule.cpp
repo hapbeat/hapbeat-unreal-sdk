@@ -14,6 +14,7 @@
 #include "HapbeatTriggerComponentCustomization.h"
 #include "HapbeatUpdateCheck.h"
 #include "SHapbeatEventMapWindow.h"
+#include "SHapbeatRuntimeStatusWindow.h"
 
 #include "AssetToolsModule.h"
 #include "Editor.h"
@@ -74,6 +75,7 @@ void FHapbeatSDKEditorModule::StartupModule()
 	// editor) so the window can stay docked while the user switches between
 	// several Event Maps, which is how the Unity window is used in practice.
 	SHapbeatEventMapWindow::RegisterTabSpawner();
+	SHapbeatRuntimeStatusWindow::RegisterTabSpawner();
 
 	// Tools menu entries + the once-per-session release-feed notice (DEC-053).
 	// Deferred until menus exist: StartupModule can run before UToolMenus is ready.
@@ -95,6 +97,7 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 	EndPieHandle.Reset();
 
 	SHapbeatEventMapWindow::UnregisterTabSpawner();
+	SHapbeatRuntimeStatusWindow::UnregisterTabSpawner();
 	FHapbeatUpdateCheck::Unregister();
 
 	if (EntryRefPinFactory.IsValid())

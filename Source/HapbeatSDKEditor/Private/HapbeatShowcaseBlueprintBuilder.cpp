@@ -25,9 +25,11 @@
 #include "FileHelpers.h"
 #include "InputCoreTypes.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_IfThenElse.h"
 #include "K2Node_InputKey.h"
 #include "K2Node_Timeline.h"
 #include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
@@ -79,6 +81,14 @@ UBlueprint* LoadOrCreateBlueprint(const TCHAR* AssetName)
 
 void ClearGeneratedGraph(UBlueprint* Blueprint)
 {
+	// These are state variables owned by the generated Z2 graph.  Remove them
+	// before rebuilding so the command is idempotent and their defaults cannot
+	// drift from the graph it creates.
+	for (const FName VariableName : { FName(TEXT("bDoorOpen")), FName(TEXT("bDoorLocked")), FName(TEXT("bDoorMoving")) })
+	{
+		FBlueprintEditorUtils::RemoveMemberVariable(Blueprint, VariableName);
+	}
+
 	// Timeline templates are Blueprint-owned assets, not graph nodes.  Remove
 	// them explicitly so re-running the generator remains idempotent.
 	const TArray<TObjectPtr<UTimelineTemplate>> ExistingTimelines = Blueprint->Timelines;
@@ -186,6 +196,36 @@ UK2Node_VariableGet* AddComponentGet(UEdGraph* Graph, const TCHAR* ComponentName
 	return Node;
 }
 
+UK2Node_VariableGet* AddSelfVariableGet(UEdGraph* Graph, const TCHAR* VariableName, int32 X, int32 Y)
+{
+	UK2Node_VariableGet* Node = AddNode<UK2Node_VariableGet>(Graph, X, Y);
+	Node->VariableReference.SetSelfMember(FName(VariableName));
+	Node->ReconstructNode();
+	return Node;
+}
+
+UK2Node_VariableSet* AddBoolSet(UEdGraph* Graph, const TCHAR* VariableName, bool bValue, int32 X, int32 Y)
+{
+	UK2Node_VariableSet* Node = AddNode<UK2Node_VariableSet>(Graph, X, Y);
+	Node->VariableReference.SetSelfMember(FName(VariableName));
+	Node->ReconstructNode();
+	Node->GetValuePin()->DefaultValue = bValue ? TEXT("true") : TEXT("false");
+	return Node;
+}
+
+UK2Node_IfThenElse* AddBranch(UEdGraph* Graph, int32 X, int32 Y)
+{
+	return AddNode<UK2Node_IfThenElse>(Graph, X, Y);
+}
+
+void AddBoolMember(UBlueprint* Blueprint, const TCHAR* VariableName)
+{
+	FEdGraphPinType BoolType;
+	BoolType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+	checkf(FBlueprintEditorUtils::AddMemberVariable(Blueprint, FName(VariableName), BoolType, TEXT("false")),
+		TEXT("Could not add generated boolean '%s'."), VariableName);
+}
+
 void ConnectPins(UEdGraphPin* From, UEdGraphPin* To)
 {
 	if (From == nullptr || To == nullptr)
@@ -213,21 +253,45 @@ void ConfigurePlayEvent(UK2Node_CallFunction* Node, UHapbeatEventMap* EventMap, 
 		static_cast<int32>(EntryId.C), static_cast<int32>(EntryId.D));
 }
 
-UTimelineTemplate* CreateDoorMotionTimeline(UBlueprint* Blueprint)
+UTimelineTemplate* CreateDoorMotionTimeline(UBlueprint* Blueprint, const TCHAR* Name,
+	float DurationSeconds, float StartAlpha, float EndAlpha)
 {
-	UTimelineTemplate* Timeline = FBlueprintEditorUtils::AddNewTimeline(Blueprint, TEXT("DoorMotion"));
+	UTimelineTemplate* Timeline = FBlueprintEditorUtils::AddNewTimeline(Blueprint, Name);
 	check(Timeline != nullptr);
-	Timeline->TimelineLength = 0.65f;
+	Timeline->TimelineLength = DurationSeconds;
 	Timeline->LengthMode = TL_TimelineLength;
 
 	FTTFloatTrack OpenAlpha;
 	OpenAlpha.SetTrackName(TEXT("OpenAlpha"), Timeline);
 	OpenAlpha.CurveFloat = NewObject<UCurveFloat>(Blueprint->GeneratedClass, NAME_None, RF_Public);
-	const FKeyHandle ClosedKey = OpenAlpha.CurveFloat->FloatCurve.AddKey(0.0f, 0.0f);
-	const FKeyHandle OpenKey = OpenAlpha.CurveFloat->FloatCurve.AddKey(0.65f, 1.0f);
+	const FKeyHandle ClosedKey = OpenAlpha.CurveFloat->FloatCurve.AddKey(0.0f, StartAlpha);
+	const FKeyHandle OpenKey = OpenAlpha.CurveFloat->FloatCurve.AddKey(DurationSeconds, EndAlpha);
 	OpenAlpha.CurveFloat->FloatCurve.SetKeyInterpMode(ClosedKey, RCIM_Linear);
 	OpenAlpha.CurveFloat->FloatCurve.SetKeyInterpMode(OpenKey, RCIM_Linear);
 	Timeline->FloatTracks.Add(OpenAlpha);
+	Timeline->AddDisplayTrack(FTTTrackId(FTTTrackBase::TT_FloatInterp, 0));
+	return Timeline;
+}
+
+UTimelineTemplate* CreateDoorRattleTimeline(UBlueprint* Blueprint)
+{
+	UTimelineTemplate* Timeline = FBlueprintEditorUtils::AddNewTimeline(Blueprint, TEXT("DoorRattle"));
+	check(Timeline != nullptr);
+	Timeline->TimelineLength = 0.3f;
+	Timeline->LengthMode = TL_TimelineLength;
+
+	FTTFloatTrack RattleYaw;
+	RattleYaw.SetTrackName(TEXT("RattleYaw"), Timeline);
+	RattleYaw.CurveFloat = NewObject<UCurveFloat>(Blueprint->GeneratedClass, NAME_None, RF_Public);
+	const FKeyHandle Key0 = RattleYaw.CurveFloat->FloatCurve.AddKey(0.0f, 0.0f);
+	const FKeyHandle Key1 = RattleYaw.CurveFloat->FloatCurve.AddKey(0.1f, 3.0f);
+	const FKeyHandle Key2 = RattleYaw.CurveFloat->FloatCurve.AddKey(0.2f, -3.0f);
+	const FKeyHandle Key3 = RattleYaw.CurveFloat->FloatCurve.AddKey(0.3f, 0.0f);
+	for (const FKeyHandle Key : { Key0, Key1, Key2, Key3 })
+	{
+		RattleYaw.CurveFloat->FloatCurve.SetKeyInterpMode(Key, RCIM_Linear);
+	}
+	Timeline->FloatTracks.Add(RattleYaw);
 	Timeline->AddDisplayTrack(FTTTrackId(FTTTrackBase::TT_FloatInterp, 0));
 	return Timeline;
 }
@@ -277,6 +341,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	USCS_Node* HingeNode = AddComponent(Blueprint, Root, USceneComponent::StaticClass(), TEXT("DoorHinge"));
 	USceneComponent* Hinge = CastChecked<USceneComponent>(HingeNode->ComponentTemplate);
 	Hinge->SetRelativeLocation(FVector(0.0f, -66.1f, 0.0f));
+	Hinge->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 
 	USCS_Node* FrameNode = AddComponent(Blueprint, Root, UStaticMeshComponent::StaticClass(), TEXT("DoorFrameMesh"));
 	UStaticMeshComponent* Frame = CastChecked<UStaticMeshComponent>(FrameNode->ComponentTemplate);
@@ -306,47 +371,166 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	UEdGraph* Graph = GetEventGraph(Blueprint);
 	const FGuid OpenId = FindEntryId(EventMap, TEXT("z2_door_open"));
 	const FGuid CloseId = FindEntryId(EventMap, TEXT("z2_door_close"));
+	const FGuid SlamId = FindEntryId(EventMap, TEXT("z2_door_slam"));
 	const FGuid LockId = FindEntryId(EventMap, TEXT("z2_door_lock"));
-	UTimelineTemplate* DoorMotionTemplate = CreateDoorMotionTimeline(Blueprint);
-	UK2Node_Timeline* DoorMotion = AddTimeline(Graph, DoorMotionTemplate, 0, -120);
-	UK2Node_CallFunction* LerpRotation = AddCall(Graph, UKismetMathLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RLerp), 280, -120);
-	// K2 pins serialize a Rotator as its three comma-separated components, not
-	// as FRotator::ToString()'s named-property representation.  Using the latter
-	// lets the asset save but leaves the generated Timeline graph uncompilable.
-	FindPinChecked(LerpRotation, TEXT("A"))->DefaultValue = TEXT("0.000000,0.000000,0.000000");
-	FindPinChecked(LerpRotation, TEXT("B"))->DefaultValue = TEXT("0.000000,90.000000,0.000000");
-	FindPinChecked(LerpRotation, TEXT("bShortestPath"))->DefaultValue = TEXT("false");
-	UK2Node_VariableGet* HingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 280, 40);
-	UK2Node_CallFunction* SetHingeRotation = AddCall(Graph, USceneComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 560, -30);
-	ConnectPins(DoorMotion->GetUpdatePin(), SetHingeRotation->GetExecPin());
-	ConnectPins(FindPinChecked(DoorMotion, TEXT("OpenAlpha")), FindPinChecked(LerpRotation, TEXT("Alpha")));
-	ConnectPins(LerpRotation->GetReturnValuePin(), FindPinChecked(SetHingeRotation, TEXT("NewRotation")));
-	ConnectPins(FindPinChecked(HingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetHingeRotation));
+	const FGuid UnlockId = FindEntryId(EventMap, TEXT("z2_door_unlock"));
+	const FGuid RattleId = FindEntryId(EventMap, TEXT("z2_door_rattle"));
+	AddBoolMember(Blueprint, TEXT("bDoorOpen"));
+	AddBoolMember(Blueprint, TEXT("bDoorLocked"));
+	AddBoolMember(Blueprint, TEXT("bDoorMoving"));
 
-	auto AddDoorAction = [&](const FKey& Key, const FGuid& EventId, UEdGraphPin* MotionPin, int32 Y)
+	// Z2 is deliberately a Blueprint-complete example.  The three motion
+	// timelines preserve the prior C++ timings: open (2.0 s), normal close
+	// (2.2 s), and slam (0.117 s).  A separate rattle timeline keeps the locked
+	// feedback readable in the graph instead of hiding it in native code.
+	UTimelineTemplate* OpenTemplate = CreateDoorMotionTimeline(Blueprint, TEXT("DoorOpen"), 2.0f, 0.0f, 1.0f);
+	UTimelineTemplate* CloseTemplate = CreateDoorMotionTimeline(Blueprint, TEXT("DoorClose"), 2.2f, 1.0f, 0.0f);
+	UTimelineTemplate* SlamTemplate = CreateDoorMotionTimeline(Blueprint, TEXT("DoorSlam"), 0.117f, 1.0f, 0.0f);
+	UTimelineTemplate* RattleTemplate = CreateDoorRattleTimeline(Blueprint);
+	UK2Node_Timeline* DoorOpen = AddTimeline(Graph, OpenTemplate, 200, -420);
+	UK2Node_Timeline* DoorClose = AddTimeline(Graph, CloseTemplate, 200, -180);
+	UK2Node_Timeline* DoorSlam = AddTimeline(Graph, SlamTemplate, 200, 60);
+	UK2Node_Timeline* DoorRattle = AddTimeline(Graph, RattleTemplate, 200, 300);
+	UK2Node_VariableGet* HingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 620, -490);
+
+	auto AddMotionRotation = [&](UK2Node_Timeline* Timeline, int32 Y)
 	{
-		UK2Node_InputKey* Input = AddKeyEvent(Graph, Key, -800, Y);
+		UK2Node_CallFunction* LerpRotation = AddCall(Graph, UKismetMathLibrary::StaticClass(),
+			GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RLerp), 620, Y);
+		FindPinChecked(LerpRotation, TEXT("A"))->DefaultValue = TEXT("0.000000,-90.000000,0.000000");
+		FindPinChecked(LerpRotation, TEXT("B"))->DefaultValue = TEXT("0.000000,0.000000,0.000000");
+		FindPinChecked(LerpRotation, TEXT("bShortestPath"))->DefaultValue = TEXT("false");
+		UK2Node_CallFunction* SetRotation = AddCall(Graph, USceneComponent::StaticClass(),
+			GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 900, Y);
+		ConnectPins(Timeline->GetUpdatePin(), SetRotation->GetExecPin());
+		ConnectPins(FindPinChecked(Timeline, TEXT("OpenAlpha")), FindPinChecked(LerpRotation, TEXT("Alpha")));
+		ConnectPins(LerpRotation->GetReturnValuePin(), FindPinChecked(SetRotation, TEXT("NewRotation")));
+		ConnectPins(FindPinChecked(HingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetRotation));
+	};
+	AddMotionRotation(DoorOpen, -420);
+	AddMotionRotation(DoorClose, -180);
+	AddMotionRotation(DoorSlam, 60);
+
+	UK2Node_CallFunction* MakeRattleRotation = AddCall(Graph, UKismetMathLibrary::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, MakeRotator), 620, 300);
+	UK2Node_CallFunction* AddRattleYaw = AddCall(Graph, UKismetMathLibrary::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, Add_FloatFloat), 460, 300);
+	UK2Node_CallFunction* SetRattleRotation = AddCall(Graph, USceneComponent::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 900, 300);
+	FindPinChecked(AddRattleYaw, TEXT("A"))->DefaultValue = TEXT("-90.000000");
+	FindPinChecked(MakeRattleRotation, TEXT("Pitch"))->DefaultValue = TEXT("0.000000");
+	FindPinChecked(MakeRattleRotation, TEXT("Roll"))->DefaultValue = TEXT("0.000000");
+	ConnectPins(DoorRattle->GetUpdatePin(), SetRattleRotation->GetExecPin());
+	ConnectPins(FindPinChecked(DoorRattle, TEXT("RattleYaw")), FindPinChecked(AddRattleYaw, TEXT("B")));
+	ConnectPins(AddRattleYaw->GetReturnValuePin(), FindPinChecked(MakeRattleRotation, TEXT("Yaw")));
+	ConnectPins(MakeRattleRotation->GetReturnValuePin(), FindPinChecked(SetRattleRotation, TEXT("NewRotation")));
+	ConnectPins(FindPinChecked(HingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetRattleRotation));
+
+	// Moving input is ignored, matching the previous C++ state machine.  Each
+	// terminal timeline clears the guard when it reaches its closed/open state.
+	UK2Node_VariableSet* StopOpening = AddBoolSet(Graph, TEXT("bDoorMoving"), false, 1180, -420);
+	UK2Node_VariableSet* StopClosing = AddBoolSet(Graph, TEXT("bDoorMoving"), false, 1180, -180);
+	UK2Node_VariableSet* StopSlamming = AddBoolSet(Graph, TEXT("bDoorMoving"), false, 1180, 60);
+	ConnectPins(DoorOpen->GetFinishedPin(), StopOpening->GetExecPin());
+	ConnectPins(DoorClose->GetFinishedPin(), StopClosing->GetExecPin());
+	ConnectPins(DoorSlam->GetFinishedPin(), StopSlamming->GetExecPin());
+
+	auto AddPlay = [&](const FGuid& EventId, int32 X, int32 Y)
+	{
 		UK2Node_CallFunction* Play = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
-			GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, PlayHapbeatEvent), -500, Y);
+			GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, PlayHapbeatEvent), X, Y);
 		ConfigurePlayEvent(Play, EventMap, EventId);
-		ConnectPins(FindPinChecked(Input, TEXT("Pressed")), Play->GetExecPin());
-		ConnectPins(Play->GetThenPin(), MotionPin);
+		return Play;
+	};
+	auto AddRattle = [&](int32 X, int32 Y)
+	{
+		UK2Node_CallFunction* RattlePlay = AddPlay(RattleId, X, Y);
+		ConnectPins(RattlePlay->GetThenPin(), DoorRattle->GetPlayFromStartPin());
+		return RattlePlay;
 	};
 
-	AddDoorAction(EKeys::F, OpenId, DoorMotion->GetPlayFromStartPin(), -180);
-	AddDoorAction(EKeys::G, CloseId, DoorMotion->GetReversePin(), 20);
-	UK2Node_InputKey* LockInput = AddKeyEvent(Graph, EKeys::L, -800, 220);
-	UK2Node_CallFunction* LockPlay = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, PlayHapbeatEvent), -500, 220);
-	ConfigurePlayEvent(LockPlay, EventMap, LockId);
-	ConnectPins(FindPinChecked(LockInput, TEXT("Pressed")), LockPlay->GetExecPin());
+	// F: open when closed, close when open, and rattle while locked.
+	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::F, -1250, -220);
+	UK2Node_IfThenElse* ToggleMoving = AddBranch(Graph, -1040, -220);
+	UK2Node_VariableGet* ToggleMovingGet = AddSelfVariableGet(Graph, TEXT("bDoorMoving"), -1040, -130);
+	UK2Node_IfThenElse* ToggleLocked = AddBranch(Graph, -800, -220);
+	UK2Node_VariableGet* ToggleLockedGet = AddSelfVariableGet(Graph, TEXT("bDoorLocked"), -800, -130);
+	UK2Node_IfThenElse* ToggleOpen = AddBranch(Graph, -540, -220);
+	UK2Node_VariableGet* ToggleOpenGet = AddSelfVariableGet(Graph, TEXT("bDoorOpen"), -540, -130);
+	UK2Node_CallFunction* ToggleRattle = AddRattle(-300, -330);
+	UK2Node_CallFunction* ClosePlay = AddPlay(CloseId, -300, -220);
+	UK2Node_VariableSet* SetClosed = AddBoolSet(Graph, TEXT("bDoorOpen"), false, -80, -220);
+	UK2Node_VariableSet* StartClosing = AddBoolSet(Graph, TEXT("bDoorMoving"), true, 80, -220);
+	UK2Node_CallFunction* OpenPlay = AddPlay(OpenId, -300, -60);
+	UK2Node_VariableSet* SetOpen = AddBoolSet(Graph, TEXT("bDoorOpen"), true, -80, -60);
+	UK2Node_VariableSet* StartOpening = AddBoolSet(Graph, TEXT("bDoorMoving"), true, 80, -60);
+	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), ToggleMoving->GetExecPin());
+	ConnectPins(ToggleMovingGet->GetValuePin(), ToggleMoving->GetConditionPin());
+	ConnectPins(ToggleMoving->GetElsePin(), ToggleLocked->GetExecPin());
+	ConnectPins(ToggleLockedGet->GetValuePin(), ToggleLocked->GetConditionPin());
+	ConnectPins(ToggleLocked->GetThenPin(), ToggleRattle->GetExecPin());
+	ConnectPins(ToggleLocked->GetElsePin(), ToggleOpen->GetExecPin());
+	ConnectPins(ToggleOpenGet->GetValuePin(), ToggleOpen->GetConditionPin());
+	ConnectPins(ToggleOpen->GetThenPin(), ClosePlay->GetExecPin());
+	ConnectPins(ClosePlay->GetThenPin(), SetClosed->GetExecPin());
+	ConnectPins(SetClosed->GetThenPin(), StartClosing->GetExecPin());
+	ConnectPins(StartClosing->GetThenPin(), DoorClose->GetPlayFromStartPin());
+	ConnectPins(ToggleOpen->GetElsePin(), OpenPlay->GetExecPin());
+	ConnectPins(OpenPlay->GetThenPin(), SetOpen->GetExecPin());
+	ConnectPins(SetOpen->GetThenPin(), StartOpening->GetExecPin());
+	ConnectPins(StartOpening->GetThenPin(), DoorOpen->GetPlayFromStartPin());
+
+	// G: slam only while open; it uses the same closed state as a normal close.
+	UK2Node_InputKey* SlamInput = AddKeyEvent(Graph, EKeys::G, -1250, 40);
+	UK2Node_IfThenElse* SlamMoving = AddBranch(Graph, -1040, 40);
+	UK2Node_VariableGet* SlamMovingGet = AddSelfVariableGet(Graph, TEXT("bDoorMoving"), -1040, 130);
+	UK2Node_IfThenElse* SlamLocked = AddBranch(Graph, -800, 40);
+	UK2Node_VariableGet* SlamLockedGet = AddSelfVariableGet(Graph, TEXT("bDoorLocked"), -800, 130);
+	UK2Node_IfThenElse* SlamOpen = AddBranch(Graph, -540, 40);
+	UK2Node_VariableGet* SlamOpenGet = AddSelfVariableGet(Graph, TEXT("bDoorOpen"), -540, 130);
+	UK2Node_CallFunction* SlamRattle = AddRattle(-300, 150);
+	UK2Node_CallFunction* SlamPlay = AddPlay(SlamId, -300, 40);
+	UK2Node_VariableSet* SlamClosed = AddBoolSet(Graph, TEXT("bDoorOpen"), false, -80, 40);
+	UK2Node_VariableSet* StartSlam = AddBoolSet(Graph, TEXT("bDoorMoving"), true, 80, 40);
+	ConnectPins(FindPinChecked(SlamInput, TEXT("Pressed")), SlamMoving->GetExecPin());
+	ConnectPins(SlamMovingGet->GetValuePin(), SlamMoving->GetConditionPin());
+	ConnectPins(SlamMoving->GetElsePin(), SlamLocked->GetExecPin());
+	ConnectPins(SlamLockedGet->GetValuePin(), SlamLocked->GetConditionPin());
+	ConnectPins(SlamLocked->GetThenPin(), SlamRattle->GetExecPin());
+	ConnectPins(SlamLocked->GetElsePin(), SlamOpen->GetExecPin());
+	ConnectPins(SlamOpenGet->GetValuePin(), SlamOpen->GetConditionPin());
+	ConnectPins(SlamOpen->GetThenPin(), SlamPlay->GetExecPin());
+	ConnectPins(SlamPlay->GetThenPin(), SlamClosed->GetExecPin());
+	ConnectPins(SlamClosed->GetThenPin(), StartSlam->GetExecPin());
+	ConnectPins(StartSlam->GetThenPin(), DoorSlam->GetPlayFromStartPin());
+
+	// L: lock/unlock only while the leaf is closed; the active transition is a no-op.
+	UK2Node_InputKey* LockInput = AddKeyEvent(Graph, EKeys::L, -1250, 300);
+	UK2Node_IfThenElse* LockMoving = AddBranch(Graph, -1040, 300);
+	UK2Node_VariableGet* LockMovingGet = AddSelfVariableGet(Graph, TEXT("bDoorMoving"), -1040, 390);
+	UK2Node_IfThenElse* LockOpen = AddBranch(Graph, -800, 300);
+	UK2Node_VariableGet* LockOpenGet = AddSelfVariableGet(Graph, TEXT("bDoorOpen"), -800, 390);
+	UK2Node_IfThenElse* LockLocked = AddBranch(Graph, -540, 300);
+	UK2Node_VariableGet* LockLockedGet = AddSelfVariableGet(Graph, TEXT("bDoorLocked"), -540, 390);
+	UK2Node_CallFunction* UnlockPlay = AddPlay(UnlockId, -300, 390);
+	UK2Node_VariableSet* SetUnlocked = AddBoolSet(Graph, TEXT("bDoorLocked"), false, -80, 390);
+	UK2Node_CallFunction* LockPlay = AddPlay(LockId, -300, 300);
+	UK2Node_VariableSet* SetLocked = AddBoolSet(Graph, TEXT("bDoorLocked"), true, -80, 300);
+	ConnectPins(FindPinChecked(LockInput, TEXT("Pressed")), LockMoving->GetExecPin());
+	ConnectPins(LockMovingGet->GetValuePin(), LockMoving->GetConditionPin());
+	ConnectPins(LockMoving->GetElsePin(), LockOpen->GetExecPin());
+	ConnectPins(LockOpenGet->GetValuePin(), LockOpen->GetConditionPin());
+	ConnectPins(LockOpen->GetElsePin(), LockLocked->GetExecPin());
+	ConnectPins(LockLockedGet->GetValuePin(), LockLocked->GetConditionPin());
+	ConnectPins(LockLocked->GetThenPin(), UnlockPlay->GetExecPin());
+	ConnectPins(UnlockPlay->GetThenPin(), SetUnlocked->GetExecPin());
+	ConnectPins(LockLocked->GetElsePin(), LockPlay->GetExecPin());
+	ConnectPins(LockPlay->GetThenPin(), SetLocked->GetExecPin());
 
 	SetMetadata(Blueprint, 2, TEXT("Door"), FVector(-400.0f, 20.0f, 0.0f),
-		{ { FText::FromString(TEXT("F")), FText::FromString(TEXT("open door + Play Hapbeat Event")) },
-		  { FText::FromString(TEXT("G")), FText::FromString(TEXT("close door + Play Hapbeat Event")) },
-		  { FText::FromString(TEXT("L")), FText::FromString(TEXT("lock haptic event")) } });
+		{ { FText::FromString(TEXT("F")), FText::FromString(TEXT("open / close; rattle while locked")) },
+		  { FText::FromString(TEXT("G")), FText::FromString(TEXT("slam while open; rattle while locked")) },
+		  { FText::FromString(TEXT("L")), FText::FromString(TEXT("lock / unlock while closed")) } });
 }
 
 void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
@@ -461,8 +645,29 @@ void Generate()
 	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated BP_Z2_Door and BP_Z4_StreamConsole; replaced the two Showcase actors."));
 }
 
+void GenerateDoorAsset()
+{
+	UHapbeatEventMap* EventMap = GetShowcaseEventMap();
+	checkf(EventMap != nullptr, TEXT("Could not load EM_Showcase."));
+	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"));
+	check(Door != nullptr);
+	CreateDoorBlueprint(Door, EventMap);
+	FKismetEditorUtilities::CompileBlueprint(Door);
+	FAssetRegistryModule::AssetCreated(Door);
+	Door->MarkPackageDirty();
+	UPackage::SavePackage(Door->GetOutermost(), Door,
+		*FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()),
+		FSavePackageArgs());
+	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated BP_Z2_Door without changing the Showcase map."));
+}
+
 static FAutoConsoleCommand GenerateCommand(
 	TEXT("Hapbeat.GenerateBlueprintShowcase"),
 	TEXT("Generate the two Blueprint-authored Showcase zones and replace their map actors."),
 	FConsoleCommandDelegate::CreateStatic(&Generate));
+
+static FAutoConsoleCommand GenerateDoorAssetCommand(
+	TEXT("Hapbeat.GenerateBlueprintDoorAsset"),
+	TEXT("Generate BP_Z2_Door without changing the Showcase map."),
+	FConsoleCommandDelegate::CreateStatic(&GenerateDoorAsset));
 }

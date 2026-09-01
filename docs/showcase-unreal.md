@@ -39,9 +39,7 @@ ball が pin に Hit
 
 ### C++ 実装を確認する
 
-上部の **Tools → Open Visual Studio**（表示名は設定済み IDE に応じて変わります）でプロジェクトを開きます。メニューがない場合は、`.uproject` と同じフォルダの `.sln` を開きます。
-
-Solution Explorer では、次の順で開きます。
+**Tools → Open Visual Studio** を選び、次の SDK ファイルを開きます。
 
 ```text
 Plugins
@@ -54,7 +52,7 @@ Plugins
         └ HapbeatShowcaseZ1BowlingActor.cpp
 ```
 
-最初に `Public/HapbeatShowcaseZ1BowlingActor.h` を開き、Details に表示される項目の宣言を確認します。その後、同名の `Private/HapbeatShowcaseZ1BowlingActor.cpp` を開き、実行時にそれらを pin の trigger へ渡す処理を確認します。
+最初に `Public/HapbeatShowcaseZ1BowlingActor.h` を開き、次に同名の `Private/HapbeatShowcaseZ1BowlingActor.cpp` を開きます。
 
 | Editor の項目 | ヘッダの宣言 | `.cpp` で確認する関数 | 内容 |
 | --- | --- | --- | --- |

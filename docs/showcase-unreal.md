@@ -39,13 +39,19 @@ ball が pin に Hit
 
 ### C++ 実装を確認する
 
-エディタの **C++ Classes** は `UCLASS` の宣言ヘッダを表示する入口です。Showcase の Z1 は
-`HapbeatShowcaseZ1BowlingActor` を開きます。実行処理は同名の `.cpp` にあり、IDE の Solution Explorer から次を開きます。
+Unreal Editor から、関連する C++ ファイルを設定済みのコードエディタへ直接開けます。エクスプローラーを経由する必要はありません。
+
+1. World Outliner で `Z1_Bowling` を選択し、右クリックします。
+2. **Go to C++ Code for Actor** を選びます。
+
+選択した Actor の C++ ヘッダが、Visual Studio など Editor Preferences で選んだ **Source Code Editor** に開きます。メニューが表示されない場合は、上部の **Tools → Open Visual Studio**（表示名は設定済み IDE に応じて変わります）でプロジェクト全体を開いてください。
+
+Unreal Editor 自体は C++ の編集画面を内蔵していません。ヘッダを開いた後、同じ IDE の Solution Explorer で `Plugins/HapbeatSDK/Source/HapbeatSDKSamples/Private` を開くと、対応する `.cpp` 実装を確認できます。
 
 - `Source/HapbeatSDKSamples/Public/HapbeatShowcaseZ1BowlingActor.h` — Details に出る `Event Map`、`Pin Hit Event` と pin slot の定義
 - `Source/HapbeatSDKSamples/Private/HapbeatShowcaseZ1BowlingActor.cpp` — ball launch、pin の生成、hit を entry 発火へ結ぶ処理
 
-`Public` / `Private` はエンジンの表示可否ではなく、他の Unreal module から include できるヘッダか、module 内部の実装かを分けるフォルダです。どちらも SDK のソースとして確認・変更できます。
+`Public` / `Private` はエンジンの表示可否ではなく、他の Unreal module から include できるヘッダか、module 内部の実装かを分けるフォルダです。どちらも SDK のソースとして確認・変更できます。Content Browser の **C++ Classes** は主に `Public` のクラスをたどる入口なので、`.cpp` は IDE 側で開きます。
 
 Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-behavior.md) を参照してください。
 

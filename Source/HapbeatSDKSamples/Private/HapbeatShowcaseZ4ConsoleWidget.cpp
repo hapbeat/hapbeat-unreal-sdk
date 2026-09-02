@@ -28,7 +28,12 @@ void UHapbeatShowcaseZ4ConsoleWidget::Configure(UHapbeatParameterBinding* InGain
 void UHapbeatShowcaseZ4ConsoleWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
-	if (WidgetTree == nullptr || WidgetTree->RootWidget != nullptr)
+	// A Widget Blueprint can carry an empty designer root even though this
+	// presentation class owns the complete runtime layout.  Do not mistake that
+	// placeholder for an already-built console: doing so leaves the added widget
+	// blank, with no gain or pan controls.  The named controls are the real
+	// idempotence guard for NativeConstruct.
+	if (WidgetTree == nullptr || GainSlider != nullptr)
 	{
 		return;
 	}

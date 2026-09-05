@@ -165,11 +165,13 @@ Plugins
 ```text
 Space
   → LoopTrigger.Get Active Playback
+  → Is Valid（ハンドルなしなら Fire）
   → Is Active
   → Stop または Fire
 
 Gain / Pan slider
   → GainBinding / PanBinding.Set Value
+  → Evaluate Now
 
 slider detent
   → Play Sound 2D
@@ -181,9 +183,10 @@ slider detent
 1. World Outliner で `Z4_StreamConsole` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z4_StreamConsole` を開きます。
 2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickTrigger`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。
 3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から `LoopTrigger` の `Fire` / `Stop` を、`On Showcase Zone Activated` から `Create Widget` と `AddressPanel.Show` を確認します。
-4. `BP_Z4_StreamConsoleWidget` を開き、**My Blueprint > Graphs > EventGraph** を開きます。`Handle Gain Value Changed`、`Handle Pan Value Changed`、`Handle Tick` が、`Set Value` と `TickTrigger.Fire` に接続されています。
+4. **My Blueprint > Construction Script** を開きます。`GainBinding` と `PanBinding` の `Set Target Trigger` に、この Actor の `LoopTrigger` を接続しています。
+5. `BP_Z4_StreamConsoleWidget` を開き、**My Blueprint > Graphs > EventGraph** を開きます。`Handle Gain Value Changed` と `Handle Pan Value Changed` は `Set Value` → `Evaluate Now`、`Handle Tick` は `Play Sound 2D` → `TickTrigger.Fire` に接続されています。
 
-`LoopTrigger` は `z4_stream_loop`、`TickTrigger` は `z4_slider_tick` を指します。各 trigger の Details で **Event Map** と entry を変更できます。`GainBinding` と `PanBinding` は **Source = External** と **Target Trigger = LoopTrigger** を使用し、Widget Blueprint が `Set Value` を呼びます。
+`LoopTrigger` は `z4_stream_loop`、`TickTrigger` は `z4_slider_tick` を指します。各 trigger の Details で **Event Map** と entry を変更できます。`GainBinding` と `PanBinding` の **Source = External** にスライダー値を渡し、Construction Script で接続した `LoopTrigger` の再生だけを調整します。
 
 `AddressPanel` は Zone が表示中に `Show`、非表示時に `Hide` されます。Player / Group の選択はこの component の UI で Apply します。
 

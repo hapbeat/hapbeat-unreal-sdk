@@ -54,6 +54,7 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
         Playback->SetActive();
         Loop->StoredPlayback = Playback;
         auto* Widget = NewObject<UHapbeatShowcaseZ4ConsoleWidget>(World, WidgetClass);
+        Widget->Initialize();
         Widget->Configure(Gain, Pan, nullptr, nullptr);
         TFunction<TSharedPtr<SBorder>(TSharedRef<SWidget>)> FindPanel;
         FindPanel = [&FindPanel](TSharedRef<SWidget> Node) -> TSharedPtr<SBorder>

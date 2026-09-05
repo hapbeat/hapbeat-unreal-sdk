@@ -5,6 +5,7 @@
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamRunnable.h"
 #include "HapbeatSubsystem.h"
+#include "HapbeatTriggerComponent.h"
 #include "Engine/GameInstance.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
@@ -382,6 +383,7 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	OverrideRouting->SetAddressOverride(3, UHapbeatSubsystem::AddressOverrideDisabled);
 	TestEqual(TEXT("unknown P3 is Deferred"), OverridePlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
 	TestEqual(TEXT("unknown P3 requests one fake PING"), OverrideRouting->StreamDiscoveryRequestCount, 1);
+
 	OverrideRouting->RegisterStreamEndpoint(TEXT("192.0.2.62"), 7700, P3, OverrideNow + 0.01);
 	OverrideRouting->ReconcileStreamSources();
 	TestTrue(TEXT("PONG-equivalent P3 registration joins without replay"),
@@ -407,6 +409,36 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("clear keeps second source on its authored endpoint"), SecondSource.EndpointKeys.Contains(P2Key));
 	TestEqual(TEXT("clear preserves independent logical source routing"),
 		OverrideSource.EndpointKeys.Num() + SecondSource.EndpointKeys.Num(), 2);
+
+	// Regression: Z4's Space key must cancel a loop that is Deferred because its
+	// selected address has no endpoint. Otherwise restoring P1/P2 later revives
+	// an orphaned, full-gain stream that the UI no longer owns.
+	UHapbeatSubsystem* DeferredStop = NewTestSubsystem();
+	const double DeferredNow = FPlatformTime::Seconds();
+	const FString DeferredP1 = TEXT("player_1/pos_l_arm");
+	const FString DeferredP1Key = TEXT("192.0.2.70:7700|player_1/pos_l_arm");
+	DeferredStop->RegisterStreamEndpoint(TEXT("192.0.2.70"), 7700, DeferredP1, DeferredNow);
+	UHapbeatStreamPlayback* DeferredPlayback = NewObject<UHapbeatStreamPlayback>(DeferredStop);
+	DeferredPlayback->Init(1.0f, 1.0f);
+	DeferredPlayback->SetActive();
+	UHapbeatSubsystem::FStreamSource& DeferredSource = DeferredStop->StreamSources.Add(DeferredPlayback->Id);
+	DeferredSource.CanonicalPcm16 = MakeStereoPcm(1000, 160);
+	DeferredSource.AuthoredTarget = DeferredP1;
+	DeferredSource.ResolvedTarget = DeferredP1;
+	DeferredSource.Playback = DeferredPlayback;
+	DeferredSource.EndpointKeys.Add(DeferredP1Key);
+	DeferredStop->ActivePlaybacks.Add(DeferredPlayback);
+	DeferredStop->SetAddressOverride(3, UHapbeatSubsystem::AddressOverrideDisabled);
+	TestEqual(TEXT("unmatched override defers the Z4-style loop"),
+		DeferredPlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
+	UHapbeatTriggerComponent* DeferredTrigger = NewObject<UHapbeatTriggerComponent>(DeferredStop);
+	DeferredTrigger->StoredPlayback = DeferredPlayback;
+	DeferredTrigger->StopStoredStreamPlayback();
+	TestTrue(TEXT("stopping a deferred stream marks its handle stopped"), DeferredPlayback->IsStopped());
+	DeferredStop->SetAddressOverride(1, UHapbeatSubsystem::AddressOverrideDisabled);
+	TestEqual(TEXT("restoring a known address does not revive a stopped deferred stream"),
+		DeferredPlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Stopped);
+	TestEqual(TEXT("stopped deferred stream has no rejoined endpoint"), DeferredSource.EndpointKeys.Num(), 0);
 
 	TMap<uint16, int64> UnsolicitedPings;
 	UnsolicitedPings.Add(0, 500);

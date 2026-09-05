@@ -842,7 +842,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z4_ui_tick.S_z4_ui_tick"));
 	ConfigureStreamBindingTargets(Blueprint);
 
-	AddComment(Graph, TEXT("SPACE  |  active loop: Stop  |  otherwise: Fire"), -1540, -490, 2260, 240,
+	AddComment(Graph, TEXT("SPACE  |  live or Deferred loop: Stop  |  otherwise: Fire"), -1540, -490, 2260, 240,
 		FLinearColor(0.18f, 0.18f, 0.18f));
 	AddComment(Graph, TEXT("ON SHOWCASE ZONE ACTIVATED  |  seed bindings, create console, show address override"), -1540, -170, 2440, 230,
 		FLinearColor(0.10f, 0.42f, 0.22f));
@@ -856,9 +856,9 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	UK2Node_CallFunction* HasPlayback = AddCall(Graph, UKismetSystemLibrary::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -700, -410);
 	UK2Node_IfThenElse* PlaybackExists = AddNode<UK2Node_IfThenElse>(Graph, -440, -410);
-	UK2Node_CallFunction* IsActive = AddCall(Graph, UHapbeatStreamPlayback::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsActive), -180, -410);
-	UK2Node_IfThenElse* IsPlaying = AddNode<UK2Node_IfThenElse>(Graph, 80, -410);
+	UK2Node_CallFunction* IsStopped = AddCall(Graph, UHapbeatStreamPlayback::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped), -180, -410);
+	UK2Node_IfThenElse* IsStoppedBranch = AddNode<UK2Node_IfThenElse>(Graph, 80, -410);
 	UK2Node_VariableGet* LoopForStop = AddComponentGet(Graph, TEXT("LoopTrigger"), 320, -290);
 	UK2Node_CallFunction* StopLoop = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), 550, -410);
@@ -869,13 +869,13 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(LoopForPlayback->GetValuePin(), FindTargetPinChecked(GetPlayback));
 	ConnectPins(GetPlayback->GetReturnValuePin(), FindPinChecked(HasPlayback, TEXT("Object")));
 	ConnectPins(HasPlayback->GetReturnValuePin(), PlaybackExists->GetConditionPin());
-	ConnectPins(PlaybackExists->GetThenPin(), IsPlaying->GetExecPin());
+	ConnectPins(PlaybackExists->GetThenPin(), IsStoppedBranch->GetExecPin());
 	ConnectPins(PlaybackExists->GetElsePin(), FireLoop->GetExecPin());
-	ConnectPins(GetPlayback->GetReturnValuePin(), FindTargetPinChecked(IsActive));
-	ConnectPins(IsActive->GetReturnValuePin(), IsPlaying->GetConditionPin());
-	ConnectPins(IsPlaying->GetThenPin(), StopLoop->GetExecPin());
+	ConnectPins(GetPlayback->GetReturnValuePin(), FindTargetPinChecked(IsStopped));
+	ConnectPins(IsStopped->GetReturnValuePin(), IsStoppedBranch->GetConditionPin());
+	ConnectPins(IsStoppedBranch->GetThenPin(), FireLoop->GetExecPin());
 	ConnectPins(LoopForStop->GetValuePin(), FindTargetPinChecked(StopLoop));
-	ConnectPins(IsPlaying->GetElsePin(), FireLoop->GetExecPin());
+	ConnectPins(IsStoppedBranch->GetElsePin(), StopLoop->GetExecPin());
 	ConnectPins(LoopForFire->GetValuePin(), FindTargetPinChecked(FireLoop));
 
 	UK2Node_Event* Activated = AddOverrideEvent(Graph, AHapbeatShowcaseBlueprintZoneActor::StaticClass(),

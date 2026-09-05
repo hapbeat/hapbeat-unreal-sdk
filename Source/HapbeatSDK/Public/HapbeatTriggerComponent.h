@@ -194,6 +194,7 @@ protected:
 #if WITH_DEV_AUTOMATION_TESTS
 	// Allows the Showcase regression to supply an in-memory playback without opening a socket.
 	friend class FHapbeatZ4BindingReferencesTest;
+	friend class FHapbeatStreamSubsystemRoutingTest;
 #endif
 	/**
 	 * Resolve + cooldown-gate the inherited EntryId, then compose gain and dispatch
@@ -243,6 +244,9 @@ protected:
 	 * burst). Parity with Unity FireHapticImmediate's EvaluateNow pre-seed.
 	 */
 	void PreSeedBindings();
+
+	/** Stop and release the StreamClip handle owned by this trigger. */
+	void StopStoredStreamPlayback();
 
 	/** Resolve the owning subsystem, or nullptr (warn-once) if unavailable. */
 	UHapbeatSubsystem* ResolveSubsystem();

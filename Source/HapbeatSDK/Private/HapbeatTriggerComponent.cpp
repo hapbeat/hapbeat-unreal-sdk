@@ -302,17 +302,25 @@ void UHapbeatTriggerComponent::Stop()
 	{
 		// Per-source stop only (never StopStream on the whole session — parity
 		// with Unity, where the mixer auto-removes the source on IsStopped).
-		if (UHapbeatStreamPlayback* Playback = StoredPlayback.Get())
-		{
-			if (Playback->IsActive())
-			{
-				Playback->Stop();
-			}
-		}
-		StoredPlayback.Reset();
+		StopStoredStreamPlayback();
 		break;
 	}
 	}
+}
+
+void UHapbeatTriggerComponent::StopStoredStreamPlayback()
+{
+	if (UHapbeatStreamPlayback* Playback = StoredPlayback.Get())
+	{
+		// Deferred means the stream is logically running but is waiting for a
+		// matching endpoint. It must be stoppable: otherwise changing the address
+		// back later revives an orphaned stream that this trigger no longer owns.
+		if (!Playback->IsStopped())
+		{
+			Playback->Stop();
+		}
+	}
+	StoredPlayback.Reset();
 }
 
 void UHapbeatTriggerComponent::SetGainMultiplier(float NewMultiplier)

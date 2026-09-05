@@ -1,11 +1,16 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "Misc/AutomationTest.h"
+#include "Engine/Blueprint.h"
 #include "Engine/World.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphPin.h"
 #include "GameFramework/Actor.h"
 #include "HapbeatParameterBinding.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatShowcaseZ4ConsoleWidget.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_IfThenElse.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Styling/CoreStyle.h"
 
@@ -15,6 +20,48 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatZ4BindingReferencesTest,
 
 bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 {
+	UBlueprint* ConsoleBlueprint = LoadObject<UBlueprint>(nullptr,
+		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/BP_Z4_StreamConsole.BP_Z4_StreamConsole"));
+	if (TestNotNull(TEXT("Z4 Blueprint asset"), ConsoleBlueprint))
+	{
+		UK2Node_CallFunction* IsStoppedNode = nullptr;
+		UK2Node_CallFunction* StopNode = nullptr;
+		UK2Node_CallFunction* FireNode = nullptr;
+		UK2Node_IfThenElse* IsStoppedBranch = nullptr;
+		for (UEdGraph* Graph : ConsoleBlueprint->UbergraphPages)
+		{
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node))
+				{
+					const FName Name = Call->FunctionReference.GetMemberName();
+					IsStoppedNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped) ? Call : IsStoppedNode;
+					StopNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop) ? Call : StopNode;
+					FireNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire) ? Call : FireNode;
+				}
+				else if (UK2Node_IfThenElse* Branch = Cast<UK2Node_IfThenElse>(Node))
+				{
+					if (Branch->NodePosX == 80 && Branch->NodePosY == -410)
+					{
+						IsStoppedBranch = Branch;
+					}
+				}
+			}
+		}
+		if (TestNotNull(TEXT("Z4 toggle uses IsStopped, not IsActive"), IsStoppedNode)
+			&& TestNotNull(TEXT("Z4 toggle stopped branch"), IsStoppedBranch)
+			&& TestNotNull(TEXT("Z4 toggle Stop node"), StopNode)
+			&& TestNotNull(TEXT("Z4 toggle Fire node"), FireNode))
+		{
+			TestTrue(TEXT("IsStopped drives the toggle branch"),
+				IsStoppedBranch->GetConditionPin()->LinkedTo.Contains(IsStoppedNode->GetReturnValuePin()));
+			TestTrue(TEXT("non-stopped (including Deferred) stops the loop"),
+				IsStoppedBranch->GetElsePin()->LinkedTo.Contains(StopNode->GetExecPin()));
+			TestTrue(TEXT("stopped loop starts a new stream"),
+				IsStoppedBranch->GetThenPin()->LinkedTo.Contains(FireNode->GetExecPin()));
+		}
+	}
+
     UClass* Class = LoadClass<AActor>(nullptr,
         TEXT("/HapbeatSDK/HapbeatSamples/Showcase/BP_Z4_StreamConsole.BP_Z4_StreamConsole_C"));
     if (!TestNotNull(TEXT("Z4 Blueprint class"), Class)) { return false; }

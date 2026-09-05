@@ -25,14 +25,17 @@ void UHapbeatShowcaseZ4ConsoleWidget::Configure(UHapbeatParameterBinding* InGain
 	TickSound = InTickSound;
 }
 
-void UHapbeatShowcaseZ4ConsoleWidget::NativeConstruct()
+TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 {
-	Super::NativeConstruct();
-	// A Widget Blueprint can carry an empty designer root even though this
-	// presentation class owns the complete runtime layout.  Do not mistake that
-	// placeholder for an already-built console: doing so leaves the added widget
-	// blank, with no gain or pan controls.  The named controls are the real
-	// idempotence guard for NativeConstruct.
+	BuildConsoleLayout();
+	return Super::RebuildWidget();
+}
+
+void UHapbeatShowcaseZ4ConsoleWidget::BuildConsoleLayout()
+{
+	// This runs before UUserWidget creates the Slate tree.  Doing the same work
+	// in NativeConstruct is too late: the old designer root has already become
+	// the widget displayed by AddToViewport.
 	if (WidgetTree == nullptr || GainSlider != nullptr)
 	{
 		return;

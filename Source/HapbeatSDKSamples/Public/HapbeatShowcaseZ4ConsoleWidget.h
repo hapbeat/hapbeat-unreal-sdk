@@ -10,6 +10,7 @@ class UTextBlock;
 class UHapbeatParameterBinding;
 class UHapbeatTriggerComponent;
 class USoundBase;
+class SWidget;
 
 /**
  * Presentation-only base for the Blueprint-authored Z4 console.
@@ -58,9 +59,12 @@ public:
 	void HandleTick();
 
 protected:
-	virtual void NativeConstruct() override;
+	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	/** Creates the native UMG tree before UUserWidget builds its Slate representation. */
+	void BuildConsoleLayout();
+
 	UFUNCTION()
 	void OnGainChanged(float Value);
 	UFUNCTION()

@@ -596,6 +596,11 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 		ConfigurePlayEvent(Play, EventMap, EventId);
 		return Play;
 	};
+	struct FDoorAction
+	{
+		UK2Node_CallFunction* Entry = nullptr;
+		UK2Node_CallFunction* Exit = nullptr;
+	};
 	auto AddAction = [&](const FGuid& EventId, USoundBase* Sound, int32 X, int32 Y)
 	{
 		UK2Node_CallFunction* HapticPlay = AddPlay(EventId, X, Y);
@@ -603,12 +608,12 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 			GET_FUNCTION_NAME_CHECKED(UGameplayStatics, PlaySound2D), X + 300, Y);
 		FindPinChecked(SoundPlay, TEXT("Sound"))->DefaultObject = Sound;
 		ConnectPins(HapticPlay->GetThenPin(), SoundPlay->GetExecPin());
-		return SoundPlay;
+		return FDoorAction { HapticPlay, SoundPlay };
 	};
 	auto AddRattle = [&](int32 X, int32 Y)
 	{
-		UK2Node_CallFunction* RattleAction = AddAction(RattleId, RattleSound, X, Y);
-		ConnectPins(RattleAction->GetThenPin(), DoorRattle->GetPlayFromStartPin());
+		FDoorAction RattleAction = AddAction(RattleId, RattleSound, X, Y);
+		ConnectPins(RattleAction.Exit->GetThenPin(), DoorRattle->GetPlayFromStartPin());
 		return RattleAction;
 	};
 
@@ -616,49 +621,64 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::F, -1350, -400);
 	UK2Node_SwitchEnum* ToggleState = AddDoorStateSwitch(Graph, -1000, -400);
 	UK2Node_VariableGet* ToggleStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1000, -300);
-	UK2Node_CallFunction* ToggleRattle = AddRattle(-300, 200);
-	UK2Node_CallFunction* ClosePlay = AddAction(CloseId, CloseSound, -300, -250);
+	FDoorAction ToggleRattle = AddRattle(-300, 200);
+	FDoorAction ClosePlay = AddAction(CloseId, CloseSound, -300, -250);
 	UK2Node_VariableSet* StartClosing = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closing, 260, -250);
-	UK2Node_CallFunction* OpenPlay = AddAction(OpenId, OpenSound, -300, -500);
+	FDoorAction OpenPlay = AddAction(OpenId, OpenSound, -300, -500);
 	UK2Node_VariableSet* StartOpening = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Opening, 260, -500);
 	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), ToggleState->GetExecPin());
 	ConnectPins(ToggleStateGet->GetValuePin(), FindPinChecked(ToggleState, TEXT("Selection")));
-	ConnectPins(FindPinChecked(ToggleState, TEXT("Locked")), ToggleRattle->GetExecPin());
-	ConnectPins(FindPinChecked(ToggleState, TEXT("Open")), ClosePlay->GetExecPin());
-	ConnectPins(ClosePlay->GetThenPin(), StartClosing->GetExecPin());
+	ConnectPins(FindPinChecked(ToggleState, TEXT("Locked")), ToggleRattle.Entry->GetExecPin());
+	ConnectPins(FindPinChecked(ToggleState, TEXT("Open")), ClosePlay.Entry->GetExecPin());
+	ConnectPins(ClosePlay.Exit->GetThenPin(), StartClosing->GetExecPin());
 	ConnectPins(StartClosing->GetThenPin(), DoorClose->GetPlayFromStartPin());
-	ConnectPins(FindPinChecked(ToggleState, TEXT("Closed")), OpenPlay->GetExecPin());
-	ConnectPins(OpenPlay->GetThenPin(), StartOpening->GetExecPin());
+	ConnectPins(FindPinChecked(ToggleState, TEXT("Closed")), OpenPlay.Entry->GetExecPin());
+	ConnectPins(OpenPlay.Exit->GetThenPin(), StartOpening->GetExecPin());
 	ConnectPins(StartOpening->GetThenPin(), DoorOpen->GetPlayFromStartPin());
 
 	// G: slam only while open; it uses the same closed state as a normal close.
 	UK2Node_InputKey* SlamInput = AddKeyEvent(Graph, EKeys::G, -1350, 30);
 	UK2Node_SwitchEnum* SlamState = AddDoorStateSwitch(Graph, -1000, 30);
 	UK2Node_VariableGet* SlamStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1000, 130);
-	UK2Node_CallFunction* SlamRattle = AddRattle(-300, 300);
-	UK2Node_CallFunction* SlamPlay = AddAction(SlamId, SlamSound, -300, 0);
+	FDoorAction SlamRattle = AddRattle(-300, 300);
+	FDoorAction SlamPlay = AddAction(SlamId, SlamSound, -300, 0);
 	UK2Node_VariableSet* StartSlam = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Slamming, 260, 0);
 	ConnectPins(FindPinChecked(SlamInput, TEXT("Pressed")), SlamState->GetExecPin());
 	ConnectPins(SlamStateGet->GetValuePin(), FindPinChecked(SlamState, TEXT("Selection")));
-	ConnectPins(FindPinChecked(SlamState, TEXT("Locked")), SlamRattle->GetExecPin());
-	ConnectPins(FindPinChecked(SlamState, TEXT("Open")), SlamPlay->GetExecPin());
-	ConnectPins(SlamPlay->GetThenPin(), StartSlam->GetExecPin());
+	ConnectPins(FindPinChecked(SlamState, TEXT("Locked")), SlamRattle.Entry->GetExecPin());
+	ConnectPins(FindPinChecked(SlamState, TEXT("Open")), SlamPlay.Entry->GetExecPin());
+	ConnectPins(SlamPlay.Exit->GetThenPin(), StartSlam->GetExecPin());
 	ConnectPins(StartSlam->GetThenPin(), DoorSlam->GetPlayFromStartPin());
 
 	// L: lock/unlock only while the leaf is closed; the active transition is a no-op.
 	UK2Node_InputKey* LockInput = AddKeyEvent(Graph, EKeys::L, -1350, 500);
 	UK2Node_SwitchEnum* LockState = AddDoorStateSwitch(Graph, -1000, 500);
 	UK2Node_VariableGet* LockStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1000, 600);
-	UK2Node_CallFunction* UnlockPlay = AddAction(UnlockId, UnlockSound, -300, 650);
+	FDoorAction UnlockPlay = AddAction(UnlockId, UnlockSound, -300, 650);
 	UK2Node_VariableSet* SetUnlocked = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 260, 650);
-	UK2Node_CallFunction* LockPlay = AddAction(LockId, LockSound, -300, 500);
+	FDoorAction LockPlay = AddAction(LockId, LockSound, -300, 500);
 	UK2Node_VariableSet* SetLocked = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Locked, 260, 500);
 	ConnectPins(FindPinChecked(LockInput, TEXT("Pressed")), LockState->GetExecPin());
 	ConnectPins(LockStateGet->GetValuePin(), FindPinChecked(LockState, TEXT("Selection")));
-	ConnectPins(FindPinChecked(LockState, TEXT("Locked")), UnlockPlay->GetExecPin());
-	ConnectPins(UnlockPlay->GetThenPin(), SetUnlocked->GetExecPin());
-	ConnectPins(FindPinChecked(LockState, TEXT("Closed")), LockPlay->GetExecPin());
-	ConnectPins(LockPlay->GetThenPin(), SetLocked->GetExecPin());
+	ConnectPins(FindPinChecked(LockState, TEXT("Locked")), UnlockPlay.Entry->GetExecPin());
+	ConnectPins(UnlockPlay.Exit->GetThenPin(), SetUnlocked->GetExecPin());
+	ConnectPins(FindPinChecked(LockState, TEXT("Closed")), LockPlay.Entry->GetExecPin());
+	ConnectPins(LockPlay.Exit->GetThenPin(), SetLocked->GetExecPin());
+
+	for (const TPair<const TCHAR*, FDoorAction> Action : {
+		TPair<const TCHAR*, FDoorAction>(TEXT("open"), OpenPlay),
+		TPair<const TCHAR*, FDoorAction>(TEXT("close"), ClosePlay),
+		TPair<const TCHAR*, FDoorAction>(TEXT("slam"), SlamPlay),
+		TPair<const TCHAR*, FDoorAction>(TEXT("toggle rattle"), ToggleRattle),
+		TPair<const TCHAR*, FDoorAction>(TEXT("slam rattle"), SlamRattle),
+		TPair<const TCHAR*, FDoorAction>(TEXT("lock"), LockPlay),
+		TPair<const TCHAR*, FDoorAction>(TEXT("unlock"), UnlockPlay) })
+	{
+		checkf(Action.Value.Entry->GetExecPin()->LinkedTo.Num() > 0,
+			TEXT("Z2 %s action must enter through Play Hapbeat Event."), Action.Key);
+		checkf(Action.Value.Entry->GetThenPin()->LinkedTo.Contains(Action.Value.Exit->GetExecPin()),
+			TEXT("Z2 %s action must run Play Sound 2D after Play Hapbeat Event."), Action.Key);
+	}
 
 	SetMetadata(Blueprint, 2, TEXT("Door"), FVector(-400.0f, 20.0f, 0.0f),
 		{ { FText::FromString(TEXT("F")), FText::FromString(TEXT("open / close; rattle while locked")) },

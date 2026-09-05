@@ -191,6 +191,10 @@ public:
 	UHapbeatStreamPlayback* GetActivePlayback() const;
 
 protected:
+#if WITH_DEV_AUTOMATION_TESTS
+	// Allows the Showcase regression to supply an in-memory playback without opening a socket.
+	friend class FHapbeatZ4BindingReferencesTest;
+#endif
 	/**
 	 * Resolve + cooldown-gate the inherited EntryId, then compose gain and dispatch
 	 * Command / StreamClip. Multiplier is the per-call factor (1 for Fire(), the

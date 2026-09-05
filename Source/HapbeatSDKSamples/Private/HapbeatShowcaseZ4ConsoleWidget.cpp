@@ -6,6 +6,7 @@
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
 #include "Sound/SoundBase.h"
+#include "Styling/CoreStyle.h"
 #include "Widgets/Input/SSlider.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -30,6 +31,8 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 		.Padding(FMargin(0.0f, 0.0f, 0.0f, 48.0f))
 		[
 			SNew(SBorder)
+			.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+			.BorderBackgroundColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.75f))
 			.Padding(FMargin(16.0f, 12.0f))
 			[
 				SNew(SVerticalBox)

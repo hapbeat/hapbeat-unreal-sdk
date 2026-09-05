@@ -37,6 +37,7 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_DynamicCast.h"
 #include "K2Node_Event.h"
+#include "K2Node_FunctionEntry.h"
 #include "K2Node_IfThenElse.h"
 #include "K2Node_InputKey.h"
 #include "K2Node_SwitchEnum.h"
@@ -739,6 +740,57 @@ void CreateStreamConsoleWidgetBlueprint(UWidgetBlueprint* Blueprint)
 	ConnectPins(TickTrigger->GetValuePin(), FindTargetPinChecked(FireTick));
 }
 
+void ConfigureStreamBindingTargets(UBlueprint* Blueprint)
+{
+	UEdGraph* Construction = nullptr;
+	for (UEdGraph* Candidate : Blueprint->FunctionGraphs)
+	{
+		if (Candidate->GetFName() == UEdGraphSchema_K2::FN_UserConstructionScript)
+		{
+			Construction = Candidate;
+			break;
+		}
+	}
+	check(Construction != nullptr);
+	UK2Node_FunctionEntry* Entry = nullptr;
+	const auto OldNodes = Construction->Nodes;
+	for (UEdGraphNode* Node : OldNodes)
+	{
+		if (auto* FunctionEntry = Cast<UK2Node_FunctionEntry>(Node)) { Entry = FunctionEntry; }
+		else { FBlueprintEditorUtils::RemoveNode(Blueprint, Node, true); }
+	}
+	check(Entry != nullptr);
+	UEdGraphPin* Previous = FindPinChecked(Entry, TEXT("then"));
+	Previous->BreakAllPinLinks();
+	int32 X = 320;
+	for (const TCHAR* Name : { TEXT("GainBinding"), TEXT("PanBinding") })
+	{
+		auto* Binding = AddComponentGet(Construction, Name, X, 160);
+		auto* Loop = AddComponentGet(Construction, TEXT("LoopTrigger"), X, 240);
+		auto* SetTarget = AddNode<UK2Node_VariableSet>(Construction, X + 240, 0);
+		SetTarget->VariableReference.SetExternalMember(TEXT("TargetTrigger"), UHapbeatParameterBinding::StaticClass());
+		SetTarget->ReconstructNode();
+		ConnectPins(Previous, SetTarget->GetExecPin());
+		ConnectPins(Binding->GetValuePin(), FindTargetPinChecked(SetTarget));
+		ConnectPins(Loop->GetValuePin(), FindPinChecked(SetTarget, TEXT("TargetTrigger")));
+		Previous = SetTarget->GetThenPin();
+		X += 560;
+	}
+	AddComment(Construction, TEXT("CONNECT SLIDER BINDINGS TO THIS ACTOR'S LOOP TRIGGER"),
+		240, -80, 1180, 430, FLinearColor(0.10f, 0.42f, 0.22f));
+	// SCS templates are serialized individually: a raw cross-template pointer
+	// survives instancing as LoopTrigger_GEN_VARIABLE. Connect actual components
+	// in Construction Script, including when an editor actor is reconstructed.
+	for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+	{
+		if (auto* Binding = Cast<UHapbeatParameterBinding>(Node->ComponentTemplate))
+		{
+			Binding->TargetTrigger = nullptr;
+		}
+	}
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+}
+
 void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* WidgetBlueprint, UHapbeatEventMap* EventMap)
 {
 	check(WidgetBlueprint != nullptr);
@@ -767,7 +819,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 		Binding->InputMax = InMax;
 		Binding->OutputMin = OutMin;
 		Binding->OutputMax = OutMax;
-		Binding->TargetTrigger = Loop;
+		// Assigned to runtime components by the Construction Script below.
 	};
 	AddBinding(TEXT("GainBinding"), EHapbeatBindingOutput::StreamGain, 0.0f, 1.0f, 0.0f, 1.0f);
 	AddBinding(TEXT("PanBinding"), EHapbeatBindingOutput::StreamPan, -1.0f, 1.0f, -1.0f, 1.0f);
@@ -788,6 +840,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	UEdGraph* Graph = GetEventGraph(Blueprint);
 	USoundBase* TickSound = LoadObject<USoundBase>(nullptr,
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Sounds/S_z4_ui_tick.S_z4_ui_tick"));
+	ConfigureStreamBindingTargets(Blueprint);
 
 	AddComment(Graph, TEXT("SPACE  |  active loop: Stop  |  otherwise: Fire"), -1540, -490, 2260, 240,
 		FLinearColor(0.18f, 0.18f, 0.18f));
@@ -1021,6 +1074,8 @@ void GenerateStreamConsoleAssets()
 		CreateStreamConsoleBlueprint(Stream, StreamWidget, EventMap);
 		SaveBlueprintAsset(Stream);
 	}
+	ConfigureStreamBindingTargets(Stream);
+	SaveBlueprintAsset(Stream);
 	CheckStreamConsoleComponentTree(Stream);
 	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated Z4 Stream Console Blueprint assets without changing the Showcase map."));
 }

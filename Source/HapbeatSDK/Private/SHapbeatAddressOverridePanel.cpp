@@ -5,6 +5,7 @@
 #include "HapbeatSubsystem.h"
 #include "HapbeatTargetLibrary.h"
 
+#include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -15,6 +16,9 @@
 
 namespace
 {
+	const FSlateFontInfo TitleFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
+	const FSlateFontInfo BodyFont = FCoreStyle::GetDefaultFontStyle("Regular", 16);
+
 	/**
 	 * The address the status line resolves for illustration. Carries all three
 	 * slots so the wearer can see exactly which one their edit lands in.
@@ -46,14 +50,18 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 	ChildSlot
 	[
 		SNew(SBorder)
-		.BorderBackgroundColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f))
+		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+		.BorderBackgroundColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.75f))
 		.Padding(12.0f)
 		[
 			SNew(SVerticalBox)
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 8.0f)
 				[
-					SNew(STextBlock).Text(LOCTEXT("Title", "Hapbeat -- Device Address"))
+					SNew(STextBlock)
+					.Text(LOCTEXT("Title", "Hapbeat -- Device Address"))
+					.Font(TitleFont)
+					.ColorAndOpacity(FLinearColor::White)
 				]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
@@ -79,6 +87,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 				[
 					SNew(STextBlock)
 					.Text(this, &SHapbeatAddressOverridePanel::GetStatusLabel)
+					.Font(BodyFont)
 					.ColorAndOpacity(this, &SHapbeatAddressOverridePanel::GetStatusColor)
 				]
 
@@ -90,6 +99,8 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 				[
 					SNew(STextBlock)
 					.Text(this, &SHapbeatAddressOverridePanel::GetSavedLabel)
+					.Font(BodyFont)
+					.ColorAndOpacity(FLinearColor::White)
 				]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
@@ -142,16 +153,18 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 			[
 				SNew(SBox).WidthOverride(64.0f)
 				[
-					SNew(STextBlock).Text(Label)
+					SNew(STextBlock).Text(Label).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
 				]
 			]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
 			[
 				SNew(SButton)
 				.IsFocusable(false)
-				.Text(LOCTEXT("Minus", "-"))
 				.IsEnabled(IsEditable)
 				.OnClicked_Lambda([OnStep] { OnStep(-1); return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(LOCTEXT("Minus", "-")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
+				]
 			]
 		// Fixed width: the value swings between "off" and two digits, and a
 		// row that resized would shove the +/- buttons around under the cursor.
@@ -161,6 +174,7 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 				[
 					SNew(STextBlock)
 					.Text(ValueText)
+					.Font(BodyFont)
 					.ColorAndOpacity(FSlateColor(PendingColor))
 				]
 			]
@@ -168,9 +182,11 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 			[
 				SNew(SButton)
 				.IsFocusable(false)
-				.Text(LOCTEXT("Plus", "+"))
 				.IsEnabled(IsEditable)
 				.OnClicked_Lambda([OnStep] { OnStep(1); return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(LOCTEXT("Plus", "+")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
+				]
 			];
 }
 

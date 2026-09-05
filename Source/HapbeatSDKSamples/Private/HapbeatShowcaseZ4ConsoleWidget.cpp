@@ -42,6 +42,8 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 					{
 						return FText::FromString(FString::Printf(TEXT("Gain  %.2f"), GainValue));
 					})
+					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 18))
+					.ColorAndOpacity(FLinearColor::White)
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 				[
@@ -59,6 +61,8 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 					{
 						return FText::FromString(FString::Printf(TEXT("Pan  %+.2f"), PanValue));
 					})
+					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 18))
+					.ColorAndOpacity(FLinearColor::White)
 				]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 				[

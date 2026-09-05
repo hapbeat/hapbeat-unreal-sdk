@@ -787,6 +787,13 @@ void ConfigureStreamBindingTargets(UBlueprint* Blueprint)
 		{
 			Binding->TargetTrigger = nullptr;
 		}
+		else if (auto* AddressPanel = Cast<UHapbeatAddressOverridePanelComponent>(Node->ComponentTemplate))
+		{
+			// Z4 owns this persistent HUD panel for the whole active zone. A Close
+			// button would only hide its address controls while leaving the console
+			// running, so the Showcase deliberately omits it.
+			AddressPanel->bShowCloseButton = false;
+		}
 	}
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 }
@@ -900,6 +907,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	UHapbeatAddressOverridePanelComponent* AddressPanel = CastChecked<UHapbeatAddressOverridePanelComponent>(AddressNode->ComponentTemplate);
 	AddressPanel->bShowOnBeginPlay = false;
 	AddressPanel->bPersistOnApply = true;
+	AddressPanel->bShowCloseButton = false;
 	AddressPanel->ViewportHAlign = HAlign_Center;
 	AddressPanel->ViewportVAlign = VAlign_Top;
 	AddressPanel->ViewportPadding = FMargin(8.0f);

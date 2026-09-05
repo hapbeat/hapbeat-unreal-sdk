@@ -21,9 +21,12 @@ public:
 	SLATE_BEGIN_ARGS(SHapbeatAddressOverridePanel)
 		: _Subsystem(nullptr)
 		, _bPersistOnApply(true)
+		, _bShowCloseButton(true)
 	{}
 		SLATE_ARGUMENT(UHapbeatSubsystem*, Subsystem)
 		SLATE_ARGUMENT(bool, bPersistOnApply)
+		/** Whether this host needs a button to dismiss the panel itself. */
+		SLATE_ARGUMENT(bool, bShowCloseButton)
 		SLATE_ARGUMENT(FString, TestEventId)
 		/** Invoked by the Close button so the owner can drop the widget. */
 		SLATE_EVENT(FSimpleDelegate, OnCloseRequested)
@@ -46,9 +49,10 @@ private:
 	// ---- display ----
 	FText GetPlayerLabel() const;
 	FText GetGroupLabel() const;
-	FText GetStatusLabel() const;
-	/** "Saved on this device: ..." -- what the next run would start with (persisted, not applied). */
-	FText GetSavedLabel() const;
+	FText GetResolvedTargetLabel() const;
+	/** Persisted values for the next run, displayed separately to emphasize the address itself. */
+	FText GetSavedPlayerLabel() const;
+	FText GetSavedGroupLabel() const;
 	FSlateColor GetStatusColor() const;
 	bool IsPlayerEditable() const;
 	bool IsGroupEditable() const;
@@ -64,6 +68,7 @@ private:
 
 	TWeakObjectPtr<UHapbeatSubsystem> WeakSubsystem;
 	bool bPersistOnApply = true;
+	bool bShowCloseButton = true;
 	FString TestEventId;
 	FSimpleDelegate OnCloseRequested;
 

@@ -48,6 +48,10 @@ public:
 	bool bPersistOnApply = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat",
+		meta = (Tooltip = "Show a Close button. Disable this for a panel that is owned by a persistent in-game HUD."))
+	bool bShowCloseButton = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat",
 		meta = (Tooltip = "Event id fired by the panel's Test button. Leave empty to use the SDK's standard sample event."))
 	FString TestEventId;
 

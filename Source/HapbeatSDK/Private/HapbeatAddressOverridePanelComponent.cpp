@@ -45,6 +45,7 @@ TSharedRef<SHapbeatAddressOverridePanel> UHapbeatAddressOverridePanelComponent::
 	return SNew(SHapbeatAddressOverridePanel)
 		.Subsystem(Subsystem)
 		.bPersistOnApply(bPersistOnApply)
+		.bShowCloseButton(bShowCloseButton)
 		.TestEventId(TestEventId)
 		.OnCloseRequested(FSimpleDelegate::CreateLambda([WeakThis]
 		{

@@ -18,10 +18,11 @@ namespace
 {
 	const FSlateFontInfo TitleFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
 	const FSlateFontInfo BodyFont = FCoreStyle::GetDefaultFontStyle("Regular", 16);
+	const FSlateFontInfo AddressValueFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
 
 	/**
-	 * The address the status line resolves for illustration. Carries all three
-	 * slots so the wearer can see exactly which one their edit lands in.
+	 * The authored target shown above the resolved target. It intentionally uses
+	 * player/group 1 so staged overrides visibly replace both address slots.
 	 */
 	const TCHAR* PreviewTarget = TEXT("player_1/pos_chest/group_1");
 
@@ -36,6 +37,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 {
 	WeakSubsystem = InArgs._Subsystem;
 	bPersistOnApply = InArgs._bPersistOnApply;
+	bShowCloseButton = InArgs._bShowCloseButton;
 	TestEventId = InArgs._TestEventId;
 	OnCloseRequested = InArgs._OnCloseRequested;
 
@@ -80,27 +82,41 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 						[this](int32 Delta) { StepGroup(Delta); })
 				]
 
-			// Both status lines are ALWAYS present -- neither appears or
-			// disappears with the state. A line that came and went would change
-			// the panel's height and move the buttons under the cursor.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 2.0f)
 				[
 					SNew(STextBlock)
-					.Text(this, &SHapbeatAddressOverridePanel::GetStatusLabel)
+					.Text(FText::Format(LOCTEXT("AuthoredTarget", "Authored target: {0}"), FText::FromString(PreviewTarget)))
+					.Font(BodyFont)
+					.ColorAndOpacity(FLinearColor::White)
+				]
+
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
+				[
+					SNew(STextBlock)
+					.Text(this, &SHapbeatAddressOverridePanel::GetResolvedTargetLabel)
 					.Font(BodyFont)
 					.ColorAndOpacity(this, &SHapbeatAddressOverridePanel::GetStatusColor)
 				]
 
-			// What the NEXT run on this machine would start with, which is not
-			// necessarily what is applied now -- showing both is the whole point
-			// at an install, where "did this seat's binding actually stick?" is
-			// the question being answered.
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
 				[
-					SNew(STextBlock)
-					.Text(this, &SHapbeatAddressOverridePanel::GetSavedLabel)
-					.Font(BodyFont)
-					.ColorAndOpacity(FLinearColor::White)
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(LOCTEXT("SavedPrefix", "Saved on this device:  Player ")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
+						]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(this, &SHapbeatAddressOverridePanel::GetSavedPlayerLabel).Font(AddressValueFont).ColorAndOpacity(FLinearColor::White)
+						]
+					+ SHorizontalBox::Slot().AutoWidth().Padding(16.0f, 0.0f, 0.0f, 0.0f).VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(LOCTEXT("SavedGroupPrefix", "Group ")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
+						]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+						[
+							SNew(STextBlock).Text(this, &SHapbeatAddressOverridePanel::GetSavedGroupLabel).Font(AddressValueFont).ColorAndOpacity(FLinearColor::White)
+						]
 				]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
@@ -134,6 +150,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 						[
 							SNew(SButton)
 							.IsFocusable(false)
+							.Visibility(bShowCloseButton ? EVisibility::Visible : EVisibility::Collapsed)
 							.Text(LOCTEXT("Close", "Close"))
 							.OnClicked(this, &SHapbeatAddressOverridePanel::OnCloseClicked)
 						]
@@ -257,27 +274,32 @@ FText SHapbeatAddressOverridePanel::GetGroupLabel() const
 	return EditingGroup < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(EditingGroup);
 }
 
-FText SHapbeatAddressOverridePanel::GetStatusLabel() const
+FText SHapbeatAddressOverridePanel::GetResolvedTargetLabel() const
 {
 	const FString Resolved = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, EditingPlayer, EditingGroup);
-	return FText::Format(LOCTEXT("StatusFormat", "{0}  ->  {1}"),
-		FText::FromString(PreviewTarget), FText::FromString(Resolved));
+	return FText::Format(LOCTEXT("ResolvedTarget", "Resolved target: {0}"), FText::FromString(Resolved));
 }
 
-FText SHapbeatAddressOverridePanel::GetSavedLabel() const
+FText SHapbeatAddressOverridePanel::GetSavedPlayerLabel() const
 {
 	int32 SavedPlayer = -1;
 	int32 SavedGroup = -1;
 	if (!UHapbeatSubsystem::TryGetPersistedAddressOverride(SavedPlayer, SavedGroup))
 	{
-		return LOCTEXT("SavedNone", "Saved on this device: none");
+		return LOCTEXT("SavedNone", "none");
 	}
-	// "off" rather than -1, matching the stepper labels, so the two never have
-	// to be read as different vocabularies.
-	const FText PlayerText = SavedPlayer < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(SavedPlayer);
-	const FText GroupText = SavedGroup < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(SavedGroup);
-	return FText::Format(LOCTEXT("SavedFormat", "Saved on this device: player={0}  group={1}"),
-		PlayerText, GroupText);
+	return SavedPlayer < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(SavedPlayer);
+}
+
+FText SHapbeatAddressOverridePanel::GetSavedGroupLabel() const
+{
+	int32 SavedPlayer = -1;
+	int32 SavedGroup = -1;
+	if (!UHapbeatSubsystem::TryGetPersistedAddressOverride(SavedPlayer, SavedGroup))
+	{
+		return LOCTEXT("SavedNone", "none");
+	}
+	return SavedGroup < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(SavedGroup);
 }
 
 FSlateColor SHapbeatAddressOverridePanel::GetStatusColor() const

@@ -8,6 +8,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/Slider.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
@@ -45,6 +46,7 @@ void UHapbeatShowcaseZ4ConsoleWidget::BuildConsoleLayout()
 	WidgetTree->RootWidget = Canvas;
 	UBorder* Panel = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ConsolePanel"));
 	Panel->SetBrushColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.75f));
+	Panel->SetPadding(FMargin(16.0f, 12.0f));
 	UCanvasPanelSlot* PanelSlot = Canvas->AddChildToCanvas(Panel);
 	PanelSlot->SetAnchors(FAnchors(0.5f, 1.0f));
 	PanelSlot->SetAlignment(FVector2D(0.5f, 1.0f));
@@ -57,10 +59,18 @@ void UHapbeatShowcaseZ4ConsoleWidget::BuildConsoleLayout()
 	GainSlider = WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(), TEXT("GainSlider"));
 	PanLabel = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("PanLabel"));
 	PanSlider = WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(), TEXT("PanSlider"));
-	Content->AddChildToVerticalBox(GainLabel);
-	Content->AddChildToVerticalBox(GainSlider);
-	Content->AddChildToVerticalBox(PanLabel);
-	Content->AddChildToVerticalBox(PanSlider);
+	USizeBox* GainSliderBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("GainSliderBox"));
+	GainSliderBox->SetWidthOverride(320.0f);
+	GainSliderBox->SetHeightOverride(16.0f);
+	GainSliderBox->SetContent(GainSlider);
+	USizeBox* PanSliderBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("PanSliderBox"));
+	PanSliderBox->SetWidthOverride(320.0f);
+	PanSliderBox->SetHeightOverride(16.0f);
+	PanSliderBox->SetContent(PanSlider);
+	Content->AddChildToVerticalBox(GainLabel)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
+	Content->AddChildToVerticalBox(GainSliderBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
+	Content->AddChildToVerticalBox(PanLabel)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
+	Content->AddChildToVerticalBox(PanSliderBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
 	GainSlider->SetValue(GainValue);
 	PanSlider->SetValue((PanValue + 1.0f) * 0.5f);
 	GainSlider->OnValueChanged.AddDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::OnGainChanged);

@@ -692,9 +692,9 @@ void CreateStreamConsoleWidgetBlueprint(UWidgetBlueprint* Blueprint)
 	FKismetEditorUtilities::CompileBlueprint(Blueprint);
 	UEdGraph* Graph = GetEventGraph(Blueprint);
 
-	AddComment(Graph, TEXT("GAIN SLIDER  |  Set Value (Gain Binding)"), -680, -310, 1480, 180,
+	AddComment(Graph, TEXT("GAIN SLIDER  |  Set Value  ->  Evaluate Now (Gain Binding)"), -680, -310, 1720, 180,
 		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("PAN SLIDER  |  Set Value (Pan Binding)"), -680, -60, 1480, 180,
+	AddComment(Graph, TEXT("PAN SLIDER  |  Set Value  ->  Evaluate Now (Pan Binding)"), -680, -60, 1720, 180,
 		FLinearColor(0.12f, 0.30f, 0.52f));
 	AddComment(Graph, TEXT("DETENT TICK  |  Play Sound 2D  ->  Fire (Tick Trigger)"), -680, 190, 1680, 180,
 		FLinearColor(0.62f, 0.25f, 0.08f));
@@ -704,18 +704,26 @@ void CreateStreamConsoleWidgetBlueprint(UWidgetBlueprint* Blueprint)
 	UK2Node_VariableGet* GainBinding = AddSelfVariableGet(Graph, TEXT("GainBinding"), -360, -160);
 	UK2Node_CallFunction* SetGain = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), 0, -260);
+	UK2Node_CallFunction* EvaluateGain = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), 280, -260);
 	ConnectPins(GainEvent->GetThenPin(), SetGain->GetExecPin());
 	ConnectPins(GainBinding->GetValuePin(), FindTargetPinChecked(SetGain));
 	ConnectPins(FindPinChecked(GainEvent, TEXT("Value")), FindPinChecked(SetGain, TEXT("Value")));
+	ConnectPins(SetGain->GetThenPin(), EvaluateGain->GetExecPin());
+	ConnectPins(GainBinding->GetValuePin(), FindTargetPinChecked(EvaluateGain));
 
 	UK2Node_Event* PanEvent = AddOverrideEvent(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, HandlePanValueChanged), -600, -10);
 	UK2Node_VariableGet* PanBinding = AddSelfVariableGet(Graph, TEXT("PanBinding"), -360, 90);
 	UK2Node_CallFunction* SetPan = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), 0, -10);
+	UK2Node_CallFunction* EvaluatePan = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), 280, -10);
 	ConnectPins(PanEvent->GetThenPin(), SetPan->GetExecPin());
 	ConnectPins(PanBinding->GetValuePin(), FindTargetPinChecked(SetPan));
 	ConnectPins(FindPinChecked(PanEvent, TEXT("Value")), FindPinChecked(SetPan, TEXT("Value")));
+	ConnectPins(SetPan->GetThenPin(), EvaluatePan->GetExecPin());
+	ConnectPins(PanBinding->GetValuePin(), FindTargetPinChecked(EvaluatePan));
 
 	UK2Node_Event* TickEvent = AddOverrideEvent(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, HandleTick), -600, 240);

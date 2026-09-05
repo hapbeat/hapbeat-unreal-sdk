@@ -85,7 +85,6 @@ void UHapbeatShowcaseZ4ConsoleWidget::OnPanChanged(float NormalizedValue)
 	PanValue = FMath::Clamp(NormalizedValue * 2.0f - 1.0f, -1.0f, 1.0f);
 	HandlePanValueChanged(PanValue);
 	EmitDetents(OldValue, PanValue);
-	UpdateLabels();
 }
 
 void UHapbeatShowcaseZ4ConsoleWidget::EmitDetents(float OldValue, float NewValue)

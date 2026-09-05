@@ -65,7 +65,6 @@ private:
 	void OnGainChanged(float Value);
 	void OnPanChanged(float NormalizedValue);
 	void ReturnFocusToGameViewport();
-	void ReturnFocusToGameViewport();
 
 	void EmitDetents(float OldValue, float NewValue);
 

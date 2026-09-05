@@ -5,6 +5,7 @@
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphPin.h"
 #include "GameFramework/Actor.h"
+#include "HapbeatAddressOverridePanelComponent.h"
 #include "HapbeatParameterBinding.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatStreamPlayback.h"
@@ -69,6 +70,14 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
     if (!TestNotNull(TEXT("Z4 Blueprint class"), Class)) { return false; }
     UWorld* World = UWorld::CreateWorld(EWorldType::Editor, false);
     AActor* Actor = World->SpawnActor<AActor>(Class);
+	TArray<UHapbeatAddressOverridePanelComponent*> AddressPanels;
+	Actor->GetComponents(AddressPanels);
+	TestEqual(TEXT("One Z4 address panel"), AddressPanels.Num(), 1);
+	if (AddressPanels.Num() == 1)
+	{
+		TestFalse(TEXT("Z4 owns its persistent address UI, so it has no Close button"),
+			AddressPanels[0]->bShowCloseButton);
+	}
     TArray<UHapbeatTriggerComponent*> Triggers;
     Actor->GetComponents(Triggers);
     UHapbeatTriggerComponent* Loop = nullptr;

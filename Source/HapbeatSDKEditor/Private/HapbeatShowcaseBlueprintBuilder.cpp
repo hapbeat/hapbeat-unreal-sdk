@@ -791,6 +791,78 @@ void ConfigureStreamBindingTargets(UBlueprint* Blueprint)
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 }
 
+/**
+ * Upgrade the one generated Space-toggle branch without rebuilding the user's
+ * existing BP_Z4_StreamConsole asset. Deferred playbacks are live logical
+ * streams (only their endpoint is unresolved), so they must follow Stop rather
+ * than Fire. Keeping this as a narrow migration preserves any user additions
+ * outside the generated toggle.
+ */
+void UpgradeStreamConsoleToggle(UBlueprint* Blueprint)
+{
+	UK2Node_CallFunction* IsActiveNode = nullptr;
+	UK2Node_IfThenElse* ToggleBranch = nullptr;
+	for (UEdGraph* Graph : Blueprint->UbergraphPages)
+	{
+		if (Graph == nullptr)
+		{
+			continue;
+		}
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node);
+				Call != nullptr
+				&& Call->FunctionReference.GetMemberName() == GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsActive))
+			{
+				IsActiveNode = Call;
+			}
+		}
+	}
+
+	if (IsActiveNode == nullptr)
+	{
+		return; // Already migrated (or an asset unrelated to the generated Z4 toggle).
+	}
+	for (UEdGraph* Graph : Blueprint->UbergraphPages)
+	{
+		if (Graph == nullptr)
+		{
+			continue;
+		}
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (UK2Node_IfThenElse* Branch = Cast<UK2Node_IfThenElse>(Node);
+				Branch != nullptr && Branch->GetConditionPin()->LinkedTo.Contains(IsActiveNode->GetReturnValuePin()))
+			{
+				ToggleBranch = Branch;
+				break;
+			}
+		}
+	}
+	if (ToggleBranch == nullptr)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Hapbeat] Could not find the Z4 Space-toggle branch to migrate."));
+		return;
+	}
+
+	const TArray<UEdGraphPin*> OldThenLinks = ToggleBranch->GetThenPin()->LinkedTo;
+	const TArray<UEdGraphPin*> OldElseLinks = ToggleBranch->GetElsePin()->LinkedTo;
+	ToggleBranch->GetThenPin()->BreakAllPinLinks();
+	ToggleBranch->GetElsePin()->BreakAllPinLinks();
+	for (UEdGraphPin* Pin : OldThenLinks)
+	{
+		ConnectPins(ToggleBranch->GetElsePin(), Pin);
+	}
+	for (UEdGraphPin* Pin : OldElseLinks)
+	{
+		ConnectPins(ToggleBranch->GetThenPin(), Pin);
+	}
+	IsActiveNode->FunctionReference.SetExternalMember(
+		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped), UHapbeatStreamPlayback::StaticClass());
+	IsActiveNode->ReconstructNode();
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+}
+
 void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* WidgetBlueprint, UHapbeatEventMap* EventMap)
 {
 	check(WidgetBlueprint != nullptr);
@@ -1074,6 +1146,7 @@ void GenerateStreamConsoleAssets()
 		CreateStreamConsoleBlueprint(Stream, StreamWidget, EventMap);
 		SaveBlueprintAsset(Stream);
 	}
+	UpgradeStreamConsoleToggle(Stream);
 	ConfigureStreamBindingTargets(Stream);
 	SaveBlueprintAsset(Stream);
 	CheckStreamConsoleComponentTree(Stream);

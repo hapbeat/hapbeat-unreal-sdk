@@ -5,8 +5,6 @@
 #include "Blueprint/UserWidget.h"
 #include "HapbeatShowcaseZ4ConsoleWidget.generated.h"
 
-class USlider;
-class UTextBlock;
 class UHapbeatParameterBinding;
 class UHapbeatTriggerComponent;
 class USoundBase;
@@ -16,8 +14,10 @@ class SWidget;
  * Presentation-only base for the Blueprint-authored Z4 console.
  *
  * The Blueprint subclass receives value and detent events and performs every
- * Hapbeat call itself. This class only supplies the two standard UMG sliders
- * and returns focus to the game viewport after a drag.
+ * Hapbeat call itself. This class only supplies the native Slate presentation
+ * and returns focus to the game viewport after a drag.  The presentation uses
+ * the same Slate controls as the original Z4 console so it is visually
+ * consistent with the address-override panel above it.
  */
 UCLASS(Abstract, Blueprintable)
 class HAPBEATSDKSAMPLES_API UHapbeatShowcaseZ4ConsoleWidget : public UUserWidget
@@ -62,27 +62,12 @@ protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
-	/** Creates the native UMG tree before UUserWidget builds its Slate representation. */
-	void BuildConsoleLayout();
-
-	UFUNCTION()
 	void OnGainChanged(float Value);
-	UFUNCTION()
 	void OnPanChanged(float NormalizedValue);
-	UFUNCTION()
+	void ReturnFocusToGameViewport();
 	void ReturnFocusToGameViewport();
 
 	void EmitDetents(float OldValue, float NewValue);
-	void UpdateLabels();
-
-	UPROPERTY(Transient)
-	TObjectPtr<USlider> GainSlider;
-	UPROPERTY(Transient)
-	TObjectPtr<USlider> PanSlider;
-	UPROPERTY(Transient)
-	TObjectPtr<UTextBlock> GainLabel;
-	UPROPERTY(Transient)
-	TObjectPtr<UTextBlock> PanLabel;
 
 	float GainValue = 0.5f;
 	float PanValue = 0.0f;

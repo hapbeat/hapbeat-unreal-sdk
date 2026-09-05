@@ -800,17 +800,24 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	UK2Node_VariableGet* LoopForPlayback = AddComponentGet(Graph, TEXT("LoopTrigger"), -1220, -310);
 	UK2Node_CallFunction* GetPlayback = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, GetActivePlayback), -970, -410);
+	UK2Node_CallFunction* HasPlayback = AddCall(Graph, UKismetSystemLibrary::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -700, -410);
+	UK2Node_IfThenElse* PlaybackExists = AddNode<UK2Node_IfThenElse>(Graph, -440, -410);
 	UK2Node_CallFunction* IsActive = AddCall(Graph, UHapbeatStreamPlayback::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsActive), -700, -410);
-	UK2Node_IfThenElse* IsPlaying = AddNode<UK2Node_IfThenElse>(Graph, -440, -410);
-	UK2Node_VariableGet* LoopForStop = AddComponentGet(Graph, TEXT("LoopTrigger"), -210, -290);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsActive), -180, -410);
+	UK2Node_IfThenElse* IsPlaying = AddNode<UK2Node_IfThenElse>(Graph, 80, -410);
+	UK2Node_VariableGet* LoopForStop = AddComponentGet(Graph, TEXT("LoopTrigger"), 320, -290);
 	UK2Node_CallFunction* StopLoop = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), 20, -410);
-	UK2Node_VariableGet* LoopForFire = AddComponentGet(Graph, TEXT("LoopTrigger"), -210, -70);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), 550, -410);
+	UK2Node_VariableGet* LoopForFire = AddComponentGet(Graph, TEXT("LoopTrigger"), 320, -70);
 	UK2Node_CallFunction* FireLoop = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire), 20, -190);
-	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), IsPlaying->GetExecPin());
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire), 550, -190);
+	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), PlaybackExists->GetExecPin());
 	ConnectPins(LoopForPlayback->GetValuePin(), FindTargetPinChecked(GetPlayback));
+	ConnectPins(GetPlayback->GetReturnValuePin(), FindPinChecked(HasPlayback, TEXT("Object")));
+	ConnectPins(HasPlayback->GetReturnValuePin(), PlaybackExists->GetConditionPin());
+	ConnectPins(PlaybackExists->GetThenPin(), IsPlaying->GetExecPin());
+	ConnectPins(PlaybackExists->GetElsePin(), FireLoop->GetExecPin());
 	ConnectPins(GetPlayback->GetReturnValuePin(), FindTargetPinChecked(IsActive));
 	ConnectPins(IsActive->GetReturnValuePin(), IsPlaying->GetConditionPin());
 	ConnectPins(IsPlaying->GetThenPin(), StopLoop->GetExecPin());

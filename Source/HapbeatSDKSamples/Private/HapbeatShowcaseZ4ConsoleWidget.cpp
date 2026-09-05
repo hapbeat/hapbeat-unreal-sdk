@@ -3,18 +3,14 @@
 
 #include "HapbeatParameterBinding.h"
 #include "HapbeatTriggerComponent.h"
-#include "Blueprint/WidgetTree.h"
-#include "Components/Border.h"
-#include "Components/CanvasPanel.h"
-#include "Components/CanvasPanelSlot.h"
-#include "Components/Slider.h"
-#include "Components/SizeBox.h"
-#include "Components/TextBlock.h"
-#include "Components/VerticalBox.h"
-#include "Components/VerticalBoxSlot.h"
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
 #include "Sound/SoundBase.h"
+#include "Widgets/Input/SSlider.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Text/STextBlock.h"
 #include "Widgets/SViewport.h"
 
 void UHapbeatShowcaseZ4ConsoleWidget::Configure(UHapbeatParameterBinding* InGainBinding,
@@ -28,56 +24,51 @@ void UHapbeatShowcaseZ4ConsoleWidget::Configure(UHapbeatParameterBinding* InGain
 
 TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 {
-	BuildConsoleLayout();
-	return Super::RebuildWidget();
-}
-
-void UHapbeatShowcaseZ4ConsoleWidget::BuildConsoleLayout()
-{
-	// This runs before UUserWidget creates the Slate tree.  Doing the same work
-	// in NativeConstruct is too late: the old designer root has already become
-	// the widget displayed by AddToViewport.
-	if (WidgetTree == nullptr || GainSlider != nullptr)
-	{
-		return;
-	}
-
-	UCanvasPanel* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("ConsoleRoot"));
-	WidgetTree->RootWidget = Canvas;
-	UBorder* Panel = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("ConsolePanel"));
-	Panel->SetBrushColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.75f));
-	Panel->SetPadding(FMargin(16.0f, 12.0f));
-	UCanvasPanelSlot* PanelSlot = Canvas->AddChildToCanvas(Panel);
-	PanelSlot->SetAnchors(FAnchors(0.5f, 1.0f));
-	PanelSlot->SetAlignment(FVector2D(0.5f, 1.0f));
-	PanelSlot->SetPosition(FVector2D(0.0f, -48.0f));
-	PanelSlot->SetSize(FVector2D(352.0f, 148.0f));
-
-	UVerticalBox* Content = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ConsoleContent"));
-	Panel->SetContent(Content);
-	GainLabel = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("GainLabel"));
-	GainSlider = WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(), TEXT("GainSlider"));
-	PanLabel = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("PanLabel"));
-	PanSlider = WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(), TEXT("PanSlider"));
-	USizeBox* GainSliderBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("GainSliderBox"));
-	GainSliderBox->SetWidthOverride(320.0f);
-	GainSliderBox->SetHeightOverride(16.0f);
-	GainSliderBox->SetContent(GainSlider);
-	USizeBox* PanSliderBox = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("PanSliderBox"));
-	PanSliderBox->SetWidthOverride(320.0f);
-	PanSliderBox->SetHeightOverride(16.0f);
-	PanSliderBox->SetContent(PanSlider);
-	Content->AddChildToVerticalBox(GainLabel)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
-	Content->AddChildToVerticalBox(GainSliderBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
-	Content->AddChildToVerticalBox(PanLabel)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
-	Content->AddChildToVerticalBox(PanSliderBox)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 2.0f));
-	GainSlider->SetValue(GainValue);
-	PanSlider->SetValue((PanValue + 1.0f) * 0.5f);
-	GainSlider->OnValueChanged.AddDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::OnGainChanged);
-	PanSlider->OnValueChanged.AddDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::OnPanChanged);
-	GainSlider->OnMouseCaptureEnd.AddDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::ReturnFocusToGameViewport);
-	PanSlider->OnMouseCaptureEnd.AddDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::ReturnFocusToGameViewport);
-	UpdateLabels();
+	return SNew(SBox)
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Bottom)
+		.Padding(FMargin(0.0f, 0.0f, 0.0f, 48.0f))
+		[
+			SNew(SBorder)
+			.Padding(FMargin(16.0f, 12.0f))
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+				[
+					SNew(STextBlock).Text_Lambda([this]()
+					{
+						return FText::FromString(FString::Printf(TEXT("Gain  %.2f"), GainValue));
+					})
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+				[
+					SNew(SBox).WidthOverride(320.0f)
+					[
+						SNew(SSlider)
+						.Value_Lambda([this]() { return GainValue; })
+						.OnValueChanged_Lambda([this](float Value) { OnGainChanged(Value); })
+						.OnMouseCaptureEnd_Lambda([this]() { ReturnFocusToGameViewport(); })
+					]
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 2.0f)
+				[
+					SNew(STextBlock).Text_Lambda([this]()
+					{
+						return FText::FromString(FString::Printf(TEXT("Pan  %+.2f"), PanValue));
+					})
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+				[
+					SNew(SBox).WidthOverride(320.0f)
+					[
+						SNew(SSlider)
+						.Value_Lambda([this]() { return (PanValue + 1.0f) * 0.5f; })
+						.OnValueChanged_Lambda([this](float Value) { OnPanChanged(Value); })
+						.OnMouseCaptureEnd_Lambda([this]() { ReturnFocusToGameViewport(); })
+					]
+				]
+			]
+		];
 }
 
 void UHapbeatShowcaseZ4ConsoleWidget::OnGainChanged(float Value)
@@ -86,7 +77,6 @@ void UHapbeatShowcaseZ4ConsoleWidget::OnGainChanged(float Value)
 	GainValue = FMath::Clamp(Value, 0.0f, 1.0f);
 	HandleGainValueChanged(GainValue);
 	EmitDetents(OldValue, GainValue);
-	UpdateLabels();
 }
 
 void UHapbeatShowcaseZ4ConsoleWidget::OnPanChanged(float NormalizedValue)
@@ -110,12 +100,6 @@ void UHapbeatShowcaseZ4ConsoleWidget::EmitDetents(float OldValue, float NewValue
 	{
 		HandleTick();
 	}
-}
-
-void UHapbeatShowcaseZ4ConsoleWidget::UpdateLabels()
-{
-	if (GainLabel != nullptr) { GainLabel->SetText(FText::FromString(FString::Printf(TEXT("Gain  %.2f"), GainValue))); }
-	if (PanLabel != nullptr) { PanLabel->SetText(FText::FromString(FString::Printf(TEXT("Pan  %+.2f"), PanValue))); }
 }
 
 void UHapbeatShowcaseZ4ConsoleWidget::ReturnFocusToGameViewport()

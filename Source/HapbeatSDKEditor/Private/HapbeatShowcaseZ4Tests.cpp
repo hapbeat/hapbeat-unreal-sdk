@@ -36,8 +36,10 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 				{
 					const FName Name = Call->FunctionReference.GetMemberName();
 					IsStoppedNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped) ? Call : IsStoppedNode;
-					StopNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop) ? Call : StopNode;
-					FireNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire) ? Call : FireNode;
+					StopNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop)
+						&& Call->NodePosX == 550 && Call->NodePosY == -410 ? Call : StopNode;
+					FireNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire)
+						&& Call->NodePosX == 550 && Call->NodePosY == -190 ? Call : FireNode;
 				}
 				else if (UK2Node_IfThenElse* Branch = Cast<UK2Node_IfThenElse>(Node))
 				{

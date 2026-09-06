@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HapbeatEntryRef.h"
 #include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ3FishingActor.generated.h"
 
@@ -351,10 +352,27 @@ private:
 	 * asset to re-author them; clear it and the zone builds an equivalent map in
 	 * code, so the sample still runs if the asset ever goes missing.
 	 *
-	 * Entries are resolved by event name, not by order (see BuildEventMapAndHaptics).
+ * Select each sequence phase from this Event Map in Details. The selected
+ * entries, not their original Showcase names or array positions, are wired to
+ * the shark's HookSequence (see BuildEventMapAndHaptics).
 	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Hook", meta = (DisplayName = "Event Map"))
 	TObjectPtr<UHapbeatEventMap> EventMapOverride;
+
+	/** One-shot sent when the player presses the hook button. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Hook",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Hook Start Event"))
+	FHapbeatEntryRef HookStartEvent;
+
+	/** Looping entry sent while the shark is hooked. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Hook",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Hook Loop Event"))
+	FHapbeatEntryRef HookLoopEvent;
+
+	/** One-shot sent when the player releases the hook button. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Fishing|Hook",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Hook Release Event"))
+	FHapbeatEntryRef HookReleaseEvent;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;

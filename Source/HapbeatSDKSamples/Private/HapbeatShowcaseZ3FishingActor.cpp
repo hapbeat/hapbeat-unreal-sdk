@@ -161,6 +161,12 @@ AHapbeatShowcaseZ3FishingActor::AHapbeatShowcaseZ3FishingActor()
 	if (DefaultEventMap.Succeeded())
 	{
 		EventMapOverride = DefaultEventMap.Object;
+		HookStartEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			DefaultEventMap.Object, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"));
+		HookLoopEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			DefaultEventMap.Object, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"));
+		HookReleaseEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			DefaultEventMap.Object, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"));
 	}
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> RodMesh(
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_FishingRod.SM_FishingRod"));
@@ -432,32 +438,23 @@ void AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics()
 		return;
 	}
 
-	// Look the ids up by event name. The fallback map below authors the same
-	// categories / names / modes, so both paths go through this one resolution
-	// step instead of duplicating the wiring.
-	const FGuid HookStartId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"));
-	const FGuid HookLoopId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"));
-	const FGuid HookReleaseId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"));
+	// With an authored map, use the three entries selected in Details. The
+	// fallback retains the shipped names so the zone still runs without assets.
+	const FGuid HookStartId = EventMapOverride != nullptr ? HookStartEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"));
+	const FGuid HookLoopId = EventMapOverride != nullptr ? HookLoopEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"));
+	const FGuid HookReleaseId = EventMapOverride != nullptr ? HookReleaseEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"));
 
 	ResolvedHookEventMap = EventMap;
 	ResolvedHookStartEntryId = HookStartId;
 	ResolvedHookLoopEntryId = HookLoopId;
 	ResolvedHookReleaseEntryId = HookReleaseId;
-	if (HookStartId.IsValid())
-	{
-		ResolvedHookStartEntryName = TEXT("showcase-kit.z3_hook_start");
-	}
-	if (HookLoopId.IsValid())
-	{
-		ResolvedHookLoopEntryName = TEXT("showcase-kit.z3_hook_loop");
-	}
-	if (HookReleaseId.IsValid())
-	{
-		ResolvedHookReleaseEntryName = TEXT("showcase-kit.z3_hook_release");
-	}
+	FHapbeatEventEntry HookEntry;
+	if (EventMap->FindById(HookStartId, HookEntry)) { ResolvedHookStartEntryName = HookEntry.GetEventId(); }
+	if (EventMap->FindById(HookLoopId, HookEntry)) { ResolvedHookLoopEntryName = HookEntry.GetEventId(); }
+	if (EventMap->FindById(HookReleaseId, HookEntry)) { ResolvedHookReleaseEntryName = HookEntry.GetEventId(); }
 
 	AHapbeatShowcaseZ3SharkActor* WiredShark = Shark != nullptr
 		? Shark.Get()

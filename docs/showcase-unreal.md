@@ -128,11 +128,11 @@ Shark の速度
   → loop の Gain
 ```
 
-`Z3_Fishing` の **Hook Wiring** では、start / loop / release の entry を確認できます。竿、`RodTipMarker`、釣り糸、Shark slot の位置は Details で編集します。
+`Z3_Fishing` の **Hapbeat > Fishing > Hook** で Event Map を選び、**Hook Start Event**、**Hook Loop Event**、**Hook Release Event** の各プルダウンから entry を割り当てます。**Hook Wiring** は実際に Shark の sequence へ渡された結果を確認する読み取り専用の表示です。竿、`RodTipMarker`、釣り糸、Shark slot の位置は Details で編集します。
 
 ### Details で触覚の接続を確認する
 
-`Z3_Fishing` の Details では、**Hapbeat > Event Map Override** と **Hapbeat > Fishing > Hook Wiring** を確認します。後者には実際に解決された start / loop / release の entry 名が表示されます。
+`Z3_Fishing` の Details では、**Hapbeat > Fishing > Hook** の Event Map と 3 つの entry を選択します。**Hapbeat > Fishing > Hook Wiring** には実際に解決された start / loop / release の entry 名が表示されます。
 
 ### C++ 実装を確認する
 
@@ -151,7 +151,7 @@ Plugins
 
 | 確認したい配線 | `.h` の識別子 | `.cpp` の関数 |
 | --- | --- | --- |
-| Event Map と 3 entry の解決 | `EventMapOverride`、`ResolvedHook*EntryName` | `AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics` |
+| Event Map と 3 entry の選択・解決 | `EventMapOverride`、`Hook*Event`、`ResolvedHook*EntryName` | `AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics` |
 | sequence への map / entry の代入 | `SharkSlot`、`AHapbeatShowcaseZ3SharkActor::HookSequence` | `BuildEventMapAndHaptics` |
 | 魚の速度から loop Gain を更新 | `HookVelocityBinding` | `AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor` |
 | 左クリックで sequence を開始・停止 | — | `HandleFirePressed`、`HandleFireReleased`、`SetHooked` |

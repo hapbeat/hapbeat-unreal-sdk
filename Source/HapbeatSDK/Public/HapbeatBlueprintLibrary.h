@@ -8,6 +8,7 @@
 
 class UHapbeatEventMap;
 class UHapbeatStreamPlayback;
+class UHapbeatTriggerComponent;
 
 /**
  * The call site for firing an authored haptic: "Play Hapbeat Event" /
@@ -81,4 +82,14 @@ public:
 			Keywords = "haptic stop event hapbeat"))
 	static void StopHapbeatEvent(const UObject* WorldContextObject,
 		UHapbeatEventMap* Map, FHapbeatEntryRef Entry);
+
+	/**
+	 * Feed a scalar control value to a Tick Trigger. The component must be a
+	 * UHapbeatTickEmitterComponent at runtime; other trigger types are ignored.
+	 * This accepts the base trigger type so it can be used with a generated
+	 * Blueprint component reference after a component class is upgraded.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat",
+		meta = (DisplayName = "Fire Hapbeat Tick From Value", Keywords = "haptic tick detent slider value hapbeat"))
+	static void FireHapbeatTickFromValue(UHapbeatTriggerComponent* Trigger, float Value);
 };

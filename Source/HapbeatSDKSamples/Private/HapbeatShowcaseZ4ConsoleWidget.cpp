@@ -2,9 +2,11 @@
 #include "HapbeatShowcaseZ4ConsoleWidget.h"
 
 #include "HapbeatParameterBinding.h"
+#include "HapbeatTickEmitterComponent.h"
 #include "HapbeatTriggerComponent.h"
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 #include "Sound/SoundBase.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SSlider.h"
@@ -17,10 +19,19 @@
 void UHapbeatShowcaseZ4ConsoleWidget::Configure(UHapbeatParameterBinding* InGainBinding,
 	UHapbeatParameterBinding* InPanBinding, UHapbeatTriggerComponent* InTickTrigger, USoundBase* InTickSound)
 {
+	if (TickTrigger != nullptr)
+	{
+		TickTrigger->OnFired.RemoveDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::HandleTickFired);
+	}
 	GainBinding = InGainBinding;
 	PanBinding = InPanBinding;
 	TickTrigger = InTickTrigger;
 	TickSound = InTickSound;
+	ActiveSlider = EActiveSlider::None;
+	if (TickTrigger != nullptr)
+	{
+		TickTrigger->OnFired.AddDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::HandleTickFired);
+	}
 }
 
 TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
@@ -82,32 +93,37 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 
 void UHapbeatShowcaseZ4ConsoleWidget::OnGainChanged(float Value)
 {
-	const float OldValue = GainValue;
 	GainValue = FMath::Clamp(FMath::RoundToFloat(Value * 10.0f) / 10.0f, 0.0f, 1.0f);
+	PrepareTickFor(EActiveSlider::Gain);
 	HandleGainValueChanged(GainValue);
-	EmitDetents(OldValue, GainValue);
 }
 
 void UHapbeatShowcaseZ4ConsoleWidget::OnPanChanged(float NormalizedValue)
 {
-	const float OldValue = PanValue;
 	const float RawPan = NormalizedValue * 2.0f - 1.0f;
 	PanValue = FMath::Clamp(FMath::RoundToFloat(RawPan * 10.0f) / 10.0f, -1.0f, 1.0f);
+	PrepareTickFor(EActiveSlider::Pan);
 	HandlePanValueChanged(PanValue);
-	EmitDetents(OldValue, PanValue);
 }
 
-void UHapbeatShowcaseZ4ConsoleWidget::EmitDetents(float OldValue, float NewValue)
+void UHapbeatShowcaseZ4ConsoleWidget::PrepareTickFor(EActiveSlider Slider)
 {
-	if (TickThreshold <= 0.0f)
+	if (UHapbeatTickEmitterComponent* Emitter = Cast<UHapbeatTickEmitterComponent>(TickTrigger);
+		Emitter != nullptr && ActiveSlider != Slider)
 	{
-		return;
+		// One emitter owns one scalar reference. Reset only when control changes,
+		// so the first value from the other slider establishes a fresh reference
+		// rather than producing a false cross-control detent.
+		Emitter->ResetReference();
+		ActiveSlider = Slider;
 	}
-	const int32 OldBand = FMath::FloorToInt(OldValue / TickThreshold);
-	const int32 NewBand = FMath::FloorToInt(NewValue / TickThreshold);
-	for (int32 Index = 0; Index < FMath::Min(FMath::Abs(NewBand - OldBand), 64); ++Index)
+}
+
+void UHapbeatShowcaseZ4ConsoleWidget::HandleTickFired(AActor* Other, float Speed)
+{
+	if (TickSound != nullptr)
 	{
-		HandleTick();
+		UGameplayStatics::PlaySound2D(this, TickSound);
 	}
 }
 

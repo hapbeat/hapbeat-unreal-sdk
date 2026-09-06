@@ -7,6 +7,7 @@
 #include "GameFramework/Actor.h"
 #include "HapbeatAddressOverridePanelComponent.h"
 #include "HapbeatParameterBinding.h"
+#include "HapbeatTickEmitterComponent.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatShowcaseZ4ConsoleWidget.h"
@@ -88,6 +89,17 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
         if (Trigger->GetName() == TEXT("LoopTrigger")) { Loop = Trigger; }
     }
     TestNotNull(TEXT("Runtime LoopTrigger"), Loop);
+	TArray<UHapbeatTickEmitterComponent*> TickEmitters;
+	Actor->GetComponents(TickEmitters);
+	TestEqual(TEXT("One tick emitter"), TickEmitters.Num(), 1);
+	UHapbeatTickEmitterComponent* GainTick = nullptr;
+	for (UHapbeatTickEmitterComponent* Trigger : TickEmitters)
+	{
+		if (Trigger->GetName() == TEXT("TickTrigger")) { GainTick = Trigger; }
+		TestEqual(*FString::Printf(TEXT("%s uses the Showcase detent threshold"), *Trigger->GetName()),
+			Trigger->TickThreshold, 0.1f);
+	}
+	TestNotNull(TEXT("Runtime TickTrigger (Gain)"), GainTick);
     TArray<UHapbeatParameterBinding*> Bindings;
     Actor->GetComponents(Bindings);
     TestEqual(TEXT("Two slider bindings"), Bindings.Num(), 2);
@@ -106,7 +118,7 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
     // send-thread mirror path. No subsystem, network socket or audio is created.
     UClass* WidgetClass = LoadClass<UHapbeatShowcaseZ4ConsoleWidget>(nullptr,
         TEXT("/HapbeatSDK/HapbeatSamples/Showcase/BP_Z4_StreamConsoleWidget.BP_Z4_StreamConsoleWidget_C"));
-    if (Loop && Gain && Pan && TestNotNull(TEXT("Widget Blueprint class"), WidgetClass))
+	if (Loop && Gain && Pan && GainTick && TestNotNull(TEXT("Widget Blueprint class"), WidgetClass))
     {
         auto* Playback = NewObject<UHapbeatStreamPlayback>(Actor);
         Playback->Init(0.5f, 1.0f);
@@ -115,7 +127,11 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
         Loop->StoredPlayback = Playback;
         auto* Widget = NewObject<UHapbeatShowcaseZ4ConsoleWidget>(World, WidgetClass);
         Widget->Initialize();
-        Widget->Configure(Gain, Pan, nullptr, nullptr);
+		// This test exercises binding updates without creating a subsystem or
+		// sending haptics. The TickEmitter still receives FireFromValue calls,
+		// but its inherited trigger exits before dispatch.
+		GainTick->bTriggerEnabled = false;
+		Widget->Configure(Gain, Pan, GainTick);
         TFunction<TSharedPtr<SBorder>(TSharedRef<SWidget>)> FindPanel;
         FindPanel = [&FindPanel](TSharedRef<SWidget> Node) -> TSharedPtr<SBorder>
         {

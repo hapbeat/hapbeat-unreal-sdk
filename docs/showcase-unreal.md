@@ -187,21 +187,18 @@ Space
 Gain / Pan slider
   → GainBinding / PanBinding.Set Value
   → Evaluate Now
-
-slider detent
-  → Play Sound 2D
-  → TickTrigger.Fire
+  → Fire Hapbeat Tick From Value (TickTrigger)
 ```
 
 ### SDK の接続を最短で確認する
 
 1. World Outliner で `Z4_StreamConsole` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z4_StreamConsole` を開きます。
-2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickTrigger`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。
+2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickTrigger`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。`TickTrigger` の class は **Hapbeat Tick Trigger** です。
 3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から `LoopTrigger` の `Fire` / `Stop` を、`On Showcase Zone Activated` から `Create Widget` と `AddressPanel.Show` を確認します。
 4. **My Blueprint > Construction Script** を開きます。`GainBinding` と `PanBinding` の `Set Target Trigger` に、この Actor の `LoopTrigger` を接続しています。
-5. `BP_Z4_StreamConsoleWidget` を開き、**My Blueprint > Graphs > EventGraph** を開きます。`Handle Gain Value Changed` と `Handle Pan Value Changed` は `Set Value` → `Evaluate Now`、`Handle Tick` は `Play Sound 2D` → `TickTrigger.Fire` に接続されています。
+5. `BP_Z4_StreamConsoleWidget` を開き、**My Blueprint > Graphs > EventGraph** を開きます。`Handle Gain Value Changed` と `Handle Pan Value Changed` はそれぞれ `Binding.Set Value` → `Evaluate Now` → `Fire Hapbeat Tick From Value` に接続されています。
 
-`LoopTrigger` は `z4_stream_loop`、`TickTrigger` は `z4_slider_tick` を指します。各 trigger の Details で **Event Map** と entry を変更できます。`GainBinding` と `PanBinding` の **Source = External** にスライダー値を渡し、Construction Script で接続した `LoopTrigger` の再生だけを調整します。
+`LoopTrigger` は `z4_stream_loop`、`TickTrigger` は `z4_slider_tick` を指します。各 trigger の Details で **Event Map** と entry を変更できます。Gain/Pan を切り替えた最初の値では tick の参照をリセットするため、別の slider の値との差による誤発火はありません。`GainBinding` と `PanBinding` の **Source = External** にスライダー値を渡し、Construction Script で接続した `LoopTrigger` の再生だけを調整します。
 
 `AddressPanel` は Zone が表示中に `Show`、非表示時に `Hide` されます。Player / Group の選択はこの component の UI で Apply します。
 

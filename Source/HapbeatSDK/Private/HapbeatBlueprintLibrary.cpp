@@ -3,6 +3,8 @@
 
 #include "HapbeatEventMap.h"
 #include "HapbeatSubsystem.h"
+#include "HapbeatTickEmitterComponent.h"
+#include "HapbeatTriggerComponent.h"
 
 #include "Engine/Engine.h"       // GEngine->GetWorldFromContextObject
 #include "Engine/GameInstance.h"
@@ -74,4 +76,12 @@ void UHapbeatBlueprintLibrary::StopHapbeatEvent(const UObject* WorldContextObjec
 		return;
 	}
 	Subsystem->StopEntry(Map, Entry.EntryId);
+}
+
+void UHapbeatBlueprintLibrary::FireHapbeatTickFromValue(UHapbeatTriggerComponent* Trigger, float Value)
+{
+	if (UHapbeatTickEmitterComponent* TickTrigger = Cast<UHapbeatTickEmitterComponent>(Trigger))
+	{
+		TickTrigger->FireFromValue(Value);
+	}
 }

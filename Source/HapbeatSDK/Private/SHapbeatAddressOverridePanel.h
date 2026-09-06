@@ -49,14 +49,17 @@ private:
 	// ---- display ----
 	FText GetPlayerLabel() const;
 	FText GetGroupLabel() const;
-	/** Target used by commands right now, with the applied override. */
-	FText GetCurrentTargetLabel() const;
-	/** Target that will be used after pressing Apply, with the staged values. */
-	FText GetTargetAfterApplyLabel() const;
+	FText GetCurrentTargetPlayerLabel() const;
+	FText GetCurrentTargetGroupLabel() const;
+	FText GetPendingTargetPlayerLabel() const;
+	FText GetPendingTargetGroupLabel() const;
 	/** Persisted values for the next run, displayed separately to emphasize the address itself. */
 	FText GetSavedPlayerLabel() const;
 	FText GetSavedGroupLabel() const;
-	FSlateColor GetStatusColor() const;
+	FSlateColor GetPlayerEditColor() const;
+	FSlateColor GetGroupEditColor() const;
+	FSlateColor GetPendingTargetPlayerColor() const;
+	FSlateColor GetPendingTargetGroupColor() const;
 	bool IsPlayerEditable() const;
 	bool IsGroupEditable() const;
 
@@ -66,14 +69,17 @@ private:
 	TSharedRef<SWidget> MakeStepperRow(
 		const FText& Label,
 		TAttribute<FText> ValueText,
+		TAttribute<FSlateColor> ValueColor,
 		TAttribute<bool> IsEditable,
 		TFunction<void(int32)> OnStep);
 
 	/** Fixed label/arrow columns make the current and pending target paths directly comparable. */
 	TSharedRef<SWidget> MakeTargetRow(
 		const FText& Label,
-		TAttribute<FText> TargetText,
-		TAttribute<FSlateColor> TargetColor);
+		TAttribute<FText> PlayerText,
+		TAttribute<FSlateColor> PlayerColor,
+		TAttribute<FText> GroupText,
+		TAttribute<FSlateColor> GroupColor);
 
 	TWeakObjectPtr<UHapbeatSubsystem> WeakSubsystem;
 	bool bPersistOnApply = true;

@@ -28,6 +28,28 @@ namespace
 
 	/** Marks values that are edited but not yet applied. */
 	const FLinearColor PendingColor(1.0f, 0.85f, 0.2f);
+
+	FText ResolveTargetPlayerLabel(int32 OverridePlayer, int32 OverrideGroup)
+	{
+		int32 Player = -1;
+		int32 Group = -1;
+		FString Position;
+		UHapbeatTargetLibrary::ParseTarget(
+			UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, OverridePlayer, OverrideGroup),
+			Player, Position, Group);
+		return Player < 1 ? LOCTEXT("TargetPlayerOff", "off") : FText::AsNumber(Player);
+	}
+
+	FText ResolveTargetGroupLabel(int32 OverridePlayer, int32 OverrideGroup)
+	{
+		int32 Player = -1;
+		int32 Group = -1;
+		FString Position;
+		UHapbeatTargetLibrary::ParseTarget(
+			UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, OverridePlayer, OverrideGroup),
+			Player, Position, Group);
+		return Group < 1 ? LOCTEXT("TargetGroupOff", "off") : FText::AsNumber(Group);
+	}
 }
 
 void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
@@ -67,6 +89,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 				[
 					MakeStepperRow(LOCTEXT("Player", "Player"),
 						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetPlayerLabel),
+						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetPlayerEditColor),
 						TAttribute<bool>(this, &SHapbeatAddressOverridePanel::IsPlayerEditable),
 						[this](int32 Delta) { StepPlayer(Delta); })
 				]
@@ -75,6 +98,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 				[
 					MakeStepperRow(LOCTEXT("Group", "Group"),
 						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetGroupLabel),
+						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetGroupEditColor),
 						TAttribute<bool>(this, &SHapbeatAddressOverridePanel::IsGroupEditable),
 						[this](int32 Delta) { StepGroup(Delta); })
 				]
@@ -83,7 +107,9 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 				[
 					MakeTargetRow(
 						LOCTEXT("CurrentTarget", "Now"),
-						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetCurrentTargetLabel),
+						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetCurrentTargetPlayerLabel),
+						FSlateColor(FLinearColor::White),
+						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetCurrentTargetGroupLabel),
 						FSlateColor(FLinearColor::White))
 				]
 
@@ -91,8 +117,10 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 				[
 					MakeTargetRow(
 						LOCTEXT("TargetAfterApply", "Next"),
-						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetTargetAfterApplyLabel),
-						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetStatusColor))
+						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetPendingTargetPlayerLabel),
+						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetPendingTargetPlayerColor),
+						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetPendingTargetGroupLabel),
+						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetPendingTargetGroupColor))
 				]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
@@ -159,6 +187,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 	const FText& Label,
 	TAttribute<FText> ValueText,
+	TAttribute<FSlateColor> ValueColor,
 	TAttribute<bool> IsEditable,
 	TFunction<void(int32)> OnStep)
 {
@@ -189,7 +218,7 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 					SNew(STextBlock)
 					.Text(ValueText)
 					.Font(BodyFont)
-					.ColorAndOpacity(FSlateColor(PendingColor))
+					.ColorAndOpacity(ValueColor)
 				]
 			]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
@@ -206,8 +235,10 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 
 TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeTargetRow(
 	const FText& Label,
-	TAttribute<FText> TargetText,
-	TAttribute<FSlateColor> TargetColor)
+	TAttribute<FText> PlayerText,
+	TAttribute<FSlateColor> PlayerColor,
+	TAttribute<FText> GroupText,
+	TAttribute<FSlateColor> GroupColor)
 {
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
@@ -226,7 +257,19 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeTargetRow(
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 		[
-			SNew(STextBlock).Text(TargetText).Font(BodyFont).ColorAndOpacity(TargetColor)
+			SNew(STextBlock).Text(LOCTEXT("TargetPlayerPrefix", "player_")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(STextBlock).Text(PlayerText).Font(BodyFont).ColorAndOpacity(PlayerColor)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(STextBlock).Text(LOCTEXT("TargetMiddle", "/pos_chest/group_")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(STextBlock).Text(GroupText).Font(BodyFont).ColorAndOpacity(GroupColor)
 		];
 }
 
@@ -297,19 +340,30 @@ FText SHapbeatAddressOverridePanel::GetGroupLabel() const
 	return EditingGroup < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(EditingGroup);
 }
 
-FText SHapbeatAddressOverridePanel::GetCurrentTargetLabel() const
+FText SHapbeatAddressOverridePanel::GetCurrentTargetPlayerLabel() const
 {
 	const UHapbeatSubsystem* Subsystem = GetSubsystem();
 	const int32 AppliedPlayer = Subsystem != nullptr ? Subsystem->GetOverridePlayer() : -1;
 	const int32 AppliedGroup = Subsystem != nullptr ? Subsystem->GetOverrideGroup() : -1;
-	const FString CurrentTarget = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, AppliedPlayer, AppliedGroup);
-	return FText::FromString(CurrentTarget);
+	return ResolveTargetPlayerLabel(AppliedPlayer, AppliedGroup);
 }
 
-FText SHapbeatAddressOverridePanel::GetTargetAfterApplyLabel() const
+FText SHapbeatAddressOverridePanel::GetCurrentTargetGroupLabel() const
 {
-	const FString PendingTarget = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, EditingPlayer, EditingGroup);
-	return FText::FromString(PendingTarget);
+	const UHapbeatSubsystem* Subsystem = GetSubsystem();
+	const int32 AppliedPlayer = Subsystem != nullptr ? Subsystem->GetOverridePlayer() : -1;
+	const int32 AppliedGroup = Subsystem != nullptr ? Subsystem->GetOverrideGroup() : -1;
+	return ResolveTargetGroupLabel(AppliedPlayer, AppliedGroup);
+}
+
+FText SHapbeatAddressOverridePanel::GetPendingTargetPlayerLabel() const
+{
+	return ResolveTargetPlayerLabel(EditingPlayer, EditingGroup);
+}
+
+FText SHapbeatAddressOverridePanel::GetPendingTargetGroupLabel() const
+{
+	return ResolveTargetGroupLabel(EditingPlayer, EditingGroup);
 }
 
 FText SHapbeatAddressOverridePanel::GetSavedPlayerLabel() const
@@ -318,7 +372,7 @@ FText SHapbeatAddressOverridePanel::GetSavedPlayerLabel() const
 	int32 SavedGroup = -1;
 	if (!UHapbeatSubsystem::TryGetPersistedAddressOverride(SavedPlayer, SavedGroup))
 	{
-		return LOCTEXT("SavedNone", "none");
+		return LOCTEXT("Off", "off");
 	}
 	return SavedPlayer < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(SavedPlayer);
 }
@@ -329,19 +383,37 @@ FText SHapbeatAddressOverridePanel::GetSavedGroupLabel() const
 	int32 SavedGroup = -1;
 	if (!UHapbeatSubsystem::TryGetPersistedAddressOverride(SavedPlayer, SavedGroup))
 	{
-		return LOCTEXT("SavedNone", "none");
+		return LOCTEXT("Off", "off");
 	}
 	return SavedGroup < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(SavedGroup);
 }
 
-FSlateColor SHapbeatAddressOverridePanel::GetStatusColor() const
+FSlateColor SHapbeatAddressOverridePanel::GetPlayerEditColor() const
 {
 	const UHapbeatSubsystem* Subsystem = GetSubsystem();
-	const bool bPending = Subsystem != nullptr &&
-		(EditingPlayer != Subsystem->GetOverridePlayer() || EditingGroup != Subsystem->GetOverrideGroup());
-	// Same colour the value labels use, so "yellow" consistently reads as
-	// "edited, not yet applied" everywhere on the panel.
-	return bPending ? FSlateColor(PendingColor) : FSlateColor(FLinearColor::White);
+	const bool bPlayerChanged = Subsystem != nullptr && EditingPlayer != Subsystem->GetOverridePlayer();
+	return bPlayerChanged && EditingPlayer >= 1 ? FSlateColor(PendingColor) : FSlateColor(FLinearColor::White);
+}
+
+FSlateColor SHapbeatAddressOverridePanel::GetGroupEditColor() const
+{
+	const UHapbeatSubsystem* Subsystem = GetSubsystem();
+	const bool bGroupChanged = Subsystem != nullptr && EditingGroup != Subsystem->GetOverrideGroup();
+	return bGroupChanged && EditingGroup >= 1 ? FSlateColor(PendingColor) : FSlateColor(FLinearColor::White);
+}
+
+FSlateColor SHapbeatAddressOverridePanel::GetPendingTargetPlayerColor() const
+{
+	const UHapbeatSubsystem* Subsystem = GetSubsystem();
+	return Subsystem != nullptr && EditingPlayer != Subsystem->GetOverridePlayer()
+		? FSlateColor(PendingColor) : FSlateColor(FLinearColor::White);
+}
+
+FSlateColor SHapbeatAddressOverridePanel::GetPendingTargetGroupColor() const
+{
+	const UHapbeatSubsystem* Subsystem = GetSubsystem();
+	return Subsystem != nullptr && EditingGroup != Subsystem->GetOverrideGroup()
+		? FSlateColor(PendingColor) : FSlateColor(FLinearColor::White);
 }
 
 FReply SHapbeatAddressOverridePanel::OnApplyClicked()

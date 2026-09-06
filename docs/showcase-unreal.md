@@ -149,12 +149,17 @@ Plugins
         └ HapbeatShowcaseZ3FishingActor.cpp
 ```
 
-| 確認したい配線 | `.h` の識別子 | `.cpp` の関数 |
-| --- | --- | --- |
-| Event Map と 3 entry の選択・解決 | `EventMapOverride`、`Hook*Event`、`ResolvedHook*EntryName` | `AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics` |
-| sequence への map / entry の代入 | `SharkSlot`、`AHapbeatShowcaseZ3SharkActor::HookSequence` | `BuildEventMapAndHaptics` |
-| 魚の速度から loop Gain を更新 | `HookVelocityBinding` | `AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor` |
-| 左クリックで sequence を開始・停止 | — | `HandleFirePressed`、`HandleFireReleased`、`SetHooked` |
+- **Event Map と3 entryの選択・解決**
+  - Header: `EventMapOverride`、`Hook*Event`、`ResolvedHook*EntryName`
+  - Implementation: `AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics`
+- **sequence への map / entry の代入**
+  - Header: `SharkSlot`、`AHapbeatShowcaseZ3SharkActor::HookSequence`
+  - Implementation: `BuildEventMapAndHaptics`
+- **魚の速度から loop Gain を更新**
+  - Header: `HookVelocityBinding`
+  - Implementation: `AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor`
+- **左クリックで sequence を開始・停止**
+  - Implementation: `HandleFirePressed`、`HandleFireReleased`、`SetHooked`
 
 `BuildEventMapAndHaptics` の `WiredShark->HookSequence` への `EventMap`、`EntryId`、`StartEntryId`、`StopEntryId` の代入が、Details の entry と sequence をつなぐ箇所です。`SetHooked` が `Fire()` と `Stop()` を呼びます。
 

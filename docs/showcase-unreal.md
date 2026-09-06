@@ -62,12 +62,22 @@ Plugins
 
 最初に `Public/HapbeatShowcaseZ1BowlingActor.h` を開き、次に同名の `Private/HapbeatShowcaseZ1BowlingActor.cpp` を開きます。
 
-| Editor の項目 | ヘッダの宣言 | `.cpp` で確認する関数 | 内容 |
-| --- | --- | --- | --- |
-| **Event Map** | `EventMapOverride` | `AHapbeatShowcaseZ1BowlingActor::BuildEventMap` | 使用する Event Map を `EventMap` に解決します。 |
-| **Pin Hit Event** | `PinHitEvent` | `AHapbeatShowcaseZ1BowlingActor::BuildEventMap` | 選んだ entry の ID を `PinHitEntryId` に解決します。 |
-| pin の配置 | `PinSlots` | `AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor` | 6 個の `UChildActorComponent` を作成します。 |
-| pin への触覚配線 | `AHapbeatShowcaseZ1PinActor::HitTrigger` | `AHapbeatShowcaseZ1BowlingActor::SetUpPins` | 各 pin の `HitTrigger->EventMap` と `HitTrigger->EntryId` に、解決済みの map と entry を代入します。 |
+- **Event Map**
+  - **Header:** `EventMapOverride`
+  - **Implementation:** `AHapbeatShowcaseZ1BowlingActor::BuildEventMap`
+  - 使用する Event Map を `EventMap` に解決します。
+- **Pin Hit Event**
+  - **Header:** `PinHitEvent`
+  - **Implementation:** `AHapbeatShowcaseZ1BowlingActor::BuildEventMap`
+  - 選んだ entry の ID を `PinHitEntryId` に解決します。
+- **pin の配置**
+  - **Header:** `PinSlots`
+  - **Implementation:** `AHapbeatShowcaseZ1BowlingActor::AHapbeatShowcaseZ1BowlingActor`
+  - 6 個の `UChildActorComponent` を作成します。
+- **pin への触覚配線**
+  - **Header:** `AHapbeatShowcaseZ1PinActor::HitTrigger`
+  - **Implementation:** `AHapbeatShowcaseZ1BowlingActor::SetUpPins`
+  - 各 pin の `HitTrigger->EventMap` と `HitTrigger->EntryId` に、解決済みの map と entry を代入します。
 
 `SetUpPins` 内の次の 2 行が、Details の選択を実際の pin 衝突 trigger へ接続する箇所です。
 
@@ -150,16 +160,16 @@ Plugins
 ```
 
 - **Event Map と3 entryの選択・解決**
-  - Header: `EventMapOverride`、`Hook*Event`、`ResolvedHook*EntryName`
-  - Implementation: `AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics`
+  - **Header:** `EventMapOverride`、`Hook*Event`、`ResolvedHook*EntryName`
+  - **Implementation:** `AHapbeatShowcaseZ3FishingActor::BuildEventMapAndHaptics`
 - **sequence への map / entry の代入**
-  - Header: `SharkSlot`、`AHapbeatShowcaseZ3SharkActor::HookSequence`
-  - Implementation: `BuildEventMapAndHaptics`
+  - **Header:** `SharkSlot`、`AHapbeatShowcaseZ3SharkActor::HookSequence`
+  - **Implementation:** `BuildEventMapAndHaptics`
 - **魚の速度から loop Gain を更新**
-  - Header: `HookVelocityBinding`
-  - Implementation: `AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor`
+  - **Header:** `HookVelocityBinding`
+  - **Implementation:** `AHapbeatShowcaseZ3SharkActor::AHapbeatShowcaseZ3SharkActor`
 - **左クリックで sequence を開始・停止**
-  - Implementation: `HandleFirePressed`、`HandleFireReleased`、`SetHooked`
+  - **Implementation:** `HandleFirePressed`、`HandleFireReleased`、`SetHooked`
 
 `BuildEventMapAndHaptics` の `WiredShark->HookSequence` への `EventMap`、`EntryId`、`StartEntryId`、`StopEntryId` の代入が、Details の entry と sequence をつなぐ箇所です。`SetHooked` が `Fire()` と `Stop()` を呼びます。
 
@@ -227,12 +237,18 @@ Plugins
         └ HapbeatShowcaseZ5ChargeShotActor.cpp
 ```
 
-| 確認したい配線 | `.h` の識別子 | `.cpp` の関数 |
-| --- | --- | --- |
-| Event Map と 6 entry の解決 | `EventMapOverride`、`Resolved*EntryName` | `AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap` |
-| charge 開始・threshold・release | `ChargeLoopEntryId`、`ChargeThresholdEntryId` | `HandleChargeBegin`、`Tick`、`HandleChargeRelease` |
-| light / heavy shot の直接再生 | `ShotLightEntryId`、`ShotHeavyEntryId` | `FireShotAfterDelay`、`FireOneShotEntry` |
-| target hit の collision trigger | `TargetSlot`、`LightHitTrigger`、`HeavyHitTrigger` | `SetUpTarget` |
+- **Event Map と6 entryの解決**
+  - **Header:** `EventMapOverride`、`Resolved*EntryName`
+  - **Implementation:** `AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap`
+- **charge 開始・threshold・release**
+  - **Header:** `ChargeLoopEntryId`、`ChargeThresholdEntryId`
+  - **Implementation:** `HandleChargeBegin`、`Tick`、`HandleChargeRelease`
+- **light / heavy shot の直接再生**
+  - **Header:** `ShotLightEntryId`、`ShotHeavyEntryId`
+  - **Implementation:** `FireShotAfterDelay`、`FireOneShotEntry`
+- **target hit の collision trigger**
+  - **Header:** `TargetSlot`、`LightHitTrigger`、`HeavyHitTrigger`
+  - **Implementation:** `SetUpTarget`
 
 `SetUpTarget` では `Target->LightHitTrigger` と `Target->HeavyHitTrigger` に Event Map と entry を代入します。`FireOneShotEntry` は charge / shot の entry を SDK の再生 API で直接発火する箇所です。
 

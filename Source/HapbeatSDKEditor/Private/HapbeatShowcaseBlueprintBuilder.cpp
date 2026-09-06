@@ -793,6 +793,9 @@ void ConfigureStreamBindingTargets(UBlueprint* Blueprint)
 			// button would only hide its address controls while leaving the console
 			// running, so the Showcase deliberately omits it.
 			AddressPanel->bShowCloseButton = false;
+			// The target preview is deliberately written as two full target paths.
+			// Reserve their width instead of truncating the player/group suffixes.
+			AddressPanel->ViewportSize = FVector2D(800.0f, 108.0f);
 		}
 	}
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
@@ -911,7 +914,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	AddressPanel->ViewportHAlign = HAlign_Center;
 	AddressPanel->ViewportVAlign = VAlign_Top;
 	AddressPanel->ViewportPadding = FMargin(8.0f);
-	AddressPanel->ViewportSize = FVector2D(404.0f, 108.0f);
+	AddressPanel->ViewportSize = FVector2D(800.0f, 108.0f);
 
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 	FKismetEditorUtilities::CompileBlueprint(Blueprint);

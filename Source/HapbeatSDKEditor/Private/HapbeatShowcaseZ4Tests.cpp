@@ -77,6 +77,8 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 	{
 		TestFalse(TEXT("Z4 owns its persistent address UI, so it has no Close button"),
 			AddressPanels[0]->bShowCloseButton);
+		TestEqual(TEXT("Z4 reserves width for current and post-Apply target paths"),
+			AddressPanels[0]->ViewportSize, FVector2D(800.0f, 108.0f));
 	}
     TArray<UHapbeatTriggerComponent*> Triggers;
     Actor->GetComponents(Triggers);

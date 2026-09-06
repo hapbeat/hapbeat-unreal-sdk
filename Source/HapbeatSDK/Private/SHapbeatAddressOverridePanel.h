@@ -11,7 +11,7 @@ class UHapbeatSubsystem;
  * for why it exists; this half only draws and edits.
  *
  * Edits are staged rather than applied live: the wearer steps Player / Group to
- * the values they want, sees where those would resolve to, and only then
+ * the values they want, compares the current and post-Apply targets, and only then
  * commits. Applying on every step would retarget the device mid-adjustment and
  * fire haptics at whoever happened to be on the number passed through.
  */
@@ -49,7 +49,10 @@ private:
 	// ---- display ----
 	FText GetPlayerLabel() const;
 	FText GetGroupLabel() const;
-	FText GetResolvedTargetLabel() const;
+	/** Target used by commands right now, with the applied override. */
+	FText GetCurrentTargetLabel() const;
+	/** Target that will be used after pressing Apply, with the staged values. */
+	FText GetTargetAfterApplyLabel() const;
 	/** Persisted values for the next run, displayed separately to emphasize the address itself. */
 	FText GetSavedPlayerLabel() const;
 	FText GetSavedGroupLabel() const;

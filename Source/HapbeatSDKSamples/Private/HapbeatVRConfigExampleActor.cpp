@@ -31,7 +31,7 @@ AHapbeatVRConfigExampleActor::AHapbeatVRConfigExampleActor()
 	PanelSurface->SetWidgetSpace(EWidgetSpace::World);
 	// Draw size in Slate units; the panel's own layout decides how much of this
 	// it fills. Roughly 4:3 so the stepper rows are not stretched.
-	PanelSurface->SetDrawSize(FVector2D(560.0f, 460.0f));
+	PanelSurface->SetDrawSize(FVector2D(840.0f, 460.0f));
 	// Two-sided so walking around the surface -- or a follow frame that has not
 	// caught up yet -- never leaves the wearer looking at an invisible panel.
 	PanelSurface->SetTwoSided(true);

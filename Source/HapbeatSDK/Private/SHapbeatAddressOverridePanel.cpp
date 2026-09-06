@@ -20,10 +20,7 @@ namespace
 	const FSlateFontInfo BodyFont = FCoreStyle::GetDefaultFontStyle("Regular", 16);
 	const FSlateFontInfo AddressValueFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
 
-	/**
-	 * The authored target shown above the resolved target. It intentionally uses
-	 * player/group 1 so staged overrides visibly replace both address slots.
-	 */
+	/** A concrete target used only to make the effect of an override visible. */
 	const TCHAR* PreviewTarget = TEXT("player_1/pos_chest/group_1");
 
 	/** Event the Test button fires when the component names none. */
@@ -85,7 +82,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 2.0f)
 				[
 					SNew(STextBlock)
-					.Text(FText::Format(LOCTEXT("AuthoredTarget", "Authored target: {0}"), FText::FromString(PreviewTarget)))
+					.Text(this, &SHapbeatAddressOverridePanel::GetCurrentTargetLabel)
 					.Font(BodyFont)
 					.ColorAndOpacity(FLinearColor::White)
 				]
@@ -93,7 +90,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
 				[
 					SNew(STextBlock)
-					.Text(this, &SHapbeatAddressOverridePanel::GetResolvedTargetLabel)
+					.Text(this, &SHapbeatAddressOverridePanel::GetTargetAfterApplyLabel)
 					.Font(BodyFont)
 					.ColorAndOpacity(this, &SHapbeatAddressOverridePanel::GetStatusColor)
 				]
@@ -274,10 +271,19 @@ FText SHapbeatAddressOverridePanel::GetGroupLabel() const
 	return EditingGroup < 1 ? LOCTEXT("Off", "off") : FText::AsNumber(EditingGroup);
 }
 
-FText SHapbeatAddressOverridePanel::GetResolvedTargetLabel() const
+FText SHapbeatAddressOverridePanel::GetCurrentTargetLabel() const
 {
-	const FString Resolved = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, EditingPlayer, EditingGroup);
-	return FText::Format(LOCTEXT("ResolvedTarget", "Resolved target: {0}"), FText::FromString(Resolved));
+	const UHapbeatSubsystem* Subsystem = GetSubsystem();
+	const int32 AppliedPlayer = Subsystem != nullptr ? Subsystem->GetOverridePlayer() : -1;
+	const int32 AppliedGroup = Subsystem != nullptr ? Subsystem->GetOverrideGroup() : -1;
+	const FString CurrentTarget = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, AppliedPlayer, AppliedGroup);
+	return FText::Format(LOCTEXT("CurrentTarget", "Current target  ->  {0}"), FText::FromString(CurrentTarget));
+}
+
+FText SHapbeatAddressOverridePanel::GetTargetAfterApplyLabel() const
+{
+	const FString PendingTarget = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, EditingPlayer, EditingGroup);
+	return FText::Format(LOCTEXT("TargetAfterApply", "After Apply     ->  {0}"), FText::FromString(PendingTarget));
 }
 
 FText SHapbeatAddressOverridePanel::GetSavedPlayerLabel() const

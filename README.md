@@ -358,6 +358,13 @@ different authoring pattern:
 | Z4 Stream Console | `AHapbeatShowcaseZ4StreamConsoleActor` | T / U,J / N,M | live StreamClip gain+pan modulation via `External`-source `UHapbeatParameterBinding` |
 | Z5 Target Range | `AHapbeatShowcaseZ5ChargeShotActor` | hold V | entirely imperative charge-loop + light/heavy shot — the counterpart to Z1's pure-component style |
 
+**VRConfigExample** — open
+`Content/HapbeatSamples/VRConfigExample/Maps/VRConfigExample` in VR Preview
+to configure a per-HMD address override. `AHapbeatVRConfigExampleActor` places
+the shared address panel in world space, follows the HMD, and uses a standard
+OpenXR right-controller `UWidgetInteractionComponent` ray for Player / Group,
+Apply, Test, and Clear. No vendor XR SDK or Blueprint asset is required.
+
 Z4's tick one-shot and its looping StreamClip share the single v1 stream
 session (REPLACE semantics) — firing the tick while the loop plays stops the
 loop; press T again to restart it.

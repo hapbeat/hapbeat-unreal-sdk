@@ -19,6 +19,7 @@ public class HapbeatSDKSamples : ModuleRules
 			"SlateCore", // real columns -- and as code, so the samples ship with no UI .uasset
 
 			"UMG",       // UWidgetComponent: the world-space surface the VR sample puts the address panel on
+			"HeadMountedDisplay", // UMotionControllerComponent: the VR sample's OpenXR controller ray
 			"HapbeatSDK", // the runtime module the samples drive
 		});
 	}

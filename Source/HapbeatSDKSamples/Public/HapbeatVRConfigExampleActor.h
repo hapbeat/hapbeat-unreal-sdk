@@ -7,6 +7,8 @@
 #include "HapbeatVRConfigExampleActor.generated.h"
 
 class UHapbeatAddressOverridePanelComponent;
+class UMotionControllerComponent;
+class UWidgetInteractionComponent;
 class UWidgetComponent;
 
 /**
@@ -25,15 +27,16 @@ class UWidgetComponent;
  * around -- it tried an XR composition layer first and ended up on a lazy-follow
  * head-lock -- so this starts there.
  *
- * Usage: drop this actor into a level and hit Play. Press ToggleKey (P by
- * default) to hide/show the panel. On desktop, set bWorldSpacePanel = false to
- * get the ordinary viewport overlay instead. An on-screen HUD shows device
- * liveness and the override currently in effect.
+ * Usage: open the shipped VRConfigExample map in VR Preview. The panel follows
+ * the HMD, and a standard OpenXR right-hand controller ray can press its
+ * buttons: pull the trigger to click. The right stick click recentres the
+ * panel. P / R remain desktop fallbacks for showing and recentring it.
  *
- * Out of scope for this sample: pointing at the panel with a motion controller
- * (UWidgetInteractionComponent). The panel is navigable with Slate's own
- * keyboard / gamepad focus navigation, which is what the runtime component
- * already relies on.
+ * The sample deliberately uses UMotionControllerComponent and
+ * UWidgetInteractionComponent rather than a vendor SDK. OpenXR supplies the
+ * controller pose, while WidgetInteraction sends a normal Slate mouse click to
+ * the same address panel used by desktop and Showcase. There is no duplicate
+ * VR-only address-setting implementation to drift out of sync.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatVRConfigExampleActor : public AActor
@@ -68,9 +71,21 @@ public:
 		meta = (Tooltip = "Interpolation speed for the follow. Higher = tighter to the head; 0 or less = snap instantly."))
 	float FollowSpeed = 4.0f;
 
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
+		meta = (Tooltip = "Show the right-hand controller interaction ray. Leave on in the sample so the user can see what will be clicked."))
+	bool bShowInteractionRay = true;
+
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
+		meta = (Tooltip = "Maximum distance in cm at which the right-hand ray can press the panel."))
+	float InteractionDistance = 300.0f;
+
 	UPROPERTY(EditAnywhere, Category = "Hapbeat",
 		meta = (Tooltip = "Key that hides / shows the panel."))
 	FKey ToggleKey = EKeys::P;
+
+	UPROPERTY(EditAnywhere, Category = "Hapbeat",
+		meta = (Tooltip = "Desktop fallback key that snaps the panel back in front of the camera."))
+	FKey RecenterKey = EKeys::R;
 
 protected:
 	virtual void BeginPlay() override;
@@ -81,9 +96,17 @@ private:
 	void BindInput();
 
 	void HandleToggleKey();
+	void HandleRecenterKey();
+	void HandlePointerPressed();
+	void HandlePointerReleased();
 
 	/** Move/aim PanelSurface to sit in front of the camera this frame. No-op on frames with no camera. */
 	void UpdateFollow(float DeltaSeconds);
+	/** Put PanelSurface at the current camera-front pose immediately, without follow smoothing. */
+	void RecenterPanel();
+
+	/** Attach the controller ray to the local pawn once it exists; safe to retry while PIE initialises. */
+	void AttachInteractionToPawn();
 
 	/** Fixed on-screen-message keys, offset into the 600s so they don't collide with the other samples' HUD lines. */
 	static constexpr int32 KeyGuideHudLineKey = 600;
@@ -99,6 +122,16 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UHapbeatAddressOverridePanelComponent> PanelComponent;
+
+	/** Right-hand OpenXR grip pose, attached to the local pawn at runtime. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|VR Input")
+	TObjectPtr<UMotionControllerComponent> RightHandController;
+
+	/** Standard UE laser-pointer interaction for PanelSurface's Slate buttons. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|VR Input")
+	TObjectPtr<UWidgetInteractionComponent> WidgetInteraction;
+
+	bool bInteractionAttachedToPawn = false;
 
 	/** Counts down to 0 to throttle the HUD refresh; fires on the first Tick (starts at 0). */
 	float HudRefreshTimer = 0.0f;

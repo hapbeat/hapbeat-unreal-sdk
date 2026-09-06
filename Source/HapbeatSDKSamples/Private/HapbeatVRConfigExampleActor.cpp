@@ -9,9 +9,11 @@
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/WidgetComponent.h"
+#include "Components/WidgetInteractionComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "MotionControllerComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatVRConfigExample, Log, All);
 
@@ -34,11 +36,29 @@ AHapbeatVRConfigExampleActor::AHapbeatVRConfigExampleActor()
 	// caught up yet -- never leaves the wearer looking at an invisible panel.
 	PanelSurface->SetTwoSided(true);
 	// Purely a display; it must not block traces, projectiles, or the pawn.
-	PanelSurface->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	// WidgetInteraction traces on Visibility. QueryOnly keeps it out of all
+	// physics/projectile collision while allowing that one UI ray through.
+	PanelSurface->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	PanelSurface->SetCollisionResponseToAllChannels(ECR_Ignore);
+	PanelSurface->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	// The follow rewrites its transform every frame, so it cannot be Static.
 	PanelSurface->SetMobility(EComponentMobility::Movable);
 
 	PanelComponent = CreateDefaultSubobject<UHapbeatAddressOverridePanelComponent>(TEXT("PanelComponent"));
+	// P toggles the whole surface. A Close button would tear its Slate widget
+	// down, leaving a visible but empty surface on the next toggle.
+	PanelComponent->bShowCloseButton = false;
+
+	RightHandController = CreateDefaultSubobject<UMotionControllerComponent>(TEXT("RightHandController"));
+	RightHandController->SetupAttachment(Root);
+	RightHandController->SetTrackingMotionSource(TEXT("Right"));
+
+	WidgetInteraction = CreateDefaultSubobject<UWidgetInteractionComponent>(TEXT("WidgetInteraction"));
+	WidgetInteraction->SetupAttachment(RightHandController);
+	WidgetInteraction->InteractionSource = EWidgetInteractionSource::World;
+	WidgetInteraction->TraceChannel = ECC_Visibility;
+	WidgetInteraction->VirtualUserIndex = 1;
+	WidgetInteraction->PointerIndex = 1;
 }
 
 void AHapbeatVRConfigExampleActor::BeginPlay()
@@ -58,6 +78,7 @@ void AHapbeatVRConfigExampleActor::BeginPlay()
 	}
 
 	BindInput();
+	AttachInteractionToPawn();
 }
 
 void AHapbeatVRConfigExampleActor::BindInput()
@@ -79,6 +100,33 @@ void AHapbeatVRConfigExampleActor::BindInput()
 	}
 
 	InputComponent->BindKey(ToggleKey, IE_Pressed, this, &AHapbeatVRConfigExampleActor::HandleToggleKey);
+	InputComponent->BindKey(RecenterKey, IE_Pressed, this, &AHapbeatVRConfigExampleActor::HandleRecenterKey);
+
+	// OpenXR's motion source supplies the pose; these standard UE input keys
+	// cover Quest/Touch, Vive, Windows MR, Valve Index, and gamepad fallback.
+	// Every physical press becomes a left mouse click at the ray hit point.
+	const TArray<FKey> PressKeys = {
+		EKeys::OculusTouch_Right_Trigger_Click,
+		EKeys::Vive_Right_Trigger_Click,
+		EKeys::MixedReality_Right_Trigger_Click,
+		EKeys::ValveIndex_Right_Trigger_Click,
+		EKeys::Gamepad_RightTrigger,
+	};
+	for (const FKey& Key : PressKeys)
+	{
+		InputComponent->BindKey(Key, IE_Pressed, this, &AHapbeatVRConfigExampleActor::HandlePointerPressed);
+		InputComponent->BindKey(Key, IE_Released, this, &AHapbeatVRConfigExampleActor::HandlePointerReleased);
+	}
+	const TArray<FKey> RecenterKeys = {
+		EKeys::OculusTouch_Right_Thumbstick_Click,
+		EKeys::Vive_Right_Trackpad_Click,
+		EKeys::MixedReality_Right_Thumbstick_Click,
+		EKeys::ValveIndex_Right_Thumbstick_Click,
+	};
+	for (const FKey& Key : RecenterKeys)
+	{
+		InputComponent->BindKey(Key, IE_Pressed, this, &AHapbeatVRConfigExampleActor::HandleRecenterKey);
+	}
 }
 
 void AHapbeatVRConfigExampleActor::HandleToggleKey()
@@ -102,6 +150,27 @@ void AHapbeatVRConfigExampleActor::HandleToggleKey()
 	}
 }
 
+void AHapbeatVRConfigExampleActor::HandleRecenterKey()
+{
+	RecenterPanel();
+}
+
+void AHapbeatVRConfigExampleActor::HandlePointerPressed()
+{
+	if (WidgetInteraction != nullptr)
+	{
+		WidgetInteraction->PressPointerKey(EKeys::LeftMouseButton);
+	}
+}
+
+void AHapbeatVRConfigExampleActor::HandlePointerReleased()
+{
+	if (WidgetInteraction != nullptr)
+	{
+		WidgetInteraction->ReleasePointerKey(EKeys::LeftMouseButton);
+	}
+}
+
 void AHapbeatVRConfigExampleActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -109,6 +178,15 @@ void AHapbeatVRConfigExampleActor::Tick(float DeltaSeconds)
 	if (bWorldSpacePanel && bFollowCamera)
 	{
 		UpdateFollow(DeltaSeconds);
+	}
+	if (!bInteractionAttachedToPawn)
+	{
+		AttachInteractionToPawn();
+	}
+	if (WidgetInteraction != nullptr)
+	{
+		WidgetInteraction->InteractionDistance = InteractionDistance;
+		WidgetInteraction->bShowDebug = bShowInteractionRay;
 	}
 
 	HudRefreshTimer -= DeltaSeconds;
@@ -149,6 +227,25 @@ void AHapbeatVRConfigExampleActor::Tick(float DeltaSeconds)
 			*ToggleKey.GetDisplayName().ToString(),
 			bWorldSpacePanel ? TEXT("world-space") : TEXT("viewport overlay")),
 		FColor::Cyan, HudDuration);
+}
+
+void AHapbeatVRConfigExampleActor::AttachInteractionToPawn()
+{
+	if (bInteractionAttachedToPawn || RightHandController == nullptr || GetWorld() == nullptr)
+	{
+		return;
+	}
+
+	APlayerController* PC = GetWorld()->GetFirstPlayerController();
+	APawn* Pawn = PC != nullptr ? PC->GetPawn() : nullptr;
+	USceneComponent* PawnRoot = Pawn != nullptr ? Pawn->GetRootComponent() : nullptr;
+	if (PawnRoot == nullptr)
+	{
+		return;
+	}
+
+	RightHandController->AttachToComponent(PawnRoot, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+	bInteractionAttachedToPawn = true;
 }
 
 void AHapbeatVRConfigExampleActor::UpdateFollow(float DeltaSeconds)
@@ -196,4 +293,23 @@ void AHapbeatVRConfigExampleActor::UpdateFollow(float DeltaSeconds)
 		: FMath::RInterpTo(CurrentRotation, TargetRotation, DeltaSeconds, FollowSpeed);
 
 	PanelSurface->SetWorldLocationAndRotation(NewLocation, NewRotation);
+}
+
+void AHapbeatVRConfigExampleActor::RecenterPanel()
+{
+	if (PanelSurface == nullptr)
+	{
+		return;
+	}
+
+	const APlayerController* PC = GetWorld() != nullptr ? GetWorld()->GetFirstPlayerController() : nullptr;
+	const APlayerCameraManager* Camera = PC != nullptr ? PC->PlayerCameraManager : nullptr;
+	if (Camera == nullptr)
+	{
+		return;
+	}
+
+	const FVector CameraLocation = Camera->GetCameraLocation();
+	const FVector TargetLocation = CameraLocation + Camera->GetCameraRotation().Vector() * FollowDistance;
+	PanelSurface->SetWorldLocationAndRotation(TargetLocation, (CameraLocation - TargetLocation).Rotation());
 }

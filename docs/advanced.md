@@ -27,6 +27,20 @@ Hb->SetAddressOverride(/*Player=*/1, /*Group=*/-1, /*bPersist=*/true);
 `Target` は `player_1/pos_chest` のようなパス文字列です。空文字なら全デバイスに送ります。
 `*` はワイルドカードとして使えます（例: `*/pos_neck` = 全プレイヤーの首）。
 
+### VRConfigExample
+
+VR 実機で設定とテスト再生を確認するには、
+`Plugins/HapbeatSDK/Content/HapbeatSamples/VRConfigExample/Maps/VRConfigExample`
+を開いて VR Preview を開始します。パネルは HMD 正面に追従し、右手コントローラの
+レイを向けてトリガーを引くと、Player / Group、Apply、Test、Clear を操作できます。
+右スティック押し込みで正面に戻せます。`P` はパネル表示切替、`R` はデスクトップ確認用の
+recenter です。
+
+このサンプルは OpenXR の標準 Motion Source `Right` と Unreal の
+`WidgetInteractionComponent` を使うため、特定ベンダーの VR SDK には依存しません。
+`Test` は標準イベント `sample-kit.sine_100hz` を、**適用済み** Address Override に対して
+再生します。したがって Kit を配備した Hapbeat を用意して、選択先が正しいことを確認できます。
+
 ## Showcase サンプル
 
 Z1〜Z5 の Actor / Component と Event Map の触覚配線、Details での調整は

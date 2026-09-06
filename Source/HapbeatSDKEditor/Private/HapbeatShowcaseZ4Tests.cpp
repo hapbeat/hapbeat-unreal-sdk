@@ -77,8 +77,8 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 	{
 		TestFalse(TEXT("Z4 owns its persistent address UI, so it has no Close button"),
 			AddressPanels[0]->bShowCloseButton);
-		TestEqual(TEXT("Z4 reserves width for current and post-Apply target paths"),
-			AddressPanels[0]->ViewportSize, FVector2D(800.0f, 108.0f));
+		TestEqual(TEXT("Z4 reserves width for aligned current and pending target paths"),
+			AddressPanels[0]->ViewportSize, FVector2D(440.0f, 108.0f));
 	}
     TArray<UHapbeatTriggerComponent*> Triggers;
     Actor->GetComponents(Triggers);
@@ -136,13 +136,13 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
                 Panel->GetBorderBackgroundColor().GetSpecifiedColor(), FLinearColor(0, 0, 0, 0.75f));
         }
         Widget->HandleGainValueChanged(0.2f);
-        Widget->HandlePanValueChanged(-0.75f);
+		Widget->HandlePanValueChanged(-0.75f);
         TestEqual(TEXT("Widget gain input reached binding"), Gain->GetCurrentInput(), 0.2f);
-        TestEqual(TEXT("Widget pan input reached binding"), Pan->GetCurrentInput(), -0.75f);
+		TestEqual(TEXT("Widget pan input reached binding"), Pan->GetCurrentInput(), -0.75f);
         TestEqual(TEXT("Live playback gain is baseline x slider"), Playback->GetGain(), 0.1f);
-        TestEqual(TEXT("Live playback pan follows slider"), Playback->GetPan(), -0.75f);
+		TestEqual(TEXT("Live playback pan follows slider"), Playback->GetPan(), -0.75f);
         TestEqual(TEXT("Send-thread gain mirror follows slider"), Playback->GetMirror()->Gain.load(), 0.1f);
-        TestEqual(TEXT("Send-thread pan mirror follows slider"), Playback->GetMirror()->Pan.load(), -0.75f);
+		TestEqual(TEXT("Send-thread pan mirror follows slider"), Playback->GetMirror()->Pan.load(), -0.75f);
         Widget->HandleGainValueChanged(0.0f);
         Widget->HandlePanValueChanged(1.0f);
         TestEqual(TEXT("Gain zero mutes the loop"), Playback->GetGain(), 0.0f);

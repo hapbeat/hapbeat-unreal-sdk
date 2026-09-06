@@ -40,7 +40,7 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 				[
 					SNew(STextBlock).Text_Lambda([this]()
 					{
-						return FText::FromString(FString::Printf(TEXT("Gain  %.2f"), GainValue));
+						return FText::FromString(FString::Printf(TEXT("Gain  %.1f"), GainValue));
 					})
 					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 18))
 					.ColorAndOpacity(FLinearColor::White)
@@ -51,6 +51,7 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 					[
 						SNew(SSlider)
 						.Value_Lambda([this]() { return GainValue; })
+						.StepSize(0.1f)
 						.OnValueChanged_Lambda([this](float Value) { OnGainChanged(Value); })
 						.OnMouseCaptureEnd_Lambda([this]() { ReturnFocusToGameViewport(); })
 					]
@@ -59,7 +60,7 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 				[
 					SNew(STextBlock).Text_Lambda([this]()
 					{
-						return FText::FromString(FString::Printf(TEXT("Pan  %+.2f"), PanValue));
+						return FText::FromString(FString::Printf(TEXT("Pan  %+.1f"), PanValue));
 					})
 					.Font(FCoreStyle::GetDefaultFontStyle("Regular", 18))
 					.ColorAndOpacity(FLinearColor::White)
@@ -70,6 +71,7 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 					[
 						SNew(SSlider)
 						.Value_Lambda([this]() { return (PanValue + 1.0f) * 0.5f; })
+						.StepSize(0.05f)
 						.OnValueChanged_Lambda([this](float Value) { OnPanChanged(Value); })
 						.OnMouseCaptureEnd_Lambda([this]() { ReturnFocusToGameViewport(); })
 					]
@@ -81,7 +83,7 @@ TSharedRef<SWidget> UHapbeatShowcaseZ4ConsoleWidget::RebuildWidget()
 void UHapbeatShowcaseZ4ConsoleWidget::OnGainChanged(float Value)
 {
 	const float OldValue = GainValue;
-	GainValue = FMath::Clamp(Value, 0.0f, 1.0f);
+	GainValue = FMath::Clamp(FMath::RoundToFloat(Value * 10.0f) / 10.0f, 0.0f, 1.0f);
 	HandleGainValueChanged(GainValue);
 	EmitDetents(OldValue, GainValue);
 }
@@ -89,7 +91,8 @@ void UHapbeatShowcaseZ4ConsoleWidget::OnGainChanged(float Value)
 void UHapbeatShowcaseZ4ConsoleWidget::OnPanChanged(float NormalizedValue)
 {
 	const float OldValue = PanValue;
-	PanValue = FMath::Clamp(NormalizedValue * 2.0f - 1.0f, -1.0f, 1.0f);
+	const float RawPan = NormalizedValue * 2.0f - 1.0f;
+	PanValue = FMath::Clamp(FMath::RoundToFloat(RawPan * 10.0f) / 10.0f, -1.0f, 1.0f);
 	HandlePanValueChanged(PanValue);
 	EmitDetents(OldValue, PanValue);
 }

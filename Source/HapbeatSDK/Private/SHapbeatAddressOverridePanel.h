@@ -69,6 +69,12 @@ private:
 		TAttribute<bool> IsEditable,
 		TFunction<void(int32)> OnStep);
 
+	/** Fixed label/arrow columns make the current and pending target paths directly comparable. */
+	TSharedRef<SWidget> MakeTargetRow(
+		const FText& Label,
+		TAttribute<FText> TargetText,
+		TAttribute<FSlateColor> TargetColor);
+
 	TWeakObjectPtr<UHapbeatSubsystem> WeakSubsystem;
 	bool bPersistOnApply = true;
 	bool bShowCloseButton = true;

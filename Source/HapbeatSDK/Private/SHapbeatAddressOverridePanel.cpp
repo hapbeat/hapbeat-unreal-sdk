@@ -81,18 +81,18 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 2.0f)
 				[
-					SNew(STextBlock)
-					.Text(this, &SHapbeatAddressOverridePanel::GetCurrentTargetLabel)
-					.Font(BodyFont)
-					.ColorAndOpacity(FLinearColor::White)
+					MakeTargetRow(
+						LOCTEXT("CurrentTarget", "Now"),
+						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetCurrentTargetLabel),
+						FSlateColor(FLinearColor::White))
 				]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 6.0f)
 				[
-					SNew(STextBlock)
-					.Text(this, &SHapbeatAddressOverridePanel::GetTargetAfterApplyLabel)
-					.Font(BodyFont)
-					.ColorAndOpacity(this, &SHapbeatAddressOverridePanel::GetStatusColor)
+					MakeTargetRow(
+						LOCTEXT("TargetAfterApply", "Next"),
+						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetTargetAfterApplyLabel),
+						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetStatusColor))
 				]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 0.0f, 0.0f, 4.0f)
@@ -204,6 +204,32 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 			];
 }
 
+TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeTargetRow(
+	const FText& Label,
+	TAttribute<FText> TargetText,
+	TAttribute<FSlateColor> TargetColor)
+{
+	return SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(SBox).WidthOverride(46.0f)
+			[
+				SNew(STextBlock).Text(Label).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
+			]
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(SBox).WidthOverride(30.0f)
+			[
+				SNew(STextBlock).Text(LOCTEXT("TargetArrow", "->")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
+			]
+		]
+		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		[
+			SNew(STextBlock).Text(TargetText).Font(BodyFont).ColorAndOpacity(TargetColor)
+		];
+}
+
 UHapbeatSubsystem* SHapbeatAddressOverridePanel::GetSubsystem() const
 {
 	return WeakSubsystem.Get();
@@ -277,13 +303,13 @@ FText SHapbeatAddressOverridePanel::GetCurrentTargetLabel() const
 	const int32 AppliedPlayer = Subsystem != nullptr ? Subsystem->GetOverridePlayer() : -1;
 	const int32 AppliedGroup = Subsystem != nullptr ? Subsystem->GetOverrideGroup() : -1;
 	const FString CurrentTarget = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, AppliedPlayer, AppliedGroup);
-	return FText::Format(LOCTEXT("CurrentTarget", "Current target  ->  {0}"), FText::FromString(CurrentTarget));
+	return FText::FromString(CurrentTarget);
 }
 
 FText SHapbeatAddressOverridePanel::GetTargetAfterApplyLabel() const
 {
 	const FString PendingTarget = UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, EditingPlayer, EditingGroup);
-	return FText::Format(LOCTEXT("TargetAfterApply", "After Apply     ->  {0}"), FText::FromString(PendingTarget));
+	return FText::FromString(PendingTarget);
 }
 
 FText SHapbeatAddressOverridePanel::GetSavedPlayerLabel() const

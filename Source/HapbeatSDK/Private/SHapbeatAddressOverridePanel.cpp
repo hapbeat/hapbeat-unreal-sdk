@@ -3,7 +3,6 @@
 
 #include "HapbeatConfig.h"
 #include "HapbeatSubsystem.h"
-#include "HapbeatTargetLibrary.h"
 
 #include "Styling/CoreStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -20,9 +19,6 @@ namespace
 	const FSlateFontInfo BodyFont = FCoreStyle::GetDefaultFontStyle("Regular", 16);
 	const FSlateFontInfo AddressValueFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
 
-	/** A concrete target used only to make the effect of an override visible. */
-	const TCHAR* PreviewTarget = TEXT("player_1/pos_chest/group_1");
-
 	/** Event the Test button fires when the component names none. */
 	const TCHAR* DefaultTestEventId = TEXT("sample-kit.sine_100hz");
 
@@ -31,24 +27,14 @@ namespace
 
 	FText ResolveTargetPlayerLabel(int32 OverridePlayer, int32 OverrideGroup)
 	{
-		int32 Player = -1;
-		int32 Group = -1;
-		FString Position;
-		UHapbeatTargetLibrary::ParseTarget(
-			UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, OverridePlayer, OverrideGroup),
-			Player, Position, Group);
-		return Player < 1 ? LOCTEXT("TargetPlayerOff", "off") : FText::AsNumber(Player);
+		// An unset override does not inherit an example target.  It leaves the
+		// wire target open, which the UI represents with the protocol wildcard.
+		return OverridePlayer < 1 ? LOCTEXT("TargetPlayerAny", "*") : FText::AsNumber(OverridePlayer);
 	}
 
 	FText ResolveTargetGroupLabel(int32 OverridePlayer, int32 OverrideGroup)
 	{
-		int32 Player = -1;
-		int32 Group = -1;
-		FString Position;
-		UHapbeatTargetLibrary::ParseTarget(
-			UHapbeatTargetLibrary::ResolveTarget(PreviewTarget, OverridePlayer, OverrideGroup),
-			Player, Position, Group);
-		return Group < 1 ? LOCTEXT("TargetGroupOff", "off") : FText::AsNumber(Group);
+		return OverrideGroup < 1 ? LOCTEXT("TargetGroupAny", "*") : FText::AsNumber(OverrideGroup);
 	}
 }
 

@@ -30,6 +30,9 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 		UK2Node_CallFunction* StopNode = nullptr;
 		UK2Node_CallFunction* FireNode = nullptr;
 		UK2Node_IfThenElse* IsStoppedBranch = nullptr;
+		TArray<UK2Node_CallFunction*> StopCandidates;
+		TArray<UK2Node_CallFunction*> FireCandidates;
+		TArray<UK2Node_IfThenElse*> Branches;
 		for (UEdGraph* Graph : ConsoleBlueprint->UbergraphPages)
 		{
 			for (UEdGraphNode* Node : Graph->Nodes)
@@ -38,18 +41,35 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 				{
 					const FName Name = Call->FunctionReference.GetMemberName();
 					IsStoppedNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped) ? Call : IsStoppedNode;
-					StopNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop)
-						&& Call->NodePosX == 550 && Call->NodePosY == -410 ? Call : StopNode;
-					FireNode = Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire)
-						&& Call->NodePosX == 550 && Call->NodePosY == -190 ? Call : FireNode;
+					if (Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop)) { StopCandidates.Add(Call); }
+					if (Name == GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire)) { FireCandidates.Add(Call); }
 				}
 				else if (UK2Node_IfThenElse* Branch = Cast<UK2Node_IfThenElse>(Node))
 				{
-					if (Branch->NodePosX == 80 && Branch->NodePosY == -410)
-					{
-						IsStoppedBranch = Branch;
-					}
+					Branches.Add(Branch);
 				}
+			}
+		}
+		if (IsStoppedNode != nullptr)
+		{
+			for (UK2Node_IfThenElse* Branch : Branches)
+			{
+				if (Branch->GetConditionPin()->LinkedTo.Contains(IsStoppedNode->GetReturnValuePin()))
+				{
+					IsStoppedBranch = Branch;
+					break;
+				}
+			}
+		}
+		if (IsStoppedBranch != nullptr)
+		{
+			for (UK2Node_CallFunction* Candidate : StopCandidates)
+			{
+				if (IsStoppedBranch->GetElsePin()->LinkedTo.Contains(Candidate->GetExecPin())) { StopNode = Candidate; break; }
+			}
+			for (UK2Node_CallFunction* Candidate : FireCandidates)
+			{
+				if (IsStoppedBranch->GetThenPin()->LinkedTo.Contains(Candidate->GetExecPin())) { FireNode = Candidate; break; }
 			}
 		}
 		if (TestNotNull(TEXT("Z4 toggle uses IsStopped, not IsActive"), IsStoppedNode)
@@ -97,7 +117,7 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 	{
 		if (Trigger->GetName() == TEXT("TickTrigger")) { GainTick = Trigger; }
 		TestEqual(*FString::Printf(TEXT("%s uses the Showcase detent threshold"), *Trigger->GetName()),
-			Trigger->TickThreshold, 0.1f);
+			Trigger->TickThreshold, 0.01f);
 	}
 	TestNotNull(TEXT("Runtime TickTrigger (Gain)"), GainTick);
     TArray<UHapbeatParameterBinding*> Bindings;

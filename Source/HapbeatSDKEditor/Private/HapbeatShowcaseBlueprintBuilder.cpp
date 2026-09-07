@@ -456,9 +456,36 @@ USCS_Node* AddSceneRoot(UBlueprint* Blueprint)
 			return Root;
 		}
 	}
+	// A Blueprint saved with an empty component tree is reopened by UE with one
+	// DefaultSceneRoot. Reuse it so the next generation pass has the canonical
+	// five nodes instead of appending a sixth root.
+	if (SCS->GetRootNodes().Num() == 1 && SCS->GetRootNodes()[0] != nullptr)
+	{
+		USCS_Node* DefaultRoot = SCS->GetRootNodes()[0];
+		DefaultRoot->SetVariableName(TEXT("Root"), true);
+		return DefaultRoot;
+	}
 	USCS_Node* Root = SCS->CreateNode(USceneComponent::StaticClass(), TEXT("Root"));
 	SCS->AddNode(Root);
 	return Root;
+}
+
+void ClearGeneratedComponentTree(UBlueprint* Blueprint)
+{
+	check(Blueprint != nullptr && Blueprint->SimpleConstructionScript != nullptr);
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+	const TArray<USCS_Node*> ExistingNodes = SCS->GetAllNodes();
+	for (int32 Index = ExistingNodes.Num() - 1; Index >= 0; --Index)
+	{
+		if (USCS_Node* Node = ExistingNodes[Index])
+		{
+			if (UActorComponent* Template = Node->ComponentTemplate)
+			{
+				Template->Rename(nullptr, GetTransientPackage(), REN_DoNotDirty | REN_DontCreateRedirectors);
+			}
+			SCS->RemoveNode(Node, false);
+		}
+	}
 }
 
 USCS_Node* AddComponent(UBlueprint* Blueprint, USCS_Node* Parent, UClass* ComponentClass, const TCHAR* Name)
@@ -479,6 +506,15 @@ USCS_Node* FindComponentNode(UBlueprint* Blueprint, const TCHAR* Name)
 		}
 	}
 	return nullptr;
+}
+
+USCS_Node* FindOrAddComponent(UBlueprint* Blueprint, USCS_Node* Parent, UClass* ComponentClass, const TCHAR* Name)
+{
+	if (USCS_Node* Existing = FindComponentNode(Blueprint, Name))
+	{
+		return Existing;
+	}
+	return AddComponent(Blueprint, Parent, ComponentClass, Name);
 }
 
 void ApplyMaterialToAllSlots(UStaticMeshComponent* Component, UMaterialInterface* Material)
@@ -513,14 +549,27 @@ void SetMetadata(UBlueprint* Blueprint, int32 ZoneIndex, const TCHAR* Label,
 	Blueprint->MarkPackageDirty();
 }
 
-void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
+bool CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 {
+	const int32 ExistingComponentCount = Blueprint->SimpleConstructionScript->GetAllNodes().Num();
+	if (ExistingComponentCount > 1 && ExistingComponentCount != 5)
+	{
+		// Recover a legacy/partially generated asset in two editor processes. A
+		// component's Blueprint member cannot be recreated safely in the same
+		// process that removed a duplicate SCS template.
+		ClearGeneratedGraph(Blueprint);
+		ClearGeneratedComponentTree(Blueprint);
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+		FKismetEditorUtilities::CompileBlueprint(Blueprint);
+		UE_LOG(LogTemp, Warning, TEXT("[Hapbeat] Reset corrupted BP_Z2_Door component tree; run generation once more to rebuild it."));
+		return false;
+	}
 	// Clear stale graph nodes before the structural compile below.  In
 	// particular, a prior generator version may have referenced an SCS variable
 	// that is about to be rebuilt.
 	ClearGeneratedGraph(Blueprint);
 	USCS_Node* Root = AddSceneRoot(Blueprint);
-	USCS_Node* HingeNode = AddComponent(Blueprint, Root, USceneComponent::StaticClass(), TEXT("DoorHinge"));
+	USCS_Node* HingeNode = FindOrAddComponent(Blueprint, Root, USceneComponent::StaticClass(), TEXT("DoorHinge"));
 	USceneComponent* Hinge = CastChecked<USceneComponent>(HingeNode->ComponentTemplate);
 	// The timelines rotate this pivot at runtime. Scene components default to
 	// Static, which silently rejects those updates even when the leaf itself is
@@ -531,7 +580,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	UMaterialInterface* DoorMaterial = LoadObject<UMaterialInterface>(nullptr,
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Materials/MI_DefaultMaterial.MI_DefaultMaterial"));
 
-	USCS_Node* FrameNode = AddComponent(Blueprint, Root, UStaticMeshComponent::StaticClass(), TEXT("DoorFrameMesh"));
+	USCS_Node* FrameNode = FindOrAddComponent(Blueprint, Root, UStaticMeshComponent::StaticClass(), TEXT("DoorFrameMesh"));
 	UStaticMeshComponent* Frame = CastChecked<UStaticMeshComponent>(FrameNode->ComponentTemplate);
 	Frame->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_DoorFrame.SM_DoorFrame")));
@@ -540,7 +589,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	Frame->SetMobility(EComponentMobility::Movable);
 	ApplyMaterialToAllSlots(Frame, DoorMaterial);
 
-	USCS_Node* LeafNode = AddComponent(Blueprint, HingeNode, UStaticMeshComponent::StaticClass(), TEXT("DoorLeafMesh"));
+	USCS_Node* LeafNode = FindOrAddComponent(Blueprint, HingeNode, UStaticMeshComponent::StaticClass(), TEXT("DoorLeafMesh"));
 	UStaticMeshComponent* Leaf = CastChecked<UStaticMeshComponent>(LeafNode->ComponentTemplate);
 	Leaf->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_Door.SM_Door")));
@@ -549,7 +598,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	Leaf->SetMobility(EComponentMobility::Movable);
 	ApplyMaterialToAllSlots(Leaf, DoorMaterial);
 
-	USCS_Node* HandleNode = AddComponent(Blueprint, LeafNode, UStaticMeshComponent::StaticClass(), TEXT("DoorHandleMesh"));
+	USCS_Node* HandleNode = FindOrAddComponent(Blueprint, LeafNode, UStaticMeshComponent::StaticClass(), TEXT("DoorHandleMesh"));
 	UStaticMeshComponent* Handle = CastChecked<UStaticMeshComponent>(HandleNode->ComponentTemplate);
 	Handle->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,
 		TEXT("/HapbeatSDK/HapbeatSamples/Showcase/Meshes/SM_DoorHandle.SM_DoorHandle")));
@@ -560,6 +609,11 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	// Compile once after creating SCS variables so the graph's component-get
 	// nodes resolve their generated member references before we wire them.
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint);
+	// A rebuilt SCS can retain a stale SkeletonClass for one compile pass.
+	// Refreshing while the Event Graph is empty forces the new component member
+	// variables (notably DoorHinge) to be visible before graph nodes are made.
+	FBlueprintEditorUtils::RefreshAllNodes(Blueprint);
 	FKismetEditorUtilities::CompileBlueprint(Blueprint);
 	UEdGraph* Graph = GetEventGraph(Blueprint);
 	const FGuid OpenId = FindEntryId(EventMap, TEXT("z2_door_open"));
@@ -592,53 +646,53 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	UTimelineTemplate* RattleTemplate = CreateDoorRattleTimeline(Blueprint);
 	// Each action occupies one horizontal lane. The input paths use one enum and
 	// Switch on Door State rather than three interdependent bool branches.
-	AddComment(Graph, TEXT("OPEN  |  z2_door_open  ->  Play Hapbeat Event  ->  Play Sound 2D"), -520, -585, 3300, 190,
+	AddComment(Graph, TEXT("OPEN  |  z2_door_open  ->  Play Hapbeat Event  ->  Play Sound 2D"), -340, -820, 2440, 280,
 		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("CLOSE  |  z2_door_close  ->  Play Hapbeat Event  ->  Play Sound 2D"), -520, -335, 3300, 190,
+	AddComment(Graph, TEXT("CLOSE  |  z2_door_close  ->  Play Hapbeat Event  ->  Play Sound 2D"), -340, -460, 2440, 280,
 		FLinearColor(0.12f, 0.30f, 0.52f));
-	AddComment(Graph, TEXT("SLAM  |  z2_door_slam  ->  Play Hapbeat Event  ->  Play Sound 2D"), -520, -85, 3300, 190,
+	AddComment(Graph, TEXT("SLAM  |  z2_door_slam  ->  Play Hapbeat Event  ->  Play Sound 2D"), -340, -100, 2440, 280,
 		FLinearColor(0.62f, 0.25f, 0.08f));
-	AddComment(Graph, TEXT("LOCKED RATTLE  |  z2_door_rattle  ->  Play Hapbeat Event  ->  Play Sound 2D"), -520, 165, 3300, 220,
+	AddComment(Graph, TEXT("LOCKED RATTLE  |  z2_door_rattle  ->  Play Hapbeat Event  ->  Play Sound 2D"), -340, 260, 1900, 360,
 		FLinearColor(0.50f, 0.15f, 0.15f));
-	AddComment(Graph, TEXT("LOCK / UNLOCK  |  z2_door_lock / z2_door_unlock  ->  Play Hapbeat Event  ->  Play Sound 2D"), -520, 445, 1700, 300,
+	AddComment(Graph, TEXT("LOCK / UNLOCK  |  z2_door_lock / z2_door_unlock  ->  Play Hapbeat Event  ->  Play Sound 2D"), -340, 700, 1450, 360,
 		FLinearColor(0.35f, 0.25f, 0.58f));
-	AddComment(Graph, TEXT("F  |  Switch on Door State"), -1600, -485, 820, 250,
+	AddComment(Graph, TEXT("F  |  Switch on Door State"), -1360, -780, 780, 300,
 		FLinearColor(0.18f, 0.18f, 0.18f));
-	AddComment(Graph, TEXT("G  |  Switch on Door State"), -1600, -35, 820, 220,
+	AddComment(Graph, TEXT("G  |  Switch on Door State"), -1360, 30, 780, 300,
 		FLinearColor(0.18f, 0.18f, 0.18f));
-	AddComment(Graph, TEXT("L  |  Switch on Door State"), -1600, 430, 820, 250,
+	AddComment(Graph, TEXT("L  |  Switch on Door State"), -1360, 760, 780, 300,
 		FLinearColor(0.18f, 0.18f, 0.18f));
 
-	UK2Node_Timeline* DoorOpen = AddTimeline(Graph, OpenTemplate, 800, -500);
-	UK2Node_Timeline* DoorClose = AddTimeline(Graph, CloseTemplate, 800, -250);
-	UK2Node_Timeline* DoorSlam = AddTimeline(Graph, SlamTemplate, 800, 0);
-	UK2Node_Timeline* DoorRattle = AddTimeline(Graph, RattleTemplate, 800, 250);
+	UK2Node_Timeline* DoorOpen = AddTimeline(Graph, OpenTemplate, 560, -740);
+	UK2Node_Timeline* DoorClose = AddTimeline(Graph, CloseTemplate, 560, -380);
+	UK2Node_Timeline* DoorSlam = AddTimeline(Graph, SlamTemplate, 560, -20);
+	UK2Node_Timeline* DoorRattle = AddTimeline(Graph, RattleTemplate, 560, 340);
 
 	auto AddMotionRotation = [&](UK2Node_Timeline* Timeline, int32 Y)
 	{
 		UK2Node_CallFunction* LerpRotation = AddCall(Graph, UKismetMathLibrary::StaticClass(),
-			GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RLerp), 1200, Y);
+			GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, RLerp), 900, Y);
 		FindPinChecked(LerpRotation, TEXT("A"))->DefaultValue = TEXT("0.000000,-90.000000,0.000000");
 		FindPinChecked(LerpRotation, TEXT("B"))->DefaultValue = TEXT("0.000000,0.000000,0.000000");
 		FindPinChecked(LerpRotation, TEXT("bShortestPath"))->DefaultValue = TEXT("false");
 		UK2Node_CallFunction* SetRotation = AddCall(Graph, USceneComponent::StaticClass(),
-			GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 1600, Y);
-		UK2Node_VariableGet* HingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 1400, Y + 120);
+			GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 1210, Y);
+		UK2Node_VariableGet* HingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 1040, Y + 140);
 		ConnectPins(Timeline->GetUpdatePin(), SetRotation->GetExecPin());
 		ConnectPins(FindPinChecked(Timeline, TEXT("OpenAlpha")), FindPinChecked(LerpRotation, TEXT("Alpha")));
 		ConnectPins(LerpRotation->GetReturnValuePin(), FindPinChecked(SetRotation, TEXT("NewRotation")));
 		ConnectPins(FindPinChecked(HingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetRotation));
 	};
-	AddMotionRotation(DoorOpen, -500);
-	AddMotionRotation(DoorClose, -250);
-	AddMotionRotation(DoorSlam, 0);
+	AddMotionRotation(DoorOpen, -740);
+	AddMotionRotation(DoorClose, -380);
+	AddMotionRotation(DoorSlam, -20);
 
 	UK2Node_CallFunction* MakeRattleRotation = AddCall(Graph, UKismetMathLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, MakeRotator), 1500, 250);
+		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, MakeRotator), 1180, 340);
 	UK2Node_CallFunction* AddRattleYaw = AddCall(Graph, UKismetMathLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, Add_DoubleDouble), 1120, 250);
+		GET_FUNCTION_NAME_CHECKED(UKismetMathLibrary, Add_DoubleDouble), 880, 340);
 	UK2Node_CallFunction* SetRattleRotation = AddCall(Graph, USceneComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 1900, 250);
+		GET_FUNCTION_NAME_CHECKED(USceneComponent, K2_SetRelativeRotation), 1470, 340);
 	FindPinChecked(AddRattleYaw, TEXT("A"))->DefaultValue = TEXT("-90.000000");
 	FindPinChecked(MakeRattleRotation, TEXT("Pitch"))->DefaultValue = TEXT("0.000000");
 	FindPinChecked(MakeRattleRotation, TEXT("Roll"))->DefaultValue = TEXT("0.000000");
@@ -646,14 +700,14 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	ConnectPins(FindPinChecked(DoorRattle, TEXT("RattleYaw")), FindPinChecked(AddRattleYaw, TEXT("B")));
 	ConnectPins(AddRattleYaw->GetReturnValuePin(), FindPinChecked(MakeRattleRotation, TEXT("Yaw")));
 	ConnectPins(MakeRattleRotation->GetReturnValuePin(), FindPinChecked(SetRattleRotation, TEXT("NewRotation")));
-	UK2Node_VariableGet* RattleHingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 1700, 390);
+	UK2Node_VariableGet* RattleHingeGet = AddComponentGet(Graph, TEXT("DoorHinge"), 1300, 500);
 	ConnectPins(FindPinChecked(RattleHingeGet, TEXT("DoorHinge")), FindTargetPinChecked(SetRattleRotation));
 
 	// Moving input is ignored, matching the previous C++ state machine.  Each
 	// terminal timeline clears the guard when it reaches its closed/open state.
-	UK2Node_VariableSet* StopOpening = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Open, 2350, -500);
-	UK2Node_VariableSet* StopClosing = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 2350, -250);
-	UK2Node_VariableSet* StopSlamming = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 2350, 0);
+	UK2Node_VariableSet* StopOpening = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Open, 1800, -740);
+	UK2Node_VariableSet* StopClosing = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 1800, -380);
+	UK2Node_VariableSet* StopSlamming = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 1800, -20);
 	ConnectPins(DoorOpen->GetFinishedPin(), StopOpening->GetExecPin());
 	ConnectPins(DoorClose->GetFinishedPin(), StopClosing->GetExecPin());
 	ConnectPins(DoorSlam->GetFinishedPin(), StopSlamming->GetExecPin());
@@ -687,14 +741,14 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	};
 
 	// F: open when closed, close when open, and rattle while locked.
-	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::F, -1550, -400);
-	UK2Node_SwitchEnum* ToggleState = AddDoorStateSwitch(Graph, -1180, -400);
-	UK2Node_VariableGet* ToggleStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1180, -280);
-	FDoorAction ToggleRattle = AddRattle(-380, 200);
-	FDoorAction ClosePlay = AddAction(CloseId, CloseSound, -380, -250);
-	UK2Node_VariableSet* StartClosing = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closing, 440, -250);
-	FDoorAction OpenPlay = AddAction(OpenId, OpenSound, -380, -500);
-	UK2Node_VariableSet* StartOpening = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Opening, 440, -500);
+	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::F, -1250, -690);
+	UK2Node_SwitchEnum* ToggleState = AddDoorStateSwitch(Graph, -930, -690);
+	UK2Node_VariableGet* ToggleStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -930, -540);
+	FDoorAction ToggleRattle = AddRattle(-300, 320);
+	FDoorAction ClosePlay = AddAction(CloseId, CloseSound, -300, -380);
+	UK2Node_VariableSet* StartClosing = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closing, 420, -380);
+	FDoorAction OpenPlay = AddAction(OpenId, OpenSound, -300, -740);
+	UK2Node_VariableSet* StartOpening = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Opening, 420, -740);
 	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), ToggleState->GetExecPin());
 	ConnectPins(ToggleStateGet->GetValuePin(), FindPinChecked(ToggleState, TEXT("Selection")));
 	ConnectPins(FindPinChecked(ToggleState, TEXT("Locked")), ToggleRattle.Entry->GetExecPin());
@@ -706,12 +760,12 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	ConnectPins(StartOpening->GetThenPin(), DoorOpen->GetPlayFromStartPin());
 
 	// G: slam only while open; it uses the same closed state as a normal close.
-	UK2Node_InputKey* SlamInput = AddKeyEvent(Graph, EKeys::G, -1550, 30);
-	UK2Node_SwitchEnum* SlamState = AddDoorStateSwitch(Graph, -1180, 30);
-	UK2Node_VariableGet* SlamStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1180, 150);
-	FDoorAction SlamRattle = AddRattle(-380, 320);
-	FDoorAction SlamPlay = AddAction(SlamId, SlamSound, -380, 0);
-	UK2Node_VariableSet* StartSlam = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Slamming, 440, 0);
+	UK2Node_InputKey* SlamInput = AddKeyEvent(Graph, EKeys::G, -1250, 100);
+	UK2Node_SwitchEnum* SlamState = AddDoorStateSwitch(Graph, -930, 100);
+	UK2Node_VariableGet* SlamStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -930, 250);
+	FDoorAction SlamRattle = AddRattle(-300, 480);
+	FDoorAction SlamPlay = AddAction(SlamId, SlamSound, -300, -20);
+	UK2Node_VariableSet* StartSlam = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Slamming, 420, -20);
 	ConnectPins(FindPinChecked(SlamInput, TEXT("Pressed")), SlamState->GetExecPin());
 	ConnectPins(SlamStateGet->GetValuePin(), FindPinChecked(SlamState, TEXT("Selection")));
 	ConnectPins(FindPinChecked(SlamState, TEXT("Locked")), SlamRattle.Entry->GetExecPin());
@@ -720,13 +774,13 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 	ConnectPins(StartSlam->GetThenPin(), DoorSlam->GetPlayFromStartPin());
 
 	// L: lock/unlock only while the leaf is closed; the active transition is a no-op.
-	UK2Node_InputKey* LockInput = AddKeyEvent(Graph, EKeys::L, -1550, 500);
-	UK2Node_SwitchEnum* LockState = AddDoorStateSwitch(Graph, -1180, 500);
-	UK2Node_VariableGet* LockStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -1180, 620);
-	FDoorAction UnlockPlay = AddAction(UnlockId, UnlockSound, -380, 650);
-	UK2Node_VariableSet* SetUnlocked = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 440, 650);
-	FDoorAction LockPlay = AddAction(LockId, LockSound, -380, 500);
-	UK2Node_VariableSet* SetLocked = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Locked, 440, 500);
+	UK2Node_InputKey* LockInput = AddKeyEvent(Graph, EKeys::L, -1250, 830);
+	UK2Node_SwitchEnum* LockState = AddDoorStateSwitch(Graph, -930, 830);
+	UK2Node_VariableGet* LockStateGet = AddSelfVariableGet(Graph, TEXT("DoorState"), -930, 980);
+	FDoorAction UnlockPlay = AddAction(UnlockId, UnlockSound, -300, 900);
+	UK2Node_VariableSet* SetUnlocked = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Closed, 420, 900);
+	FDoorAction LockPlay = AddAction(LockId, LockSound, -300, 780);
+	UK2Node_VariableSet* SetLocked = AddDoorStateSet(Graph, EHapbeatShowcaseDoorState::Locked, 420, 780);
 	ConnectPins(FindPinChecked(LockInput, TEXT("Pressed")), LockState->GetExecPin());
 	ConnectPins(LockStateGet->GetValuePin(), FindPinChecked(LockState, TEXT("Selection")));
 	ConnectPins(FindPinChecked(LockState, TEXT("Locked")), UnlockPlay.Entry->GetExecPin());
@@ -753,6 +807,7 @@ void CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 		{ { FText::FromString(TEXT("F")), FText::FromString(TEXT("open / close; rattle while locked")) },
 		  { FText::FromString(TEXT("G")), FText::FromString(TEXT("slam while open; rattle while locked")) },
 		  { FText::FromString(TEXT("L")), FText::FromString(TEXT("lock / unlock while closed")) } });
+	return true;
 }
 
 void CreateStreamConsoleWidgetBlueprint(UWidgetBlueprint* Blueprint)
@@ -761,47 +816,55 @@ void CreateStreamConsoleWidgetBlueprint(UWidgetBlueprint* Blueprint)
 	FKismetEditorUtilities::CompileBlueprint(Blueprint);
 	UEdGraph* Graph = GetEventGraph(Blueprint);
 
-	AddComment(Graph, TEXT("GAIN SLIDER  |  Set Value  ->  Evaluate Now  ->  Fire From Value (Tick Trigger)"), -1100, -410, 1920, 240,
+	// Generated graphs use a fixed column/lane grid. Slate resolves exact node
+	// dimensions only while an editor tab is painted, so a deterministic grid is
+	// more reliable than attempting to query unavailable headless geometry.
+	constexpr int32 Column = 300;
+	constexpr int32 Lane = 360;
+	const int32 StartX = -880;
+	const int32 GainY = -360;
+	const int32 PanY = GainY + Lane;
+	AddComment(Graph, TEXT("GAIN SLIDER  |  Set Value  ->  Evaluate Now  ->  Fire From Value (Tick Emitter)"), StartX - 90, GainY - 80, 1780, 300,
 		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("PAN SLIDER  |  Set Value  ->  Evaluate Now  ->  Fire From Value (Tick Trigger)"), -1100, 10, 1920, 240,
+	AddComment(Graph, TEXT("PAN SLIDER  |  Set Value  ->  Evaluate Now  ->  Fire From Value (Tick Emitter)"), StartX - 90, PanY - 80, 1780, 300,
 		FLinearColor(0.12f, 0.30f, 0.52f));
 
 	UK2Node_Event* GainEvent = AddOverrideEvent(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, HandleGainValueChanged), -1000, -320);
-	UK2Node_VariableGet* GainBinding = AddSelfVariableGet(Graph, TEXT("GainBinding"), -760, -180);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, HandleGainValueChanged), StartX, GainY);
+	UK2Node_VariableGet* GainBinding = AddSelfVariableGet(Graph, TEXT("GainBinding"), StartX + Column, GainY + 150);
 	UK2Node_CallFunction* SetGain = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -420, -320);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), StartX + Column * 2, GainY);
 	UK2Node_CallFunction* EvaluateGain = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), -20, -320);
-	UK2Node_VariableGet* GainTick = AddSelfVariableGet(Graph, TEXT("TickTrigger"), 240, -180);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), StartX + Column * 3, GainY);
+	UK2Node_VariableGet* GainTick = AddSelfVariableGet(Graph, TEXT("TickEmitter"), StartX + Column * 4, GainY + 150);
 	UK2Node_CallFunction* FireGainTick = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), 580, -320);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), StartX + Column * 5, GainY);
 	ConnectPins(GainEvent->GetThenPin(), SetGain->GetExecPin());
 	ConnectPins(GainBinding->GetValuePin(), FindTargetPinChecked(SetGain));
 	ConnectPins(FindPinChecked(GainEvent, TEXT("Value")), FindPinChecked(SetGain, TEXT("Value")));
 	ConnectPins(SetGain->GetThenPin(), EvaluateGain->GetExecPin());
 	ConnectPins(GainBinding->GetValuePin(), FindTargetPinChecked(EvaluateGain));
 	ConnectPins(EvaluateGain->GetThenPin(), FireGainTick->GetExecPin());
-	ConnectPins(GainTick->GetValuePin(), FindPinChecked(FireGainTick, TEXT("Trigger")));
+	ConnectPins(GainTick->GetValuePin(), FindPinChecked(FireGainTick, TEXT("TickEmitter")));
 	ConnectPins(FindPinChecked(GainEvent, TEXT("Value")), FindPinChecked(FireGainTick, TEXT("Value")));
 
 	UK2Node_Event* PanEvent = AddOverrideEvent(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, HandlePanValueChanged), -1000, 100);
-	UK2Node_VariableGet* PanBinding = AddSelfVariableGet(Graph, TEXT("PanBinding"), -760, 240);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, HandlePanValueChanged), StartX, PanY);
+	UK2Node_VariableGet* PanBinding = AddSelfVariableGet(Graph, TEXT("PanBinding"), StartX + Column, PanY + 150);
 	UK2Node_CallFunction* SetPan = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -420, 100);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), StartX + Column * 2, PanY);
 	UK2Node_CallFunction* EvaluatePan = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), -20, 100);
-	UK2Node_VariableGet* PanTick = AddSelfVariableGet(Graph, TEXT("TickTrigger"), 240, 240);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), StartX + Column * 3, PanY);
+	UK2Node_VariableGet* PanTick = AddSelfVariableGet(Graph, TEXT("TickEmitter"), StartX + Column * 4, PanY + 150);
 	UK2Node_CallFunction* FirePanTick = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), 580, 100);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), StartX + Column * 5, PanY);
 	ConnectPins(PanEvent->GetThenPin(), SetPan->GetExecPin());
 	ConnectPins(PanBinding->GetValuePin(), FindTargetPinChecked(SetPan));
 	ConnectPins(FindPinChecked(PanEvent, TEXT("Value")), FindPinChecked(SetPan, TEXT("Value")));
 	ConnectPins(SetPan->GetThenPin(), EvaluatePan->GetExecPin());
 	ConnectPins(PanBinding->GetValuePin(), FindTargetPinChecked(EvaluatePan));
 	ConnectPins(EvaluatePan->GetThenPin(), FirePanTick->GetExecPin());
-	ConnectPins(PanTick->GetValuePin(), FindPinChecked(FirePanTick, TEXT("Trigger")));
+	ConnectPins(PanTick->GetValuePin(), FindPinChecked(FirePanTick, TEXT("TickEmitter")));
 	ConnectPins(FindPinChecked(PanEvent, TEXT("Value")), FindPinChecked(FirePanTick, TEXT("Value")));
 }
 
@@ -819,22 +882,22 @@ void ConfigureStreamBindingTargets(UBlueprint* Blueprint)
     }
     checkf(Entry, TEXT("Z4 Stream Console Construction Script is missing its entry node."));
 	UEdGraphPin* Previous = FindPinChecked(Entry, TEXT("then"));
-	int32 X = 280;
+	int32 X = 260;
 	for (const TCHAR* Name : { TEXT("GainBinding"), TEXT("PanBinding") })
 	{
-		auto* Binding = AddComponentGet(Construction, Name, X, 220);
-		auto* Loop = AddComponentGet(Construction, TEXT("LoopTrigger"), X, 380);
-		auto* SetTarget = AddNode<UK2Node_VariableSet>(Construction, X + 400, 120);
+		auto* Binding = AddComponentGet(Construction, Name, X, 200);
+		auto* Loop = AddComponentGet(Construction, TEXT("LoopTrigger"), X, 340);
+		auto* SetTarget = AddNode<UK2Node_VariableSet>(Construction, X + 300, 80);
 		SetTarget->VariableReference.SetExternalMember(TEXT("TargetTrigger"), UHapbeatParameterBinding::StaticClass());
 		SetTarget->ReconstructNode();
 		ConnectPins(Previous, SetTarget->GetExecPin());
 		ConnectPins(Binding->GetValuePin(), FindTargetPinChecked(SetTarget));
 		ConnectPins(Loop->GetValuePin(), FindPinChecked(SetTarget, TEXT("TargetTrigger")));
 		Previous = SetTarget->GetThenPin();
-		X += 900;
+		X += 680;
 	}
 	AddComment(Construction, TEXT("CONNECT SLIDER BINDINGS TO THIS ACTOR'S LOOP TRIGGER"),
-		180, -40, 2000, 620, FLinearColor(0.10f, 0.42f, 0.22f));
+		160, -40, 1500, 560, FLinearColor(0.10f, 0.42f, 0.22f));
 	// SCS templates are serialized individually: a raw cross-template pointer
 	// survives instancing as LoopTrigger_GEN_VARIABLE. Connect actual components
 	// in Construction Script, including when an editor actor is reconstructed.
@@ -942,8 +1005,8 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	const FGuid LoopId = FindEntryId(EventMap, TEXT("z4_stream_loop"));
 	const FGuid TickId = FindEntryId(EventMap, TEXT("z4_slider_tick"));
 
-	// Preserve the existing component tree and replace only the former generic
-	// tick trigger. A broad SCS rebuild invalidates serialized Blueprint member
+	// Preserve the existing component tree and upgrade only the legacy generic
+	// trigger. A broad SCS rebuild invalidates serialized Blueprint member
 	// references before Unreal refreshes the generated class.
 	USCS_Node* LoopNode = FindComponentNode(Blueprint, TEXT("LoopTrigger"));
 	checkf(LoopNode != nullptr, TEXT("BP_Z4_StreamConsole is missing LoopTrigger."));
@@ -951,21 +1014,35 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	Loop->EventMap = EventMap;
 	Loop->EntryId = LoopId;
 
-	USCS_Node* OldTickNode = FindComponentNode(Blueprint, TEXT("TickTrigger"));
-	checkf(OldTickNode != nullptr, TEXT("BP_Z4_StreamConsole is missing TickTrigger."));
-	UActorComponent* OldTickTemplate = OldTickNode->ComponentTemplate;
-	check(OldTickTemplate != nullptr);
-	const FName TickTemplateName = OldTickTemplate->GetFName();
-	OldTickTemplate->Rename(nullptr, GetTransientPackage(), REN_DoNotDirty | REN_DontCreateRedirectors);
-	UHapbeatTickEmitterComponent* GainTick = NewObject<UHapbeatTickEmitterComponent>(
-		Blueprint->GeneratedClass, TickTemplateName, RF_ArchetypeObject | RF_Transactional | RF_Public);
-	OldTickNode->ComponentClass = UHapbeatTickEmitterComponent::StaticClass();
-	OldTickNode->ComponentTemplate = GainTick;
-	GainTick->EventMap = EventMap;
-	GainTick->EntryId = TickId;
-	GainTick->TickMode = EHapbeatTickMode::AbsolutePosition;
-	GainTick->TickThreshold = 0.01f;
-	GainTick->bEmitOnInitialValue = false;
+	const FName TickEmitterName(TEXT("TickEmitter"));
+	USCS_Node* TickNode = FindComponentNode(Blueprint, TEXT("TickEmitter"));
+	if (TickNode == nullptr)
+	{
+		// Migration for the pre-release generated asset. The old name was an
+		// implementation leftover, not an SDK compatibility promise.
+		TickNode = FindComponentNode(Blueprint, TEXT("TickTrigger"));
+	}
+	checkf(TickNode != nullptr, TEXT("BP_Z4_StreamConsole is missing TickEmitter."));
+	if (TickNode->GetVariableName() != TickEmitterName)
+	{
+		TickNode->SetVariableName(TickEmitterName, true);
+	}
+	UActorComponent* TickTemplate = TickNode->ComponentTemplate;
+	check(TickTemplate != nullptr);
+	if (Cast<UHapbeatTickEmitterComponent>(TickTemplate) == nullptr)
+	{
+		TickTemplate->Rename(nullptr, GetTransientPackage(), REN_DoNotDirty | REN_DontCreateRedirectors);
+		TickTemplate = NewObject<UHapbeatTickEmitterComponent>(
+			Blueprint->GeneratedClass, TickEmitterName, RF_ArchetypeObject | RF_Transactional | RF_Public);
+		TickNode->ComponentClass = UHapbeatTickEmitterComponent::StaticClass();
+		TickNode->ComponentTemplate = TickTemplate;
+	}
+	UHapbeatTickEmitterComponent* TickEmitter = CastChecked<UHapbeatTickEmitterComponent>(TickTemplate);
+	TickEmitter->EventMap = EventMap;
+	TickEmitter->EntryId = TickId;
+	TickEmitter->TickMode = EHapbeatTickMode::AbsolutePosition;
+	TickEmitter->TickThreshold = 0.01f;
+	TickEmitter->bEmitOnInitialValue = false;
 
 	auto ConfigureBinding = [&](const TCHAR* Name, EHapbeatBindingOutput Output, float InMin, float InMax, float OutMin, float OutMax)
 	{
@@ -1006,29 +1083,33 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	// bindings, before the Event Graph asks for any of those components.
 	FKismetEditorUtilities::CompileBlueprint(Blueprint);
 
-	AddComment(Graph, TEXT("SPACE  |  live or Deferred loop: Stop  |  otherwise: Fire"), -1900, -520, 3200, 280,
+	// Keep every path on a compact fixed grid: 300 px columns for normal
+	// Blueprint nodes and 700 px vertical lanes. This is deliberately more
+	// compact than the previous hand-spaced layout while keeping all node bodies
+	// and data accessors in separate lanes.
+	AddComment(Graph, TEXT("SPACE  |  live or Deferred loop: Stop  |  otherwise: Fire"), -1430, -650, 2550, 260,
 		FLinearColor(0.18f, 0.18f, 0.18f));
-	AddComment(Graph, TEXT("ON SHOWCASE ZONE ACTIVATED  |  seed bindings, create console, show address override"), -1900, -170, 4300, 310,
+	AddComment(Graph, TEXT("ON SHOWCASE ZONE ACTIVATED  |  seed bindings, create console, show address override"), -1430, -210, 3500, 600,
 		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("ON SHOWCASE ZONE DEACTIVATED  |  stop loop, remove console, hide address override"), -1900, 260, 2900, 270,
+	AddComment(Graph, TEXT("ON SHOWCASE ZONE DEACTIVATED  |  stop loop, remove console, hide address override"), -1430, 590, 2200, 420,
 		FLinearColor(0.50f, 0.15f, 0.15f));
 
-	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::SpaceBar, -1800, -430);
-	UK2Node_VariableGet* LoopForPlayback = AddComponentGet(Graph, TEXT("LoopTrigger"), -1550, -280);
+	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::SpaceBar, -1340, -570);
+	UK2Node_VariableGet* LoopForPlayback = AddComponentGet(Graph, TEXT("LoopTrigger"), -1090, -410);
 	UK2Node_CallFunction* GetPlayback = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, GetActivePlayback), -1200, -430);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, GetActivePlayback), -990, -570);
 	UK2Node_CallFunction* HasPlayback = AddCall(Graph, UKismetSystemLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -820, -430);
-	UK2Node_IfThenElse* PlaybackExists = AddNode<UK2Node_IfThenElse>(Graph, -450, -430);
+		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -670, -570);
+	UK2Node_IfThenElse* PlaybackExists = AddNode<UK2Node_IfThenElse>(Graph, -370, -570);
 	UK2Node_CallFunction* IsStopped = AddCall(Graph, UHapbeatStreamPlayback::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped), -80, -430);
-	UK2Node_IfThenElse* IsStoppedBranch = AddNode<UK2Node_IfThenElse>(Graph, 300, -430);
-	UK2Node_VariableGet* LoopForStop = AddComponentGet(Graph, TEXT("LoopTrigger"), 680, -280);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped), -70, -570);
+	UK2Node_IfThenElse* IsStoppedBranch = AddNode<UK2Node_IfThenElse>(Graph, 230, -570);
+	UK2Node_VariableGet* LoopForStop = AddComponentGet(Graph, TEXT("LoopTrigger"), 550, -410);
 	UK2Node_CallFunction* StopLoop = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), 1030, -430);
-	UK2Node_VariableGet* LoopForFire = AddComponentGet(Graph, TEXT("LoopTrigger"), 680, -40);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), 820, -570);
+	UK2Node_VariableGet* LoopForFire = AddComponentGet(Graph, TEXT("LoopTrigger"), 550, -180);
 	UK2Node_CallFunction* FireLoop = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire), 1030, -160);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire), 820, -300);
 	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), PlaybackExists->GetExecPin());
 	ConnectPins(LoopForPlayback->GetValuePin(), FindTargetPinChecked(GetPlayback));
 	ConnectPins(GetPlayback->GetReturnValuePin(), FindPinChecked(HasPlayback, TEXT("Object")));
@@ -1043,38 +1124,38 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(LoopForFire->GetValuePin(), FindTargetPinChecked(FireLoop));
 
 	UK2Node_Event* Activated = AddOverrideEvent(Graph, AHapbeatShowcaseBlueprintZoneActor::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(AHapbeatShowcaseBlueprintZoneActor, ReceiveZoneActivated), -1800, -80);
-	UK2Node_VariableGet* GainForSeed = AddComponentGet(Graph, TEXT("GainBinding"), -1550, 80);
+		GET_FUNCTION_NAME_CHECKED(AHapbeatShowcaseBlueprintZoneActor, ReceiveZoneActivated), -1340, -120);
+	UK2Node_VariableGet* GainForSeed = AddComponentGet(Graph, TEXT("GainBinding"), -1090, 40);
 	UK2Node_CallFunction* SeedGain = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -1200, -80);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -990, -120);
 	FindPinChecked(SeedGain, TEXT("Value"))->DefaultValue = TEXT("0.5");
-	UK2Node_VariableGet* PanForSeed = AddComponentGet(Graph, TEXT("PanBinding"), -820, 80);
+	UK2Node_VariableGet* PanForSeed = AddComponentGet(Graph, TEXT("PanBinding"), -670, 40);
 	UK2Node_CallFunction* SeedPan = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -470, -80);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -570, -120);
 	FindPinChecked(SeedPan, TEXT("Value"))->DefaultValue = TEXT("0.0");
 	UK2Node_CallFunction* CreateWidget = AddCall(Graph, UWidgetBlueprintLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UWidgetBlueprintLibrary, Create), -100, -80);
+		GET_FUNCTION_NAME_CHECKED(UWidgetBlueprintLibrary, Create), -250, -120);
 	FindPinChecked(CreateWidget, TEXT("WidgetType"))->DefaultObject = WidgetBlueprint->GeneratedClass;
 	UK2Node_DynamicCast* ConsoleCast = NewObject<UK2Node_DynamicCast>(Graph);
 	ConsoleCast->TargetType = UHapbeatShowcaseZ4ConsoleWidget::StaticClass();
 	Graph->AddNode(ConsoleCast, false, false);
-	ConsoleCast->NodePosX = 260;
-	ConsoleCast->NodePosY = -80;
+	ConsoleCast->NodePosX = 60;
+	ConsoleCast->NodePosY = -120;
 	ConsoleCast->CreateNewGuid();
 	ConsoleCast->PostPlacedNewNode();
 	ConsoleCast->AllocateDefaultPins();
-	UK2Node_VariableGet* GainForWidget = AddComponentGet(Graph, TEXT("GainBinding"), 620, 40);
-	UK2Node_VariableGet* PanForWidget = AddComponentGet(Graph, TEXT("PanBinding"), 620, 160);
-	UK2Node_VariableGet* TickForWidget = AddComponentGet(Graph, TEXT("TickTrigger"), 620, 280);
+	UK2Node_VariableGet* GainForWidget = AddComponentGet(Graph, TEXT("GainBinding"), 400, 40);
+	UK2Node_VariableGet* PanForWidget = AddComponentGet(Graph, TEXT("PanBinding"), 400, 160);
+	UK2Node_VariableGet* TickForWidget = AddComponentGet(Graph, TEXT("TickEmitter"), 400, 280);
 	UK2Node_CallFunction* ConfigureWidget = AddCall(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, Configure), 980, -80);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, Configure), 700, -120);
 	FindPinChecked(ConfigureWidget, TEXT("InTickSound"))->DefaultObject = TickSound;
 	UK2Node_CallFunction* AddToViewport = AddCall(Graph, UUserWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UUserWidget, AddToViewport), 1420, -80);
-	UK2Node_VariableSet* StoreWidget = AddSelfVariableSet(Graph, TEXT("ConsoleWidget"), 1800, -80);
-	UK2Node_VariableGet* AddressForShow = AddComponentGet(Graph, TEXT("AddressPanel"), 2050, 80);
+		GET_FUNCTION_NAME_CHECKED(UUserWidget, AddToViewport), 1040, -120);
+	UK2Node_VariableSet* StoreWidget = AddSelfVariableSet(Graph, TEXT("ConsoleWidget"), 1350, -120);
+	UK2Node_VariableGet* AddressForShow = AddComponentGet(Graph, TEXT("AddressPanel"), 1580, 40);
 	UK2Node_CallFunction* ShowAddress = AddCall(Graph, UHapbeatAddressOverridePanelComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Show), 2400, -80);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Show), 1880, -120);
 	ConnectPins(Activated->GetThenPin(), SeedGain->GetExecPin());
 	ConnectPins(GainForSeed->GetValuePin(), FindTargetPinChecked(SeedGain));
 	ConnectPins(SeedGain->GetThenPin(), SeedPan->GetExecPin());
@@ -1086,7 +1167,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(ConsoleCast->GetCastResultPin(), FindTargetPinChecked(ConfigureWidget));
 	ConnectPins(GainForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InGainBinding")));
 	ConnectPins(PanForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InPanBinding")));
-	ConnectPins(TickForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InTickTrigger")));
+	ConnectPins(TickForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InTickEmitter")));
 	ConnectPins(ConfigureWidget->GetThenPin(), AddToViewport->GetExecPin());
 	ConnectPins(ConsoleCast->GetCastResultPin(), FindTargetPinChecked(AddToViewport));
 	ConnectPins(AddToViewport->GetThenPin(), StoreWidget->GetExecPin());
@@ -1095,19 +1176,19 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(AddressForShow->GetValuePin(), FindTargetPinChecked(ShowAddress));
 
 	UK2Node_Event* Deactivated = AddOverrideEvent(Graph, AHapbeatShowcaseBlueprintZoneActor::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(AHapbeatShowcaseBlueprintZoneActor, ReceiveZoneDeactivated), -1800, 350);
-	UK2Node_VariableGet* LoopForDeactivate = AddComponentGet(Graph, TEXT("LoopTrigger"), -1550, 500);
+		GET_FUNCTION_NAME_CHECKED(AHapbeatShowcaseBlueprintZoneActor, ReceiveZoneDeactivated), -1340, 660);
+	UK2Node_VariableGet* LoopForDeactivate = AddComponentGet(Graph, TEXT("LoopTrigger"), -1090, 820);
 	UK2Node_CallFunction* StopForDeactivate = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), -1200, 350);
-	UK2Node_VariableGet* StoredWidget = AddSelfVariableGet(Graph, TEXT("ConsoleWidget"), -820, 500);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), -990, 660);
+	UK2Node_VariableGet* StoredWidget = AddSelfVariableGet(Graph, TEXT("ConsoleWidget"), -670, 820);
 	UK2Node_CallFunction* IsWidgetValid = AddCall(Graph, UKismetSystemLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -470, 350);
-	UK2Node_IfThenElse* HasConsoleWidget = AddNode<UK2Node_IfThenElse>(Graph, -100, 350);
+		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -570, 660);
+	UK2Node_IfThenElse* HasConsoleWidget = AddNode<UK2Node_IfThenElse>(Graph, -250, 660);
 	UK2Node_CallFunction* RemoveWidget = AddCall(Graph, UUserWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UUserWidget, RemoveFromParent), 280, 350);
-	UK2Node_VariableGet* AddressForHide = AddComponentGet(Graph, TEXT("AddressPanel"), 520, 500);
+		GET_FUNCTION_NAME_CHECKED(UUserWidget, RemoveFromParent), 60, 660);
+	UK2Node_VariableGet* AddressForHide = AddComponentGet(Graph, TEXT("AddressPanel"), 310, 820);
 	UK2Node_CallFunction* HideAddress = AddCall(Graph, UHapbeatAddressOverridePanelComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Hide), 860, 350);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Hide), 610, 660);
 	ConnectPins(Deactivated->GetThenPin(), StopForDeactivate->GetExecPin());
 	ConnectPins(LoopForDeactivate->GetValuePin(), FindTargetPinChecked(StopForDeactivate));
 	ConnectPins(StopForDeactivate->GetThenPin(), HasConsoleWidget->GetExecPin());
@@ -1167,17 +1248,19 @@ void CheckStreamConsoleComponentTree(const UBlueprint* Blueprint)
 {
 	check(Blueprint != nullptr);
 	checkf(Blueprint->SimpleConstructionScript->GetAllNodes().Num() == 6,
-		TEXT("BP_Z4_StreamConsole must contain exactly Root, LoopTrigger, TickTrigger, GainBinding, PanBinding, and AddressPanel."));
+		TEXT("BP_Z4_StreamConsole must contain exactly Root, LoopTrigger, TickEmitter, GainBinding, PanBinding, and AddressPanel."));
 	int32 TickEmitterCount = 0;
+	bool bHasCanonicalTickEmitterName = false;
 	for (const USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
 	{
 		if (Node != nullptr && Cast<UHapbeatTickEmitterComponent>(Node->ComponentTemplate) != nullptr)
 		{
 			++TickEmitterCount;
+			bHasCanonicalTickEmitterName |= Node->GetVariableName() == TEXT("TickEmitter");
 		}
 	}
-	checkf(TickEmitterCount == 1,
-		TEXT("BP_Z4_StreamConsole must use its TickTrigger as a Hapbeat Tick Emitter."));
+	checkf(TickEmitterCount == 1 && bHasCanonicalTickEmitterName,
+		TEXT("BP_Z4_StreamConsole must use TickEmitter as a Hapbeat Tick Emitter."));
 	const UBlueprintGeneratedClass* GeneratedClass = CastChecked<UBlueprintGeneratedClass>(Blueprint->GeneratedClass);
 	checkf(GeneratedClass->SimpleConstructionScript != nullptr
 		&& GeneratedClass->SimpleConstructionScript->GetAllNodes().Num() == 6,
@@ -1193,13 +1276,11 @@ void Generate()
 	bool bDoorWasCreated = false;
 	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"), bDoorWasCreated);
 	check(Door != nullptr);
-	if (bDoorWasCreated)
+	const bool bDoorGenerated = CreateDoorBlueprint(Door, EventMap);
+	SaveBlueprintAsset(Door);
+	if (!bDoorGenerated)
 	{
-		CreateDoorBlueprint(Door, EventMap);
-		FKismetEditorUtilities::CompileBlueprint(Door);
-		FAssetRegistryModule::AssetCreated(Door);
-		Door->MarkPackageDirty();
-		UPackage::SavePackage(Door->GetOutermost(), Door, *FPackageName::LongPackageNameToFilename(Door->GetOutermost()->GetName(), FPackageName::GetAssetPackageExtension()), FSavePackageArgs());
+		return;
 	}
 	CheckDoorComponentTree(Door);
 	bool bWidgetWasCreated = false;
@@ -1253,8 +1334,13 @@ void GenerateDoorAsset()
 	bool bDoorWasCreated = false;
 	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"), bDoorWasCreated);
 	check(Door != nullptr);
-	CreateDoorBlueprint(Door, EventMap);
+	const bool bDoorGenerated = CreateDoorBlueprint(Door, EventMap);
 	SaveBlueprintAsset(Door);
+	if (!bDoorGenerated)
+	{
+		UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Reset BP_Z2_Door; invoke the generator once more to rebuild it."));
+		return;
+	}
 	CheckDoorComponentTree(Door);
 	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated BP_Z2_Door without changing the Showcase map."));
 }

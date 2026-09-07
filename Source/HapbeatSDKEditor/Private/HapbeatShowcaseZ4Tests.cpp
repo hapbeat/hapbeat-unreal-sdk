@@ -115,11 +115,11 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 	UHapbeatTickEmitterComponent* GainTick = nullptr;
 	for (UHapbeatTickEmitterComponent* Trigger : TickEmitters)
 	{
-		if (Trigger->GetName() == TEXT("TickTrigger")) { GainTick = Trigger; }
+		if (Trigger->GetName() == TEXT("TickEmitter")) { GainTick = Trigger; }
 		TestEqual(*FString::Printf(TEXT("%s uses the Showcase detent threshold"), *Trigger->GetName()),
 			Trigger->TickThreshold, 0.01f);
 	}
-	TestNotNull(TEXT("Runtime TickTrigger (Gain)"), GainTick);
+	TestNotNull(TEXT("Runtime TickEmitter (Gain)"), GainTick);
     TArray<UHapbeatParameterBinding*> Bindings;
     Actor->GetComponents(Bindings);
     TestEqual(TEXT("Two slider bindings"), Bindings.Num(), 2);

@@ -18,10 +18,10 @@ Hapbeat SDK は、Blueprint から Event Map の entry を再生するための�
 | 衝突または overlap で鳴らす | **Hapbeat Collision Trigger** component | UE の Hit / Begin Overlap を component が監視する |
 | 掴む→保持→離す | **Hapbeat Sequence** component | start、loop、stop を 1 component で管理する |
 | スライダー・ノブで連続音の強さや左右を変える | **Hapbeat Parameter Binding** component | 入力値を stream の gain / pan に変換する |
-| ノブや slider の目盛りを越えたときに一発ずつ鳴らす | **Hapbeat Tick Trigger** component | 移動量に応じて tick 数を決める |
+| ノブや slider の目盛りを越えたときに一発ずつ鳴らす | **Hapbeat Tick Emitter** component | 移動量に応じて tick 数を決める |
 | 接続・宛先・直接送信を独自管理する | **Hapbeat Subsystem** | 上の高水準 API では足りない場合だけ使う |
 
-`Hapbeat Trigger Component` は C++ 用の基底 class であり、意図的に **Add Component には表示されません**。Blueprint から任意のイベントを発火する用途には `Play Hapbeat Event` を使います。Collision / Sequence / Tick Trigger は検出ロジックを持つため、Add Component から追加できます。
+`Hapbeat Trigger Component` は C++ 用の基底 class であり、意図的に **Add Component には表示されません**。Blueprint から任意のイベントを発火する用途には `Play Hapbeat Event` を使います。Collision / Sequence / Tick Emitter は検出ロジックを持つため、Add Component から追加できます。
 
 ## 1. Event Map を直接再生する
 
@@ -108,9 +108,9 @@ Hit を使う場合、衝突する Primitive Component で **Simulation Generate
 
 loop を開始した直後に `Evaluate Now` を一度呼ぶと、最初の stream chunk にも現在の値が反映されます。
 
-### Hapbeat Tick Trigger
+### Hapbeat Tick Emitter
 
-`Hapbeat Tick Trigger` は、slider やノブの移動量が `Tick Threshold` を越えるたびに entry を 1 回発火します。時間ベースの cooldown ではないため、ゆっくり動かせば少なく、速く動かせば多く tick します。
+`Hapbeat Tick Emitter` は、slider やノブの移動量が `Tick Threshold` を越えるたびに entry を 1 回発火します。時間ベースの cooldown ではないため、ゆっくり動かせば少なく、速く動かせば多く tick します。
 
 | ノード | 用途 |
 | --- | --- |
@@ -119,11 +119,11 @@ loop を開始した直後に `Evaluate Now` を一度呼ぶと、最初の stre
 | `Fire Now` | 目盛り検出を通さず 1 回発火する |
 | `Reset Reference` | UI 値をプログラムから飛ばした後、不要な連続 tick を防ぐ |
 
-Z4 では Parameter Binding と Tick Trigger を併用します。前者は連続した stream の変調、後者は操作感を示す one-shot です。
+Z4 では Parameter Binding と Tick Emitter を併用します。前者は連続した stream の変調、後者は操作感を示す one-shot です。
 
 ## 5. Trigger component に共通する操作
 
-Collision / Sequence / Tick Trigger は共通して次のノードを持ちます。通常は component の参照を Event Graph へドラッグして呼び出します。
+Collision / Sequence / Tick Emitter は共通して次のノードを持ちます。通常は component の参照を Event Graph へドラッグして呼び出します。
 
 | ノード | 用途 |
 | --- | --- |
@@ -186,9 +186,9 @@ Showcase はすべての node を並べる場所ではなく、実際の gamepla
 | Zone | BP で示す範囲 |
 | --- | --- |
 | Z2 Door | `Play Hapbeat Event` による単発 event の発火 |
-| Z4 Stream Console | Stream Playback、Parameter Binding、Tick Trigger による連続制御 |
+| Z4 Stream Console | Stream Playback、Parameter Binding、Tick Emitter による連続制御 |
 
-`BP_Z2_Door` と `BP_Z4_StreamConsole` は Showcase map に配置済みの直接 BP 例です。前者は Event Graph の `Play Hapbeat Event`、後者は loop の開始・停止と slider の runtime parameter / tick を示します。Z4 の Components には `LoopTrigger`、Gain/Pan ごとの `Hapbeat Parameter Binding`、1つの `Hapbeat Tick Trigger` が設定されています。Collision / Sequence は Z1 / Z3 の C++ 実装でも component の設定と lifecycle を確認できます。接続・Target・診断はこのページと[応用](./advanced.md)で確認します。Showcase 内の Actor / Component と Event Map の配線は[Showcase の触覚配線ガイド](./showcase-unreal.md)を参照してください。
+`BP_Z2_Door` と `BP_Z4_StreamConsole` は Showcase map に配置済みの直接 BP 例です。前者は Event Graph の `Play Hapbeat Event`、後者は loop の開始・停止と slider の runtime parameter / tick を示します。Z4 の Components には `LoopTrigger`、Gain/Pan ごとの `Hapbeat Parameter Binding`、1つの `Hapbeat Tick Emitter` が設定されています。Collision / Sequence は Z1 / Z3 の C++ 実装でも component の設定と lifecycle を確認できます。接続・Target・診断はこのページと[応用](./advanced.md)で確認します。Showcase 内の Actor / Component と Event Map の配線は[Showcase の触覚配線ガイド](./showcase-unreal.md)を参照してください。
 
 ## 実装の参照先
 
@@ -196,5 +196,5 @@ Showcase はすべての node を並べる場所ではなく、実際の gamepla
 - [Trigger / Collision / Sequence](https://github.com/hapbeat/hapbeat-unreal-sdk/tree/master/Source/HapbeatSDK/Public)
 - [Stream Playback](https://github.com/hapbeat/hapbeat-unreal-sdk/blob/master/Source/HapbeatSDK/Public/HapbeatStreamPlayback.h)
 - [Parameter Binding](https://github.com/hapbeat/hapbeat-unreal-sdk/blob/master/Source/HapbeatSDK/Public/HapbeatParameterBinding.h)
-- [Tick Trigger](https://github.com/hapbeat/hapbeat-unreal-sdk/blob/master/Source/HapbeatSDK/Public/HapbeatTickEmitterComponent.h)
+- [Tick Emitter](https://github.com/hapbeat/hapbeat-unreal-sdk/blob/master/Source/HapbeatSDK/Public/HapbeatTickEmitterComponent.h)
 - [Hapbeat Subsystem](https://github.com/hapbeat/hapbeat-unreal-sdk/blob/master/Source/HapbeatSDK/Public/HapbeatSubsystem.h)

@@ -3,7 +3,6 @@
 
 #include "HapbeatParameterBinding.h"
 #include "HapbeatTickEmitterComponent.h"
-#include "HapbeatTriggerComponent.h"
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -17,20 +16,20 @@
 #include "Widgets/SViewport.h"
 
 void UHapbeatShowcaseZ4ConsoleWidget::Configure(UHapbeatParameterBinding* InGainBinding,
-	UHapbeatParameterBinding* InPanBinding, UHapbeatTriggerComponent* InTickTrigger, USoundBase* InTickSound)
+	UHapbeatParameterBinding* InPanBinding, UHapbeatTickEmitterComponent* InTickEmitter, USoundBase* InTickSound)
 {
-	if (TickTrigger != nullptr)
+	if (TickEmitter != nullptr)
 	{
-		TickTrigger->OnFired.RemoveDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::HandleTickFired);
+		TickEmitter->OnFired.RemoveDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::HandleTickFired);
 	}
 	GainBinding = InGainBinding;
 	PanBinding = InPanBinding;
-	TickTrigger = InTickTrigger;
+	TickEmitter = InTickEmitter;
 	TickSound = InTickSound;
 	ActiveSlider = EActiveSlider::None;
-	if (TickTrigger != nullptr)
+	if (TickEmitter != nullptr)
 	{
-		TickTrigger->OnFired.AddDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::HandleTickFired);
+		TickEmitter->OnFired.AddDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::HandleTickFired);
 	}
 }
 
@@ -108,13 +107,12 @@ void UHapbeatShowcaseZ4ConsoleWidget::OnPanChanged(float NormalizedValue)
 
 void UHapbeatShowcaseZ4ConsoleWidget::PrepareTickFor(EActiveSlider Slider)
 {
-	if (UHapbeatTickEmitterComponent* Emitter = Cast<UHapbeatTickEmitterComponent>(TickTrigger);
-		Emitter != nullptr && ActiveSlider != Slider)
+	if (TickEmitter != nullptr && ActiveSlider != Slider)
 	{
 		// One emitter owns one scalar reference. Reset only when control changes,
 		// so the first value from the other slider establishes a fresh reference
 		// rather than producing a false cross-control detent.
-		Emitter->ResetReference();
+		TickEmitter->ResetReference();
 		ActiveSlider = Slider;
 	}
 }

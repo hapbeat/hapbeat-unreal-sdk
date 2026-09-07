@@ -47,7 +47,7 @@ enum class EHapbeatTickMode : uint8
  * Port of Hapbeat.HapbeatTickEmitter (Unity SDK) -- same two algorithms, same
  * threshold semantics, same 64-tick-per-call safety cap.
  */
-UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent, DisplayName = "Hapbeat Tick Trigger"))
+UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent, DisplayName = "Hapbeat Tick Emitter"))
 class HAPBEATSDK_API UHapbeatTickEmitterComponent : public UHapbeatTriggerComponent
 {
 	GENERATED_BODY()

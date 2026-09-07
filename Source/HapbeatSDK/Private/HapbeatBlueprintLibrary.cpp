@@ -78,10 +78,10 @@ void UHapbeatBlueprintLibrary::StopHapbeatEvent(const UObject* WorldContextObjec
 	Subsystem->StopEntry(Map, Entry.EntryId);
 }
 
-void UHapbeatBlueprintLibrary::FireHapbeatTickFromValue(UHapbeatTriggerComponent* Trigger, float Value)
+void UHapbeatBlueprintLibrary::FireHapbeatTickFromValue(UHapbeatTickEmitterComponent* TickEmitter, float Value)
 {
-	if (UHapbeatTickEmitterComponent* TickTrigger = Cast<UHapbeatTickEmitterComponent>(Trigger))
+	if (TickEmitter != nullptr)
 	{
-		TickTrigger->FireFromValue(Value);
+		TickEmitter->FireFromValue(Value);
 	}
 }

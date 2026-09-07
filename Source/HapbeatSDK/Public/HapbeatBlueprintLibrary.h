@@ -8,7 +8,7 @@
 
 class UHapbeatEventMap;
 class UHapbeatStreamPlayback;
-class UHapbeatTriggerComponent;
+class UHapbeatTickEmitterComponent;
 
 /**
  * The call site for firing an authored haptic: "Play Hapbeat Event" /
@@ -84,12 +84,11 @@ public:
 		UHapbeatEventMap* Map, FHapbeatEntryRef Entry);
 
 	/**
-	 * Feed a scalar control value to a Tick Trigger. The component must be a
-	 * UHapbeatTickEmitterComponent at runtime; other trigger types are ignored.
-	 * This accepts the base trigger type so it can be used with a generated
-	 * Blueprint component reference after a component class is upgraded.
+	 * Feed a scalar control value to a Tick Emitter.  Requiring the concrete
+	 * component type keeps the Blueprint pin self-documenting and prevents a
+	 * non-tick trigger from being wired by accident.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat",
 		meta = (DisplayName = "Fire Hapbeat Tick From Value", Keywords = "haptic tick detent slider value hapbeat"))
-	static void FireHapbeatTickFromValue(UHapbeatTriggerComponent* Trigger, float Value);
+	static void FireHapbeatTickFromValue(UHapbeatTickEmitterComponent* TickEmitter, float Value);
 };

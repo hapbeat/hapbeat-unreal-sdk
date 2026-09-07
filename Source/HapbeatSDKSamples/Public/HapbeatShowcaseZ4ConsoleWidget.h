@@ -6,7 +6,7 @@
 #include "HapbeatShowcaseZ4ConsoleWidget.generated.h"
 
 class UHapbeatParameterBinding;
-class UHapbeatTriggerComponent;
+class UHapbeatTickEmitterComponent;
 class USoundBase;
 class SWidget;
 
@@ -14,7 +14,7 @@ class SWidget;
  * Presentation-only base for the Blueprint-authored Z4 console.
  *
  * The Blueprint subclass receives slider values and routes them to its
- * Parameter Binding and Tick Trigger components. This class only supplies the
+ * Parameter Binding and Tick Emitter components. This class only supplies the
  * native Slate presentation and returns focus to the game viewport after a
  * drag. The presentation uses the same Slate controls as the original Z4
  * console so it is visually consistent with the address-override panel above it.
@@ -33,10 +33,10 @@ public:
 	TObjectPtr<UHapbeatParameterBinding> PanBinding;
 
 	UPROPERTY(BlueprintReadWrite, Category = "Z4")
-	TObjectPtr<UHapbeatTriggerComponent> TickTrigger;
+	TObjectPtr<UHapbeatTickEmitterComponent> TickEmitter;
 
-	/** Retained while generated Showcase assets are rebuilt in place. */
-	UPROPERTY(BlueprintReadWrite, Category = "Z4", meta = (DeprecatedProperty, DeprecationMessage = "The generated Widget Blueprint uses Fire Hapbeat Tick From Value."))
+	/** Optional local sound paired with each emitted detent. */
+	UPROPERTY(BlueprintReadWrite, Category = "Z4")
 	TObjectPtr<USoundBase> TickSound;
 
 	/**
@@ -46,17 +46,13 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Z4")
 	void Configure(UHapbeatParameterBinding* InGainBinding, UHapbeatParameterBinding* InPanBinding,
-		UHapbeatTriggerComponent* InTickTrigger, USoundBase* InTickSound = nullptr);
+		UHapbeatTickEmitterComponent* InTickEmitter, USoundBase* InTickSound = nullptr);
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Z4")
 	void HandleGainValueChanged(float Value);
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Z4")
 	void HandlePanValueChanged(float Value);
-
-	/** Compatibility event for previous generated Showcase assets. */
-	UFUNCTION(BlueprintImplementableEvent, Category = "Z4", meta = (DeprecatedFunction, DeprecationMessage = "Use Fire Hapbeat Tick From Value in the Widget Blueprint."))
-	void HandleTick();
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;

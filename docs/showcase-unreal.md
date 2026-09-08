@@ -206,10 +206,16 @@ projectile が target に Hit
 ### 編集する場所を開く
 
 1. <span class="hb-location">Showcase map > World Outliner</span> で `Z5_ChargeShot` を選びます。
-2. <span class="hb-location">Details > Hapbeat > Showcase > Haptic Events</span> を開きます。
+2. <span class="hb-location">Details > Hapbeat > Showcase</span> を開きます。Event Map entry は <span class="hb-location">Haptic Events</span>、charge の調整は <span class="hb-location">Charge</span> にあります。
 
 :::tip[手を動かして試す]
-- **操作:** <span class="hb-field">Heavy Shot Event</span> を変更します。
+- **操作 A — threshold:** <span class="hb-field">Heavy Threshold</span> を変更します。
+  - 例: `0.7` から `0.4` にする。
+  - **確認できること:** threshold entry と heavy shot へ切り替わるタイミングが早くなります。
+- **操作 B — loop の増え方:** <span class="hb-field">Charge Loop Gain Curve</span> の中間を下げます。
+  - 例: `ChargeT = 0.5` の Gain を `0.2` にする。
+  - **確認できること:** charge 前半の loop は弱く、後半でより急に強くなります。
+- **操作 C — entry:** <span class="hb-field">Heavy Shot Event</span> を変更します。
   - 例: `z5_shot_heavy` から `z1_pin_hit` に切り替える。
   - **確認できること:** heavy charge の release が、選んだ entry を再生します。
 :::
@@ -229,7 +235,7 @@ Plugins
         └ HapbeatShowcaseZ5ChargeShotActor.cpp
 ```
 
-`BuildEventMap` が Details の `EventMapOverride` と 6 つの `*Event` を entry ID に解決します。`HandleChargeBegin`、`Tick`、`FireShotAfterDelay` が charge / shot の ID を `FireOneShotEntry` へ渡します。`SetUpTarget` は light / heavy target-hit の ID を各 collision trigger へ渡します。
+`BuildEventMap` が Details の `EventMapOverride` と 6 つの `*Event` を entry ID に解決します。`Tick` は `Charge Loop Gain Curve` を評価し、再生中の charge loop の Gain を更新します。`HandleChargeBegin`、`Tick`、`FireShotAfterDelay` が charge / shot の ID を `FireOneShotEntry` へ渡します。`SetUpTarget` は light / heavy target-hit の ID を各 collision trigger へ渡します。
 
 ## 変更場所
 

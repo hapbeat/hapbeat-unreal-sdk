@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Curves/CurveFloat.h" // FRuntimeFloatCurve
 #include "GameFramework/Actor.h"
 #include "HapbeatEntryRef.h"
 #include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
@@ -50,12 +51,11 @@ class AHapbeatShowcaseZ5ProjectileActor;
  * HOLD THE LEFT MOUSE BUTTON to charge (Unity ChargeShooter's LMB hold):
  *   - press:   starts the z5_charge_loop StreamClip loop (baseline =
  *              entry.GetEffectiveGain(), initial modulator = the charge
- *              curve at t=0 => silent start, race-free).
+ *              ChargeLoopGainCurve at t=0 => silent start, race-free).
  *   - held:    each Tick, chargeT = clamp01((now - pressTime) / MaxChargeSeconds);
- *              LoopPlayback->ApplyGainModulation(curve(chargeT)). The curve is
- *              FMath::SmoothStep(0,1,chargeT) -- see FireOneShotEntry doc /
- *              .cpp comment for why this is byte-for-byte Unity's
- *              AnimationCurve.EaseInOut(0,0,1,1).
+ *              LoopPlayback->ApplyGainModulation(ChargeLoopGainCurve(chargeT)).
+ *              The default curve is Unity's AnimationCurve.EaseInOut(0,0,1,1),
+ *              and it can be re-authored in Details.
  *              Crossing HeavyThreshold (default 0.7) fires z5_charge_thd once.
  *   - release: Stop() the loop playback handle
  *              (parity with Unity ChargeShooter.Release()); after
@@ -130,12 +130,21 @@ public:
 	bool DebugIsChargeSoundLooping() const;
 
 	/** Charge fraction (0..1) at/above which a shot / hit counts as "heavy". Mirrors Unity's _heavyThreshold (default 0.7). */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Charge", meta = (ClampMin = "0.0", ClampMax = "1.0", DisplayName = "Heavy Threshold"))
 	float HeavyThreshold = 0.7f;
 
 	/** Seconds of holding LMB to reach full charge (chargeT = 1). Unity Showcase.unity's _maxChargeSeconds = 2. */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.1"))
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Charge", meta = (ClampMin = "0.1", DisplayName = "Max Charge Seconds"))
 	float MaxChargeSeconds = 2.0f;
+
+	/**
+	 * Maps charge progress (X: 0..1) to the haptic charge-loop gain multiplier
+	 * (Y: normally 0..1). The shipped curve has zero slope at both ends, exactly
+	 * matching Unity's AnimationCurve.EaseInOut(0,0,1,1). Editing it changes the
+	 * loop's rise only; threshold and shot one-shots keep their authored gain.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Charge", meta = (DisplayName = "Charge Loop Gain Curve"))
+	FRuntimeFloatCurve ChargeLoopGainCurve;
 
 	/** Projectile launch speed (cm/s) at full charge. Mirrors Unity's _maxLaunchSpeed (18 m/s = 1800 cm/s, UE uses centimeters). */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase", meta = (ClampMin = "0.0"))
@@ -258,6 +267,9 @@ private:
 
 	/** Resolve an arbitrary entry id from EventMap and fire it as a StreamClip one-shot at its effective gain (initial modulator = 1). No-op (warn) if unresolvable. */
 	void FireOneShotEntry(const FGuid& EntryId);
+
+	/** Evaluates the user-authored charge-loop curve; an empty curve retains the shipped SmoothStep behavior. */
+	float EvaluateChargeLoopGain(float ChargeT) const;
 
 	/** Spawn a projectile actor from the muzzle point toward the targets, scaled/sped by chargeT. */
 	void SpawnProjectile(float ChargeT, bool bHeavy);

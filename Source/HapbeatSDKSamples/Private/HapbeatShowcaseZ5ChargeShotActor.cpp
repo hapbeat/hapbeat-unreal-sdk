@@ -102,6 +102,26 @@ AHapbeatShowcaseZ5ChargeShotActor::AHapbeatShowcaseZ5ChargeShotActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
+	// Unity's AnimationCurve.EaseInOut(0,0,1,1): cubic Hermite with zero
+	// tangents at both ends. Keep the identical default visible and editable in
+	// Details rather than burying the rise shape in Tick().
+	if (FRichCurve* Curve = ChargeLoopGainCurve.GetRichCurve())
+	{
+		Curve->Reset();
+		const FKeyHandle StartHandle = Curve->AddKey(0.0f, 0.0f);
+		const FKeyHandle EndHandle = Curve->AddKey(1.0f, 1.0f);
+		auto SetSmoothEndpoint = [Curve](const FKeyHandle Handle)
+		{
+			FRichCurveKey& Key = Curve->GetKey(Handle);
+			Key.InterpMode = RCIM_Cubic;
+			Key.TangentMode = RCTM_User;
+			Key.ArriveTangent = 0.0f;
+			Key.LeaveTangent = 0.0f;
+		};
+		SetSmoothEndpoint(StartHandle);
+		SetSmoothEndpoint(EndHandle);
+	}
+
 	// No stand model: Unity's blaster is camera-mounted and there is nothing else
 	// in its Z5 but the board, so the root is just the zone's transform.
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
@@ -713,9 +733,8 @@ void AHapbeatShowcaseZ5ChargeShotActor::HandleChargeBegin()
 		return;
 	}
 
-	// chargeT = 0 at press time -> curve(0) = 0 -> silent, race-free start
-	// (matches Unity's `initialMod = _gainCurve.Evaluate(0f)`).
-	const float InitialMod = FMath::SmoothStep(0.0f, 1.0f, 0.0f);
+	// chargeT = 0 at press time -> curve(0) = 0 -> silent, race-free start.
+	const float InitialMod = EvaluateChargeLoopGain(0.0f);
 	// Through PlayEntry (the single runtime play path) rather than StreamClip:
 	// baseline (entry gain x manifest intensity), target and the authored loop
 	// flag all come off the entry, and the haptic delay applies like anywhere
@@ -863,6 +882,15 @@ void AHapbeatShowcaseZ5ChargeShotActor::DebugSetChargeForCapture(float T)
 	LastChargeT = FMath::Clamp(T, 0.0f, 1.0f);
 }
 
+float AHapbeatShowcaseZ5ChargeShotActor::EvaluateChargeLoopGain(float ChargeT) const
+{
+	const float ClampedT = FMath::Clamp(ChargeT, 0.0f, 1.0f);
+	const FRichCurve* Curve = ChargeLoopGainCurve.GetRichCurveConst();
+	return Curve != nullptr && !Curve->GetConstRefOfKeys().IsEmpty()
+		? Curve->Eval(ClampedT)
+		: FMath::SmoothStep(0.0f, 1.0f, ClampedT);
+}
+
 void AHapbeatShowcaseZ5ChargeShotActor::DebugFireProjectileForCapture(float ChargeT, bool bHeavy)
 {
 	SpawnProjectile(FMath::Clamp(ChargeT, 0.0f, 1.0f), bHeavy);
@@ -974,11 +1002,7 @@ void AHapbeatShowcaseZ5ChargeShotActor::Tick(float DeltaSeconds)
 		{
 			if (Pb->IsActive())
 			{
-				// Unity: AnimationCurve.EaseInOut(0,0,1,1) is a cubic Hermite with
-				// zero in/out tangents at both keys, i.e. exactly the standard
-				// smoothstep polynomial 3t^2 - 2t^3 over [0,1] -- FMath::SmoothStep
-				// reproduces it byte-for-byte on this domain.
-				Pb->ApplyGainModulation(FMath::SmoothStep(0.0f, 1.0f, T));
+				Pb->ApplyGainModulation(EvaluateChargeLoopGain(T));
 			}
 		}
 

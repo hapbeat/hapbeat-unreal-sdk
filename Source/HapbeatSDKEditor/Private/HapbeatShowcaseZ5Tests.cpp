@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Curves/CurveFloat.h"
 #include "HapbeatEntryRef.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatShowcaseZ5ChargeShotActor.h"
@@ -31,6 +32,19 @@ bool FHapbeatZ5EditableEventReferencesTest::RunTest(const FString& Parameters)
 	UHapbeatEventMap* EventMap = MapProperty != nullptr
 		? Cast<UHapbeatEventMap>(MapProperty->GetObjectPropertyValue_InContainer(Actor)) : nullptr;
 	TestNotNull(TEXT("Z5 has an authored Event Map"), EventMap);
+
+	const FStructProperty* ChargeCurveProperty = FindFProperty<FStructProperty>(Class, TEXT("ChargeLoopGainCurve"));
+	const FRuntimeFloatCurve* ChargeCurve = ChargeCurveProperty != nullptr
+		? ChargeCurveProperty->ContainerPtrToValuePtr<FRuntimeFloatCurve>(Actor) : nullptr;
+	const FRichCurve* RichCurve = ChargeCurve != nullptr ? ChargeCurve->GetRichCurveConst() : nullptr;
+	if (TestNotNull(TEXT("Z5 exposes Charge Loop Gain Curve in Details"), ChargeCurve)
+		&& TestNotNull(TEXT("Z5 Charge Loop Gain Curve has an editable rich curve"), RichCurve))
+	{
+		TestEqual(TEXT("Z5 Charge Loop Gain Curve starts silent"), RichCurve->Eval(0.0f), 0.0f);
+		TestEqual(TEXT("Z5 Charge Loop Gain Curve reaches authored gain"), RichCurve->Eval(1.0f), 1.0f);
+		TestTrue(TEXT("Z5 Charge Loop Gain Curve retains EaseInOut at 25%"),
+			FMath::IsNearlyEqual(RichCurve->Eval(0.25f), 0.15625f, KINDA_SMALL_NUMBER));
+	}
 
 	for (const TPair<FName, FString>& Expected : {
 		TPair<FName, FString>(TEXT("ChargeLoopEvent"), TEXT("showcase-kit.z5_charge_loop")),

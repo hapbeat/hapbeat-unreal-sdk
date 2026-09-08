@@ -49,7 +49,6 @@ ball が pin に Hit
 
 1. `Showcase` map を開き、World Outliner で `Z1_Bowling` を選びます。
 2. Details の **Hapbeat > Bowling > Pin Hit** を開きます。
-3. entry 自体の Clip、Gain、Target を変える場合は、Content Browser で `HapbeatSamples/Showcase/EM_Showcase` を開きます。
 
 :::tip[手を動かして試す]
 - **操作 A — 強さ:** `EM_Showcase > z1_pin_hit > Gain` を変更します。
@@ -265,7 +264,6 @@ projectile が target に Hit
 
 1. `Showcase` map の World Outliner で `Z5_ChargeShot` を選びます。
 2. Details の **Hapbeat > Event Map Override** と **Hapbeat > Showcase > Haptic Wiring** を開きます。
-3. entry 自体の Clip、Gain、Target、loop を変える場合は、Content Browser で `HapbeatSamples/Showcase/EM_Showcase` を開きます。
 
 :::tip[手を動かして試す]
 - **操作:** `Z5_ChargeShot > Heavy Threshold` を変更します。

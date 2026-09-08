@@ -194,7 +194,7 @@ Plugins
 
 ## Z4 Stream Console — loop と runtime parameter
 
-`BP_Z4_StreamConsole` と `BP_Z4_StreamConsoleWidget` は、stream の開始・停止、runtime parameter、tick、Address Override を Blueprint で接続する例です。
+`BP_Z4_StreamConsole` は、stream の開始・停止、runtime parameter、tick、Address Override を 1 枚の Event Graph で接続する例です。`BP_Z4_StreamConsoleWidget` は slider 表示と値の通知だけを担当します。
 
 ```text
 Space
@@ -203,8 +203,10 @@ Space
   → Running: LoopTrigger.Stop → Loop State = Stopped
 
 Gain / Pan slider
-  → GainBinding / PanBinding.Set Value
-  → Evaluate Now
+  → On Gain/Pan Slider Changed
+  → BP_Z4_StreamConsole Event Graph
+  → Set Binding Input (Hapbeat)
+  → Update Stream Parameter (Hapbeat)
   → Fire Hapbeat Tick From Value (TickEmitter)
 ```
 
@@ -218,11 +220,11 @@ Gain / Pan slider
 
 1. World Outliner で `Z4_StreamConsole` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z4_StreamConsole` を開きます。
 2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickEmitter`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。`TickEmitter` の class は **Hapbeat Tick Emitter** です。
-3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から **Switch on Loop State** をたどり、Stopped の `LoopTrigger.Fire` と Running の `LoopTrigger.Stop` を確認します。`On Showcase Zone Activated` から `Create Widget` と `AddressPanel.Show` も確認します。
+3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から **Switch on Loop State** をたどり、Stopped の `Fire Trigger (Hapbeat)` と Running の `Stop Trigger (Hapbeat)` を確認します。`On Showcase Zone Activated` から `Create Widget`、`On Gain Slider Changed`、`On Pan Slider Changed` の delegate を接続していることも確認します。
 4. **My Blueprint > Construction Script** を開きます。`GainBinding` と `PanBinding` の `Set Target Trigger` に、この Actor の `LoopTrigger` を接続しています。
-5. `BP_Z4_StreamConsoleWidget` を開き、**My Blueprint > Graphs > EventGraph** を開きます。`Handle Gain Value Changed` と `Handle Pan Value Changed` はそれぞれ `Binding.Set Value` → `Evaluate Now` → `Fire Hapbeat Tick From Value` に接続されています。
+5. `On Gain Slider Changed` / `On Pan Slider Changed` から、それぞれ `Set Binding Input (Hapbeat)` → `Update Stream Parameter (Hapbeat)` → `Fire Hapbeat Tick From Value` をたどります。Widget BP は表示専用で、SDK 配線を確認するために開く必要はありません。
 
-`LoopTrigger` は `z4_stream_loop`、`TickEmitter` は `z4_slider_tick` を指します。各 component の Details で **Event Map** と entry を変更できます。Gain/Pan を切り替えた最初の値では tick の参照をリセットするため、別の slider の値との差による誤発火はありません。`GainBinding` と `PanBinding` の **Source = External** にスライダー値を渡し、Construction Script で接続した `LoopTrigger` の再生だけを調整します。
+`LoopTrigger` は `z4_stream_loop`、`TickEmitter` は `z4_slider_tick` を指します。各 component の Details で **Event Map** と entry を変更できます。Gain/Pan を切り替えた最初の値では tick の参照をリセットするため、別の slider の値との差による誤発火はありません。`GainBinding` と `PanBinding` の **Source = External** に slider 値を渡し、Construction Script で接続した `LoopTrigger` の再生だけを調整します。
 
 `AddressPanel` は Zone が表示中に `Show`、非表示時に `Hide` されます。Player / Group の選択はこの component の UI で Apply します。
 

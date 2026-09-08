@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatShowcaseZ4ConsoleWidget.h"
 
-#include "HapbeatParameterBinding.h"
 #include "HapbeatTickEmitterComponent.h"
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
@@ -15,15 +14,12 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/SViewport.h"
 
-void UHapbeatShowcaseZ4ConsoleWidget::Configure(UHapbeatParameterBinding* InGainBinding,
-	UHapbeatParameterBinding* InPanBinding, UHapbeatTickEmitterComponent* InTickEmitter, USoundBase* InTickSound)
+void UHapbeatShowcaseZ4ConsoleWidget::Configure(UHapbeatTickEmitterComponent* InTickEmitter, USoundBase* InTickSound)
 {
 	if (TickEmitter != nullptr)
 	{
 		TickEmitter->OnFired.RemoveDynamic(this, &UHapbeatShowcaseZ4ConsoleWidget::HandleTickFired);
 	}
-	GainBinding = InGainBinding;
-	PanBinding = InPanBinding;
 	TickEmitter = InTickEmitter;
 	TickSound = InTickSound;
 	ActiveSlider = EActiveSlider::None;
@@ -94,7 +90,7 @@ void UHapbeatShowcaseZ4ConsoleWidget::OnGainChanged(float Value)
 {
 	GainValue = FMath::Clamp(FMath::RoundToFloat(Value * 100.0f) / 100.0f, 0.0f, 1.0f);
 	PrepareTickFor(EActiveSlider::Gain);
-	HandleGainValueChanged(GainValue);
+	OnGainSliderChanged.Broadcast(GainValue);
 }
 
 void UHapbeatShowcaseZ4ConsoleWidget::OnPanChanged(float NormalizedValue)
@@ -102,7 +98,7 @@ void UHapbeatShowcaseZ4ConsoleWidget::OnPanChanged(float NormalizedValue)
 	const float RawPan = NormalizedValue * 2.0f - 1.0f;
 	PanValue = FMath::Clamp(FMath::RoundToFloat(RawPan * 100.0f) / 100.0f, -1.0f, 1.0f);
 	PrepareTickFor(EActiveSlider::Pan);
-	HandlePanValueChanged(PanValue);
+	OnPanSliderChanged.Broadcast(PanValue);
 }
 
 void UHapbeatShowcaseZ4ConsoleWidget::PrepareTickFor(EActiveSlider Slider)

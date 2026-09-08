@@ -131,7 +131,7 @@ public:
 	 * Virtual so UHapbeatSequenceComponent can override with its 3-phase behavior
 	 * while keeping a single "Fire" entry point for Blueprint / UnityEvent wiring.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Trigger", meta = (DisplayName = "Fire Trigger (Hapbeat)"))
 	virtual void Fire();
 
 	/**
@@ -165,7 +165,7 @@ public:
 	 * StreamClip -> stop the active playback this trigger started (per-source,
 	 * never the whole stream session).
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Trigger", meta = (DisplayName = "Stop Trigger (Hapbeat)"))
 	virtual void Stop();
 
 	/**

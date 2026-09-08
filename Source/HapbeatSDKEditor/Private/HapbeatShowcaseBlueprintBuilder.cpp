@@ -34,7 +34,9 @@
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "FileHelpers.h"
 #include "InputCoreTypes.h"
+#include "K2Node_AddDelegate.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_CustomEvent.h"
 #include "K2Node_DynamicCast.h"
 #include "K2Node_Event.h"
 #include "K2Node_FunctionEntry.h"
@@ -319,6 +321,39 @@ UK2Node_Event* AddOverrideEvent(UEdGraph* Graph, UClass* OwnerClass, FName Funct
 	Node->PostPlacedNewNode();
 	Node->AllocateDefaultPins();
 	return Node;
+}
+
+struct FWidgetSliderDelegateNodes
+{
+	UK2Node_AddDelegate* Assign = nullptr;
+	UK2Node_CustomEvent* Event = nullptr;
+};
+
+FWidgetSliderDelegateNodes AddWidgetSliderDelegate(UEdGraph* Graph, FName DelegateName, const TCHAR* EventName,
+	int32 AssignX, int32 AssignY, int32 EventX, int32 EventY)
+{
+	FMulticastDelegateProperty* Delegate = FindFProperty<FMulticastDelegateProperty>(
+		UHapbeatShowcaseZ4ConsoleWidget::StaticClass(), DelegateName);
+	checkf(Delegate != nullptr, TEXT("Z4 console widget is missing delegate %s."), *DelegateName.ToString());
+
+	// Set the external property before allocating pins. UE 5.4's Assign Delegate
+	// node tries to create its child event in PostPlacedNewNode(), before pins
+	// exist, so create the equivalent Bind Event node and child event explicitly.
+	UK2Node_AddDelegate* Assign = NewObject<UK2Node_AddDelegate>(Graph);
+	Assign->SetFromProperty(Delegate, false, UHapbeatShowcaseZ4ConsoleWidget::StaticClass());
+	Graph->AddNode(Assign, false, false);
+	Assign->NodePosX = AssignX;
+	Assign->NodePosY = AssignY;
+	Assign->CreateNewGuid();
+	Assign->PostPlacedNewNode();
+	Assign->AllocateDefaultPins();
+
+	UK2Node_CustomEvent* Event = UK2Node_CustomEvent::CreateFromFunction(
+		FVector2D(EventX, EventY), Graph, EventName, Delegate->SignatureFunction, false);
+	checkf(Event != nullptr, TEXT("Could not create generated Z4 slider event %s."), EventName);
+	GetDefault<UEdGraphSchema_K2>()->TryCreateConnection(
+		Event->FindPinChecked(UK2Node_CustomEvent::DelegateOutputName), Assign->GetDelegatePin());
+	return { Assign, Event };
 }
 
 void AddObjectMember(UBlueprint* Blueprint, const TCHAR* Name, UClass* Class)
@@ -850,60 +885,10 @@ bool CreateDoorBlueprint(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
 
 void CreateStreamConsoleWidgetBlueprint(UWidgetBlueprint* Blueprint)
 {
+	// The Slate widget owns visual controls only. Slider delegates are handled in
+	// BP_Z4_StreamConsole so all Hapbeat SDK wiring is visible in one graph.
 	ClearGeneratedGraph(Blueprint);
 	FKismetEditorUtilities::CompileBlueprint(Blueprint);
-	UEdGraph* Graph = GetEventGraph(Blueprint);
-
-	// Generated graphs use a fixed column/lane grid. Slate resolves exact node
-	// dimensions only while an editor tab is painted, so a deterministic grid is
-	// more reliable than attempting to query unavailable headless geometry.
-	constexpr int32 Column = 300;
-	constexpr int32 Lane = 360;
-	const int32 StartX = -880;
-	const int32 GainY = -360;
-	const int32 PanY = GainY + Lane;
-	AddComment(Graph, TEXT("GAIN SLIDER  |  Set Value  ->  Evaluate Now  ->  Fire From Value (Tick Emitter)"), StartX - 90, GainY - 80, 1780, 300,
-		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("PAN SLIDER  |  Set Value  ->  Evaluate Now  ->  Fire From Value (Tick Emitter)"), StartX - 90, PanY - 80, 1780, 300,
-		FLinearColor(0.12f, 0.30f, 0.52f));
-
-	UK2Node_Event* GainEvent = AddOverrideEvent(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, HandleGainValueChanged), StartX, GainY);
-	UK2Node_VariableGet* GainBinding = AddSelfVariableGet(Graph, TEXT("GainBinding"), StartX + Column, GainY + 150);
-	UK2Node_CallFunction* SetGain = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), StartX + Column * 2, GainY);
-	UK2Node_CallFunction* EvaluateGain = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), StartX + Column * 3, GainY);
-	UK2Node_VariableGet* GainTick = AddSelfVariableGet(Graph, TEXT("TickEmitter"), StartX + Column * 4, GainY + 150);
-	UK2Node_CallFunction* FireGainTick = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), StartX + Column * 5, GainY);
-	ConnectPins(GainEvent->GetThenPin(), SetGain->GetExecPin());
-	ConnectPins(GainBinding->GetValuePin(), FindTargetPinChecked(SetGain));
-	ConnectPins(FindPinChecked(GainEvent, TEXT("Value")), FindPinChecked(SetGain, TEXT("Value")));
-	ConnectPins(SetGain->GetThenPin(), EvaluateGain->GetExecPin());
-	ConnectPins(GainBinding->GetValuePin(), FindTargetPinChecked(EvaluateGain));
-	ConnectPins(EvaluateGain->GetThenPin(), FireGainTick->GetExecPin());
-	ConnectPins(GainTick->GetValuePin(), FindPinChecked(FireGainTick, TEXT("TickEmitter")));
-	ConnectPins(FindPinChecked(GainEvent, TEXT("Value")), FindPinChecked(FireGainTick, TEXT("Value")));
-
-	UK2Node_Event* PanEvent = AddOverrideEvent(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, HandlePanValueChanged), StartX, PanY);
-	UK2Node_VariableGet* PanBinding = AddSelfVariableGet(Graph, TEXT("PanBinding"), StartX + Column, PanY + 150);
-	UK2Node_CallFunction* SetPan = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), StartX + Column * 2, PanY);
-	UK2Node_CallFunction* EvaluatePan = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), StartX + Column * 3, PanY);
-	UK2Node_VariableGet* PanTick = AddSelfVariableGet(Graph, TEXT("TickEmitter"), StartX + Column * 4, PanY + 150);
-	UK2Node_CallFunction* FirePanTick = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), StartX + Column * 5, PanY);
-	ConnectPins(PanEvent->GetThenPin(), SetPan->GetExecPin());
-	ConnectPins(PanBinding->GetValuePin(), FindTargetPinChecked(SetPan));
-	ConnectPins(FindPinChecked(PanEvent, TEXT("Value")), FindPinChecked(SetPan, TEXT("Value")));
-	ConnectPins(SetPan->GetThenPin(), EvaluatePan->GetExecPin());
-	ConnectPins(PanBinding->GetValuePin(), FindTargetPinChecked(EvaluatePan));
-	ConnectPins(EvaluatePan->GetThenPin(), FirePanTick->GetExecPin());
-	ConnectPins(PanTick->GetValuePin(), FindPinChecked(FirePanTick, TEXT("TickEmitter")));
-	ConnectPins(FindPinChecked(PanEvent, TEXT("Value")), FindPinChecked(FirePanTick, TEXT("Value")));
 }
 
 void ConfigureStreamBindingTargets(UBlueprint* Blueprint)
@@ -1056,9 +1041,13 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	// and data accessors in separate lanes.
 	AddComment(Graph, TEXT("SPACE  |  Switch on Loop State  |  Stopped: Fire  |  Running: Stop"), -1430, -650, 1750, 260,
 		FLinearColor(0.18f, 0.18f, 0.18f));
-	AddComment(Graph, TEXT("ON SHOWCASE ZONE ACTIVATED  |  seed bindings, create console, show address override"), -1430, -210, 3500, 600,
+	AddComment(Graph, TEXT("ON SHOWCASE ZONE ACTIVATED  |  seed bindings, create console, bind slider delegates, show address override"), -1430, -210, 4400, 600,
 		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("ON SHOWCASE ZONE DEACTIVATED  |  stop loop, remove console, hide address override"), -1430, 590, 2200, 420,
+	AddComment(Graph, TEXT("GAIN SLIDER  |  Set Binding Input (Hapbeat)  ->  Update Stream Parameter (Hapbeat)  ->  Fire Hapbeat Tick From Value"), -1430, 590, 2250, 280,
+		FLinearColor(0.10f, 0.42f, 0.22f));
+	AddComment(Graph, TEXT("PAN SLIDER  |  Set Binding Input (Hapbeat)  ->  Update Stream Parameter (Hapbeat)  ->  Fire Hapbeat Tick From Value"), -1430, 940, 2250, 280,
+		FLinearColor(0.12f, 0.30f, 0.52f));
+	AddComment(Graph, TEXT("ON SHOWCASE ZONE DEACTIVATED  |  stop loop, remove console, hide address override"), -1430, 1290, 2500, 420,
 		FLinearColor(0.50f, 0.15f, 0.15f));
 
 	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::SpaceBar, -1340, -570);
@@ -1102,26 +1091,31 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConsoleCast->CreateNewGuid();
 	ConsoleCast->PostPlacedNewNode();
 	ConsoleCast->AllocateDefaultPins();
-	// Keep the three component getters beside Configure. They are references to
-	// the same components in the Components tree, not duplicate components.
-	UK2Node_VariableGet* GainForWidget = AddComponentGet(Graph, TEXT("GainBinding"), 460, 20);
-	UK2Node_VariableGet* PanForWidget = AddComponentGet(Graph, TEXT("PanBinding"), 460, 135);
+	// The Widget receives only its presentation collaborators. Gain / Pan SDK
+	// wiring stays in this Actor graph, immediately below the delegate bindings.
 	UK2Node_VariableGet* TickForWidget = AddComponentGet(Graph, TEXT("TickEmitter"), 460, 250);
 	UK2Node_CallFunction* ConfigureWidget = AddCall(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, Configure), 700, -120);
 	FindPinChecked(ConfigureWidget, TEXT("InTickSound"))->DefaultObject = TickSound;
+	FWidgetSliderDelegateNodes GainDelegate = AddWidgetSliderDelegate(Graph, TEXT("OnGainSliderChanged"), TEXT("OnGainSliderChanged"),
+		1040, -120, -1340, 670);
+	FWidgetSliderDelegateNodes PanDelegate = AddWidgetSliderDelegate(Graph, TEXT("OnPanSliderChanged"), TEXT("OnPanSliderChanged"),
+		1380, -120, -1340, 1020);
 	UK2Node_CallFunction* AddToViewport = AddCall(Graph, UUserWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UUserWidget, AddToViewport), 1040, -120);
-	UK2Node_VariableSet* StoreWidget = AddSelfVariableSet(Graph, TEXT("ConsoleWidget"), 1350, -120);
-	// The cast result is used by Configure, AddToViewport and StoreWidget. Route
+		GET_FUNCTION_NAME_CHECKED(UUserWidget, AddToViewport), 1720, -120);
+	UK2Node_VariableSet* StoreWidget = AddSelfVariableSet(Graph, TEXT("ConsoleWidget"), 2030, -120);
+	// The cast result is used by Configure, both delegate bindings, AddToViewport
+	// and StoreWidget. Route
 	// that shared reference above the execution row so no data wire runs behind
 	// node bodies. Each consumer gets a short, visible branch from the bus.
 	UK2Node_Knot* ConsoleReferenceForConfigure = AddReroute(Graph, 430, -250);
-	UK2Node_Knot* ConsoleReferenceForViewport = AddReroute(Graph, 950, -250);
-	UK2Node_Knot* ConsoleReferenceForStore = AddReroute(Graph, 1260, -250);
-	UK2Node_VariableGet* AddressForShow = AddComponentGet(Graph, TEXT("AddressPanel"), 1580, 40);
+	UK2Node_Knot* ConsoleReferenceForGainDelegate = AddReroute(Graph, 950, -250);
+	UK2Node_Knot* ConsoleReferenceForPanDelegate = AddReroute(Graph, 1290, -250);
+	UK2Node_Knot* ConsoleReferenceForViewport = AddReroute(Graph, 1630, -250);
+	UK2Node_Knot* ConsoleReferenceForStore = AddReroute(Graph, 1940, -250);
+	UK2Node_VariableGet* AddressForShow = AddComponentGet(Graph, TEXT("AddressPanel"), 2260, 40);
 	UK2Node_CallFunction* ShowAddress = AddCall(Graph, UHapbeatAddressOverridePanelComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Show), 1880, -120);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Show), 2560, -120);
 	ConnectPins(Activated->GetThenPin(), SeedGain->GetExecPin());
 	ConnectPins(GainForSeed->GetValuePin(), FindTargetPinChecked(SeedGain));
 	ConnectPins(SeedGain->GetThenPin(), SeedPan->GetExecPin());
@@ -1132,11 +1126,15 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(ConsoleCast->GetValidCastPin(), ConfigureWidget->GetExecPin());
 	ConnectPins(ConsoleCast->GetCastResultPin(), ConsoleReferenceForConfigure->GetInputPin());
 	ConnectPins(ConsoleReferenceForConfigure->GetOutputPin(), FindTargetPinChecked(ConfigureWidget));
-	ConnectPins(GainForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InGainBinding")));
-	ConnectPins(PanForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InPanBinding")));
 	ConnectPins(TickForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InTickEmitter")));
-	ConnectPins(ConfigureWidget->GetThenPin(), AddToViewport->GetExecPin());
-	ConnectPins(ConsoleReferenceForConfigure->GetOutputPin(), ConsoleReferenceForViewport->GetInputPin());
+	ConnectPins(ConfigureWidget->GetThenPin(), GainDelegate.Assign->GetExecPin());
+	ConnectPins(ConsoleReferenceForConfigure->GetOutputPin(), ConsoleReferenceForGainDelegate->GetInputPin());
+	ConnectPins(ConsoleReferenceForGainDelegate->GetOutputPin(), FindTargetPinChecked(GainDelegate.Assign));
+	ConnectPins(GainDelegate.Assign->GetThenPin(), PanDelegate.Assign->GetExecPin());
+	ConnectPins(ConsoleReferenceForGainDelegate->GetOutputPin(), ConsoleReferenceForPanDelegate->GetInputPin());
+	ConnectPins(ConsoleReferenceForPanDelegate->GetOutputPin(), FindTargetPinChecked(PanDelegate.Assign));
+	ConnectPins(PanDelegate.Assign->GetThenPin(), AddToViewport->GetExecPin());
+	ConnectPins(ConsoleReferenceForPanDelegate->GetOutputPin(), ConsoleReferenceForViewport->GetInputPin());
 	ConnectPins(ConsoleReferenceForViewport->GetOutputPin(), FindTargetPinChecked(AddToViewport));
 	ConnectPins(AddToViewport->GetThenPin(), StoreWidget->GetExecPin());
 	ConnectPins(ConsoleReferenceForViewport->GetOutputPin(), ConsoleReferenceForStore->GetInputPin());
@@ -1144,21 +1142,57 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(StoreWidget->GetThenPin(), ShowAddress->GetExecPin());
 	ConnectPins(AddressForShow->GetValuePin(), FindTargetPinChecked(ShowAddress));
 
+	// The UI dispatchers enter the Actor Blueprint here. Each lane makes the
+	// complete SDK path visible without opening the Widget Blueprint.
+	UK2Node_VariableGet* GainBindingForInput = AddComponentGet(Graph, TEXT("GainBinding"), -1090, 820);
+	UK2Node_CallFunction* SetGainInput = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -990, 670);
+	UK2Node_CallFunction* UpdateGainParameter = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), -650, 670);
+	UK2Node_VariableGet* GainTickEmitter = AddComponentGet(Graph, TEXT("TickEmitter"), -400, 820);
+	UK2Node_CallFunction* FireGainTick = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), -300, 670);
+	ConnectPins(GainDelegate.Event->GetThenPin(), SetGainInput->GetExecPin());
+	ConnectPins(GainBindingForInput->GetValuePin(), FindTargetPinChecked(SetGainInput));
+	ConnectPins(FindPinChecked(GainDelegate.Event, TEXT("Value")), FindPinChecked(SetGainInput, TEXT("Value")));
+	ConnectPins(SetGainInput->GetThenPin(), UpdateGainParameter->GetExecPin());
+	ConnectPins(GainBindingForInput->GetValuePin(), FindTargetPinChecked(UpdateGainParameter));
+	ConnectPins(UpdateGainParameter->GetThenPin(), FireGainTick->GetExecPin());
+	ConnectPins(GainTickEmitter->GetValuePin(), FindPinChecked(FireGainTick, TEXT("TickEmitter")));
+	ConnectPins(FindPinChecked(GainDelegate.Event, TEXT("Value")), FindPinChecked(FireGainTick, TEXT("Value")));
+
+	UK2Node_VariableGet* PanBindingForInput = AddComponentGet(Graph, TEXT("PanBinding"), -1090, 1170);
+	UK2Node_CallFunction* SetPanInput = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -990, 1020);
+	UK2Node_CallFunction* UpdatePanParameter = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), -650, 1020);
+	UK2Node_VariableGet* PanTickEmitter = AddComponentGet(Graph, TEXT("TickEmitter"), -400, 1170);
+	UK2Node_CallFunction* FirePanTick = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
+		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), -300, 1020);
+	ConnectPins(PanDelegate.Event->GetThenPin(), SetPanInput->GetExecPin());
+	ConnectPins(PanBindingForInput->GetValuePin(), FindTargetPinChecked(SetPanInput));
+	ConnectPins(FindPinChecked(PanDelegate.Event, TEXT("Value")), FindPinChecked(SetPanInput, TEXT("Value")));
+	ConnectPins(SetPanInput->GetThenPin(), UpdatePanParameter->GetExecPin());
+	ConnectPins(PanBindingForInput->GetValuePin(), FindTargetPinChecked(UpdatePanParameter));
+	ConnectPins(UpdatePanParameter->GetThenPin(), FirePanTick->GetExecPin());
+	ConnectPins(PanTickEmitter->GetValuePin(), FindPinChecked(FirePanTick, TEXT("TickEmitter")));
+	ConnectPins(FindPinChecked(PanDelegate.Event, TEXT("Value")), FindPinChecked(FirePanTick, TEXT("Value")));
+
 	UK2Node_Event* Deactivated = AddOverrideEvent(Graph, AHapbeatShowcaseBlueprintZoneActor::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(AHapbeatShowcaseBlueprintZoneActor, ReceiveZoneDeactivated), -1340, 660);
-	UK2Node_VariableGet* LoopForDeactivate = AddComponentGet(Graph, TEXT("LoopTrigger"), -1090, 820);
+		GET_FUNCTION_NAME_CHECKED(AHapbeatShowcaseBlueprintZoneActor, ReceiveZoneDeactivated), -1340, 1360);
+	UK2Node_VariableGet* LoopForDeactivate = AddComponentGet(Graph, TEXT("LoopTrigger"), -1090, 1520);
 	UK2Node_CallFunction* StopForDeactivate = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), -990, 660);
-	UK2Node_VariableSet* ResetLoopState = AddLoopStateSet(Graph, EHapbeatShowcaseLoopState::Stopped, -680, 660);
-	UK2Node_VariableGet* StoredWidget = AddSelfVariableGet(Graph, TEXT("ConsoleWidget"), -430, 820);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), -990, 1360);
+	UK2Node_VariableSet* ResetLoopState = AddLoopStateSet(Graph, EHapbeatShowcaseLoopState::Stopped, -680, 1360);
+	UK2Node_VariableGet* StoredWidget = AddSelfVariableGet(Graph, TEXT("ConsoleWidget"), -430, 1520);
 	UK2Node_CallFunction* IsWidgetValid = AddCall(Graph, UKismetSystemLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -330, 660);
-	UK2Node_IfThenElse* HasConsoleWidget = AddNode<UK2Node_IfThenElse>(Graph, -10, 660);
+		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -330, 1360);
+	UK2Node_IfThenElse* HasConsoleWidget = AddNode<UK2Node_IfThenElse>(Graph, -10, 1360);
 	UK2Node_CallFunction* RemoveWidget = AddCall(Graph, UUserWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UUserWidget, RemoveFromParent), 300, 660);
-	UK2Node_VariableGet* AddressForHide = AddComponentGet(Graph, TEXT("AddressPanel"), 600, 820);
+		GET_FUNCTION_NAME_CHECKED(UUserWidget, RemoveFromParent), 300, 1360);
+	UK2Node_VariableGet* AddressForHide = AddComponentGet(Graph, TEXT("AddressPanel"), 600, 1520);
 	UK2Node_CallFunction* HideAddress = AddCall(Graph, UHapbeatAddressOverridePanelComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Hide), 900, 660);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Hide), 900, 1360);
 	ConnectPins(Deactivated->GetThenPin(), StopForDeactivate->GetExecPin());
 	ConnectPins(LoopForDeactivate->GetValuePin(), FindTargetPinChecked(StopForDeactivate));
 	ConnectPins(StopForDeactivate->GetThenPin(), ResetLoopState->GetExecPin());

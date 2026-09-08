@@ -140,7 +140,8 @@ public:
 	 * SourceProperty = External). The typical setup routes a UMG slider's
 	 * OnValueChanged event here. Stored and read on the next tick.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Binding",
+		meta = (DisplayName = "Set Binding Input (Hapbeat)", Keywords = "hapbeat binding external slider input value"))
 	void SetValue(float Value);
 
 	/**
@@ -149,7 +150,8 @@ public:
 	 * so the stream does not emit ~100 ms of un-modulated (full-baseline) audio
 	 * before the first TickComponent writes a value. Returns the output value.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Binding",
+		meta = (DisplayName = "Update Stream Parameter (Hapbeat)", Keywords = "hapbeat binding stream gain pan apply update"))
 	float EvaluateNow();
 
 	/** Current raw input value read last tick (before mapping). */

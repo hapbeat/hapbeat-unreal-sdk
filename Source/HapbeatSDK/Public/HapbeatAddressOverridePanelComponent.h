@@ -81,7 +81,7 @@ public:
 	FVector2D ViewportSize = FVector2D::ZeroVector;
 
 	/** Add the panel to the viewport. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Address", meta = (DisplayName = "Show Address Panel (Hapbeat)"))
 	void Show();
 
 	/**
@@ -101,7 +101,7 @@ public:
 	void AttachToWidgetComponent(UWidgetComponent* Target);
 
 	/** Take the panel back down, from wherever Show() / AttachToWidgetComponent() put it. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Address", meta = (DisplayName = "Hide Address Panel (Hapbeat)"))
 	void Hide();
 
 	/**

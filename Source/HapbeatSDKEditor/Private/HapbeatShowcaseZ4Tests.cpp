@@ -6,13 +6,16 @@
 #include "EdGraph/EdGraphPin.h"
 #include "GameFramework/Actor.h"
 #include "HapbeatAddressOverridePanelComponent.h"
+#include "HapbeatBlueprintLibrary.h"
 #include "HapbeatParameterBinding.h"
 #include "HapbeatShowcaseBlueprintZoneActor.h"
 #include "HapbeatTickEmitterComponent.h"
 #include "HapbeatTriggerComponent.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatShowcaseZ4ConsoleWidget.h"
+#include "K2Node_AddDelegate.h"
 #include "K2Node_CallFunction.h"
+#include "K2Node_CustomEvent.h"
 #include "K2Node_SwitchEnum.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Styling/CoreStyle.h"
@@ -71,6 +74,66 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 				LoopStateSwitch->FindPin(TEXT("Running"))->LinkedTo.Contains(StopNode->GetExecPin()));
 			TestTrue(TEXT("Stopped starts the loop"),
 				LoopStateSwitch->FindPin(TEXT("Stopped"))->LinkedTo.Contains(FireNode->GetExecPin()));
+		}
+
+		// Slider delegates must enter the Actor graph. This keeps every SDK call
+		// visible alongside the zone's other gameplay wiring instead of hiding it
+		// inside the presentation-only Widget Blueprint.
+		for (const FName DelegateName : { TEXT("OnGainSliderChanged"), TEXT("OnPanSliderChanged") })
+		{
+			UK2Node_AddDelegate* BindNode = nullptr;
+			for (UEdGraph* Graph : ConsoleBlueprint->UbergraphPages)
+			{
+				for (UEdGraphNode* Node : Graph->Nodes)
+				{
+					if (UK2Node_AddDelegate* Candidate = Cast<UK2Node_AddDelegate>(Node);
+						Candidate != nullptr && Candidate->GetPropertyName() == DelegateName)
+					{
+						BindNode = Candidate;
+						break;
+					}
+				}
+				if (BindNode != nullptr) { break; }
+			}
+			if (!TestNotNull(*FString::Printf(TEXT("Z4 binds %s in Actor Event Graph"), *DelegateName.ToString()), BindNode))
+			{
+				continue;
+			}
+
+			UK2Node_CustomEvent* SliderEvent = nullptr;
+			for (UEdGraphPin* Link : BindNode->GetDelegatePin()->LinkedTo)
+			{
+				SliderEvent = Cast<UK2Node_CustomEvent>(Link->GetOwningNode());
+				if (SliderEvent != nullptr) { break; }
+			}
+			if (!TestNotNull(*FString::Printf(TEXT("Z4 has a %s handler"), *DelegateName.ToString()), SliderEvent))
+			{
+				continue;
+			}
+
+			auto FindNextCall = [](UEdGraphPin* From) -> UK2Node_CallFunction*
+			{
+				for (UEdGraphPin* Link : From->LinkedTo)
+				{
+					if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Link->GetOwningNode()))
+					{
+						return Call;
+					}
+				}
+				return nullptr;
+			};
+			UK2Node_CallFunction* SetInput = FindNextCall(SliderEvent->GetThenPin());
+			UK2Node_CallFunction* Update = SetInput ? FindNextCall(SetInput->GetThenPin()) : nullptr;
+			UK2Node_CallFunction* FireTick = Update ? FindNextCall(Update->GetThenPin()) : nullptr;
+			TestEqual(*FString::Printf(TEXT("%s sets a Binding input"), *DelegateName.ToString()),
+				SetInput ? SetInput->FunctionReference.GetMemberName() : NAME_None,
+				GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue));
+			TestEqual(*FString::Printf(TEXT("%s updates the Stream parameter"), *DelegateName.ToString()),
+				Update ? Update->FunctionReference.GetMemberName() : NAME_None,
+				GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow));
+			TestEqual(*FString::Printf(TEXT("%s fires a tick"), *DelegateName.ToString()),
+				FireTick ? FireTick->FunctionReference.GetMemberName() : NAME_None,
+				GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue));
 		}
 	}
 
@@ -139,7 +202,7 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
 		// sending haptics. The TickEmitter still receives FireFromValue calls,
 		// but its inherited trigger exits before dispatch.
 		GainTick->bTriggerEnabled = false;
-		Widget->Configure(Gain, Pan, GainTick);
+		Widget->Configure(GainTick);
         TFunction<TSharedPtr<SBorder>(TSharedRef<SWidget>)> FindPanel;
         FindPanel = [&FindPanel](TSharedRef<SWidget> Node) -> TSharedPtr<SBorder>
         {
@@ -159,16 +222,20 @@ bool FHapbeatZ4BindingReferencesTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Panel background is black at 75 percent opacity"),
                 Panel->GetBorderBackgroundColor().GetSpecifiedColor(), FLinearColor(0, 0, 0, 0.75f));
         }
-        Widget->HandleGainValueChanged(0.2f);
-		Widget->HandlePanValueChanged(-0.75f);
+		Gain->SetValue(0.2f);
+		Gain->EvaluateNow();
+		Pan->SetValue(-0.75f);
+		Pan->EvaluateNow();
         TestEqual(TEXT("Widget gain input reached binding"), Gain->GetCurrentInput(), 0.2f);
 		TestEqual(TEXT("Widget pan input reached binding"), Pan->GetCurrentInput(), -0.75f);
         TestEqual(TEXT("Live playback gain is baseline x slider"), Playback->GetGain(), 0.1f);
 		TestEqual(TEXT("Live playback pan follows slider"), Playback->GetPan(), -0.75f);
         TestEqual(TEXT("Send-thread gain mirror follows slider"), Playback->GetMirror()->Gain.load(), 0.1f);
 		TestEqual(TEXT("Send-thread pan mirror follows slider"), Playback->GetMirror()->Pan.load(), -0.75f);
-        Widget->HandleGainValueChanged(0.0f);
-        Widget->HandlePanValueChanged(1.0f);
+		Gain->SetValue(0.0f);
+		Gain->EvaluateNow();
+		Pan->SetValue(1.0f);
+		Pan->EvaluateNow();
         TestEqual(TEXT("Gain zero mutes the loop"), Playback->GetGain(), 0.0f);
         TestEqual(TEXT("Pan can move to opposite endpoint"), Playback->GetPan(), 1.0f);
         Loop->StoredPlayback.Reset();

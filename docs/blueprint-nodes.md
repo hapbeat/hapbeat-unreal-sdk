@@ -8,6 +8,10 @@ sidebar:
 
 Hapbeat SDK は、Blueprint から Event Map の entry を再生するための関数、Actor に追加して使う component、接続・宛先・診断のための補助 API を公開しています。このページは、どの入口を選ぶかを先に決められるように、ゲーム実装で使う順に整理したリファレンスです。
 
+## ノード名の読み方
+
+Hapbeat SDK が提供する一般的な操作には、末尾に **`(Hapbeat)`** を付けます。例えば `Set Binding Input (Hapbeat)` と `Update Stream Parameter (Hapbeat)` は SDK の Parameter Binding に対するノードです。`Create Widget` や `Add to Viewport` のように表記のないノードは Unreal Engine の標準ノードです。固有名を含む SDK ノードは、既存の `Play Hapbeat Event` のようにタイトル自体で SDK 由来を示します。
+
 ## 最初に選ぶ入口
 
 通常は、次のいずれかを使います。
@@ -103,10 +107,10 @@ Hit を使う場合、衝突する Primitive Component で **Simulation Generate
 | `Output Parameter` | `Stream Gain` または `Stream Pan` |
 | `Output Min` / `Output Max` | 出力範囲 |
 | `Target Trigger` | 操作対象の StreamClip trigger。複数 stream がある Actor では指定する |
-| `Set Value` | `Source Property = External` の値を渡す |
-| `Evaluate Now` | Tick を待たず、現在値をすぐ反映する |
+| `Set Binding Input (Hapbeat)` | `Source Property = External` の値を渡す |
+| `Update Stream Parameter (Hapbeat)` | Tick を待たず、現在値をすぐ反映する |
 
-loop を開始した直後に `Evaluate Now` を一度呼ぶと、最初の stream chunk にも現在の値が反映されます。
+loop を開始した直後に `Update Stream Parameter (Hapbeat)` を一度呼ぶと、最初の stream chunk にも現在の値が反映されます。
 
 ### Hapbeat Tick Emitter
 

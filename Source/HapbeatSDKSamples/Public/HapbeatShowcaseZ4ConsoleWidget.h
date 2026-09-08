@@ -5,19 +5,19 @@
 #include "Blueprint/UserWidget.h"
 #include "HapbeatShowcaseZ4ConsoleWidget.generated.h"
 
-class UHapbeatParameterBinding;
 class UHapbeatTickEmitterComponent;
 class USoundBase;
 class SWidget;
 
+/** Native slider input forwarded to the owning Z4 Actor Blueprint. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHapbeatShowcaseSliderValueChanged, float, Value);
+
 /**
  * Presentation-only base for the Blueprint-authored Z4 console.
  *
- * The Blueprint subclass receives slider values and routes them to its
- * Parameter Binding and Tick Emitter components. This class only supplies the
- * native Slate presentation and returns focus to the game viewport after a
- * drag. The presentation uses the same Slate controls as the original Z4
- * console so it is visually consistent with the address-override panel above it.
+ * This class supplies the native Slate presentation and forwards slider input
+ * to the owning Actor Blueprint through delegates. The Actor owns every
+ * Hapbeat SDK call, so the haptic wiring is readable in one Event Graph.
  */
 UCLASS(Abstract, Blueprintable)
 class HAPBEATSDKSAMPLES_API UHapbeatShowcaseZ4ConsoleWidget : public UUserWidget
@@ -25,39 +25,27 @@ class HAPBEATSDKSAMPLES_API UHapbeatShowcaseZ4ConsoleWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	/** References supplied by the zone Blueprint. The widget graph invokes the SDK components. */
-	UPROPERTY(BlueprintReadWrite, Category = "Z4")
-	TObjectPtr<UHapbeatParameterBinding> GainBinding;
+	/** Gain slider's normalized 0..1 input, after Z4's display rounding. */
+	UPROPERTY(BlueprintAssignable, Category = "Z4|Input", meta = (DisplayName = "On Gain Slider Changed"))
+	FHapbeatShowcaseSliderValueChanged OnGainSliderChanged;
 
-	UPROPERTY(BlueprintReadWrite, Category = "Z4")
-	TObjectPtr<UHapbeatParameterBinding> PanBinding;
-
-	UPROPERTY(BlueprintReadWrite, Category = "Z4")
-	TObjectPtr<UHapbeatTickEmitterComponent> TickEmitter;
-
-	/** Optional local sound paired with each emitted detent. */
-	UPROPERTY(BlueprintReadWrite, Category = "Z4")
-	TObjectPtr<USoundBase> TickSound;
+	/** Pan slider's -1..+1 input, after conversion from the Slate slider range. */
+	UPROPERTY(BlueprintAssignable, Category = "Z4|Input", meta = (DisplayName = "On Pan Slider Changed"))
+	FHapbeatShowcaseSliderValueChanged OnPanSliderChanged;
 
 	/**
-	 * Assign the zone components to this presentation widget. This stores
-	 * references only; the generated Widget Blueprint calls SetValue / Evaluate
-	 * Now / Fire From Value.
+	 * Assign presentation-only collaborators. The owning Actor Blueprint handles
+	 * Gain / Pan Binding writes after receiving the slider delegates above.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Z4")
-	void Configure(UHapbeatParameterBinding* InGainBinding, UHapbeatParameterBinding* InPanBinding,
-		UHapbeatTickEmitterComponent* InTickEmitter, USoundBase* InTickSound = nullptr);
-
-	UFUNCTION(BlueprintImplementableEvent, Category = "Z4")
-	void HandleGainValueChanged(float Value);
-
-	UFUNCTION(BlueprintImplementableEvent, Category = "Z4")
-	void HandlePanValueChanged(float Value);
+	UFUNCTION(BlueprintCallable, Category = "Z4", meta = (DisplayName = "Configure Stream Console UI"))
+	void Configure(UHapbeatTickEmitterComponent* InTickEmitter, USoundBase* InTickSound = nullptr);
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
+	TObjectPtr<UHapbeatTickEmitterComponent> TickEmitter;
+	TObjectPtr<USoundBase> TickSound;
 	enum class EActiveSlider : uint8 { None, Gain, Pan };
 
 	void OnGainChanged(float Value);

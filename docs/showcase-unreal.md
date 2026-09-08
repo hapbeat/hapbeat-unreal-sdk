@@ -8,6 +8,10 @@ sidebar:
 
 Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルです。各 zone Actor の Details と `EM_Showcase` を開くと、再生する触覚とその設定を確認・変更できます。
 
+:::note[音と触覚のタイミング]
+音声出力の遅延は環境ごとに異なるため、触覚が音より先に感じられることがあります。これは想定内です。`Tools → Hapbeat → Hapbeat Settings > Behavior > Haptic Delay Seconds` を少しずつ上げ、触覚に遅延を加えて合わせます。詳しくは[音と触覚のタイミングを合わせる](./getting-started.md#音と触覚のタイミングを合わせる)を参照してください。
+:::
+
 | Zone | 実装方法 | 確認できる触覚配線 |
 | --- | --- | --- |
 | Z1 Bowling | C++ Actor + collision trigger | pin の衝突から <code class="hb-entry">z1_pin_hit</code> を発火する配線 |

@@ -11,7 +11,6 @@
 #include "HapbeatBlueprintLibrary.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatParameterBinding.h"
-#include "HapbeatStreamPlayback.h"
 #include "HapbeatTickEmitterComponent.h"
 #include "HapbeatTriggerComponent.h"
 
@@ -41,6 +40,7 @@
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_IfThenElse.h"
 #include "K2Node_InputKey.h"
+#include "K2Node_Knot.h"
 #include "K2Node_SwitchEnum.h"
 #include "K2Node_Timeline.h"
 #include "K2Node_VariableGet.h"
@@ -120,10 +120,10 @@ UWidgetBlueprint* LoadOrCreateWidgetBlueprint(const TCHAR* AssetName, bool& bWas
 
 void ClearGeneratedGraph(UBlueprint* Blueprint)
 {
-	// These are state variables owned by the generated Z2 graph.  Remove them
+	// These are state variables owned by the generated Showcase graphs. Remove them
 	// before rebuilding so the command is idempotent and their defaults cannot
 	// drift from the graph it creates.
-	for (const FName VariableName : { FName(TEXT("DoorState")), FName(TEXT("bDoorOpen")), FName(TEXT("bDoorLocked")), FName(TEXT("bDoorMoving")), FName(TEXT("ConsoleWidget")) })
+	for (const FName VariableName : { FName(TEXT("DoorState")), FName(TEXT("LoopState")), FName(TEXT("bDoorOpen")), FName(TEXT("bDoorLocked")), FName(TEXT("bDoorMoving")), FName(TEXT("ConsoleWidget")) })
 	{
 		FBlueprintEditorUtils::RemoveMemberVariable(Blueprint, VariableName);
 	}
@@ -297,6 +297,16 @@ UK2Node_VariableSet* AddSelfVariableSet(UEdGraph* Graph, const TCHAR* VariableNa
 	return Node;
 }
 
+/**
+ * Add a visual-only reroute. Generated graphs use these only to keep a shared
+ * object reference on a clear route above its consumers; components themselves
+ * are still represented by one local Get node per consuming call.
+ */
+UK2Node_Knot* AddReroute(UEdGraph* Graph, int32 X, int32 Y)
+{
+	return AddNode<UK2Node_Knot>(Graph, X, Y);
+}
+
 UK2Node_Event* AddOverrideEvent(UEdGraph* Graph, UClass* OwnerClass, FName Function, int32 X, int32 Y)
 {
 	UK2Node_Event* Node = NewObject<UK2Node_Event>(Graph);
@@ -342,6 +352,14 @@ UK2Node_SwitchEnum* AddDoorStateSwitch(UEdGraph* Graph, int32 X, int32 Y)
 	return Node;
 }
 
+UK2Node_SwitchEnum* AddLoopStateSwitch(UEdGraph* Graph, int32 X, int32 Y)
+{
+	UK2Node_SwitchEnum* Node = AddNode<UK2Node_SwitchEnum>(Graph, X, Y);
+	Node->Enum = StaticEnum<EHapbeatShowcaseLoopState>();
+	Node->ReconstructNode();
+	return Node;
+}
+
 void AddComment(UEdGraph* Graph, const TCHAR* Title, int32 X, int32 Y, int32 Width, int32 Height,
 	const FLinearColor& Color)
 {
@@ -362,6 +380,15 @@ void AddDoorStateMember(UBlueprint* Blueprint)
 		TEXT("Could not add generated DoorState enum."));
 }
 
+void AddLoopStateMember(UBlueprint* Blueprint)
+{
+	FEdGraphPinType EnumType;
+	EnumType.PinCategory = UEdGraphSchema_K2::PC_Byte;
+	EnumType.PinSubCategoryObject = StaticEnum<EHapbeatShowcaseLoopState>();
+	checkf(FBlueprintEditorUtils::AddMemberVariable(Blueprint, TEXT("LoopState"), EnumType, TEXT("Stopped")),
+		TEXT("Could not add generated LoopState enum."));
+}
+
 UK2Node_VariableSet* AddDoorStateSet(UEdGraph* Graph, EHapbeatShowcaseDoorState Value, int32 X, int32 Y)
 {
 	UK2Node_VariableSet* Node = AddNode<UK2Node_VariableSet>(Graph, X, Y);
@@ -370,6 +397,17 @@ UK2Node_VariableSet* AddDoorStateSet(UEdGraph* Graph, EHapbeatShowcaseDoorState 
 	UEdGraphPin* ValuePin = Node->FindPin(TEXT("DoorState"), EGPD_Input);
 	check(ValuePin != nullptr);
 	ValuePin->DefaultValue = StaticEnum<EHapbeatShowcaseDoorState>()->GetNameStringByValue(static_cast<int64>(Value));
+	return Node;
+}
+
+UK2Node_VariableSet* AddLoopStateSet(UEdGraph* Graph, EHapbeatShowcaseLoopState Value, int32 X, int32 Y)
+{
+	UK2Node_VariableSet* Node = AddNode<UK2Node_VariableSet>(Graph, X, Y);
+	Node->VariableReference.SetSelfMember(TEXT("LoopState"));
+	Node->ReconstructNode();
+	UEdGraphPin* ValuePin = Node->FindPin(TEXT("LoopState"), EGPD_Input);
+	check(ValuePin != nullptr);
+	ValuePin->DefaultValue = StaticEnum<EHapbeatShowcaseLoopState>()->GetNameStringByValue(static_cast<int64>(Value));
 	return Node;
 }
 
@@ -921,78 +959,6 @@ void ConfigureStreamBindingTargets(UBlueprint* Blueprint)
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 }
 
-/**
- * Upgrade the one generated Space-toggle branch without rebuilding the user's
- * existing BP_Z4_StreamConsole asset. Deferred playbacks are live logical
- * streams (only their endpoint is unresolved), so they must follow Stop rather
- * than Fire. Keeping this as a narrow migration preserves any user additions
- * outside the generated toggle.
- */
-void UpgradeStreamConsoleToggle(UBlueprint* Blueprint)
-{
-	UK2Node_CallFunction* IsActiveNode = nullptr;
-	UK2Node_IfThenElse* ToggleBranch = nullptr;
-	for (UEdGraph* Graph : Blueprint->UbergraphPages)
-	{
-		if (Graph == nullptr)
-		{
-			continue;
-		}
-		for (UEdGraphNode* Node : Graph->Nodes)
-		{
-			if (UK2Node_CallFunction* Call = Cast<UK2Node_CallFunction>(Node);
-				Call != nullptr
-				&& Call->FunctionReference.GetMemberName() == GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsActive))
-			{
-				IsActiveNode = Call;
-			}
-		}
-	}
-
-	if (IsActiveNode == nullptr)
-	{
-		return; // Already migrated (or an asset unrelated to the generated Z4 toggle).
-	}
-	for (UEdGraph* Graph : Blueprint->UbergraphPages)
-	{
-		if (Graph == nullptr)
-		{
-			continue;
-		}
-		for (UEdGraphNode* Node : Graph->Nodes)
-		{
-			if (UK2Node_IfThenElse* Branch = Cast<UK2Node_IfThenElse>(Node);
-				Branch != nullptr && Branch->GetConditionPin()->LinkedTo.Contains(IsActiveNode->GetReturnValuePin()))
-			{
-				ToggleBranch = Branch;
-				break;
-			}
-		}
-	}
-	if (ToggleBranch == nullptr)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[Hapbeat] Could not find the Z4 Space-toggle branch to migrate."));
-		return;
-	}
-
-	const TArray<UEdGraphPin*> OldThenLinks = ToggleBranch->GetThenPin()->LinkedTo;
-	const TArray<UEdGraphPin*> OldElseLinks = ToggleBranch->GetElsePin()->LinkedTo;
-	ToggleBranch->GetThenPin()->BreakAllPinLinks();
-	ToggleBranch->GetElsePin()->BreakAllPinLinks();
-	for (UEdGraphPin* Pin : OldThenLinks)
-	{
-		ConnectPins(ToggleBranch->GetElsePin(), Pin);
-	}
-	for (UEdGraphPin* Pin : OldElseLinks)
-	{
-		ConnectPins(ToggleBranch->GetThenPin(), Pin);
-	}
-	IsActiveNode->FunctionReference.SetExternalMember(
-		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped), UHapbeatStreamPlayback::StaticClass());
-	IsActiveNode->ReconstructNode();
-	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
-}
-
 void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* WidgetBlueprint, UHapbeatEventMap* EventMap)
 {
 	check(WidgetBlueprint != nullptr);
@@ -1041,7 +1007,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	TickEmitter->EventMap = EventMap;
 	TickEmitter->EntryId = TickId;
 	TickEmitter->TickMode = EHapbeatTickMode::AbsolutePosition;
-	TickEmitter->TickThreshold = 0.01f;
+	TickEmitter->TickThreshold = 0.1f;
 	TickEmitter->bEmitOnInitialValue = false;
 
 	auto ConfigureBinding = [&](const TCHAR* Name, EHapbeatBindingOutput Output, float InMin, float InMax, float OutMin, float OutMax)
@@ -1074,6 +1040,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 	FKismetEditorUtilities::CompileBlueprint(Blueprint);
 	AddObjectMember(Blueprint, TEXT("ConsoleWidget"), UHapbeatShowcaseZ4ConsoleWidget::StaticClass());
+	AddLoopStateMember(Blueprint);
 	FKismetEditorUtilities::CompileBlueprint(Blueprint);
 	UEdGraph* Graph = GetEventGraph(Blueprint);
 	USoundBase* TickSound = LoadObject<USoundBase>(nullptr,
@@ -1087,7 +1054,7 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	// Blueprint nodes and 700 px vertical lanes. This is deliberately more
 	// compact than the previous hand-spaced layout while keeping all node bodies
 	// and data accessors in separate lanes.
-	AddComment(Graph, TEXT("SPACE  |  live or Deferred loop: Stop  |  otherwise: Fire"), -1430, -650, 2550, 260,
+	AddComment(Graph, TEXT("SPACE  |  Switch on Loop State  |  Stopped: Fire  |  Running: Stop"), -1430, -650, 1750, 260,
 		FLinearColor(0.18f, 0.18f, 0.18f));
 	AddComment(Graph, TEXT("ON SHOWCASE ZONE ACTIVATED  |  seed bindings, create console, show address override"), -1430, -210, 3500, 600,
 		FLinearColor(0.10f, 0.42f, 0.22f));
@@ -1095,33 +1062,24 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 		FLinearColor(0.50f, 0.15f, 0.15f));
 
 	UK2Node_InputKey* ToggleInput = AddKeyEvent(Graph, EKeys::SpaceBar, -1340, -570);
-	UK2Node_VariableGet* LoopForPlayback = AddComponentGet(Graph, TEXT("LoopTrigger"), -1090, -410);
-	UK2Node_CallFunction* GetPlayback = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, GetActivePlayback), -990, -570);
-	UK2Node_CallFunction* HasPlayback = AddCall(Graph, UKismetSystemLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -670, -570);
-	UK2Node_IfThenElse* PlaybackExists = AddNode<UK2Node_IfThenElse>(Graph, -370, -570);
-	UK2Node_CallFunction* IsStopped = AddCall(Graph, UHapbeatStreamPlayback::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatStreamPlayback, IsStopped), -70, -570);
-	UK2Node_IfThenElse* IsStoppedBranch = AddNode<UK2Node_IfThenElse>(Graph, 230, -570);
-	UK2Node_VariableGet* LoopForStop = AddComponentGet(Graph, TEXT("LoopTrigger"), 550, -410);
+	UK2Node_SwitchEnum* ToggleState = AddLoopStateSwitch(Graph, -970, -570);
+	UK2Node_VariableGet* ToggleStateGet = AddSelfVariableGet(Graph, TEXT("LoopState"), -970, -420);
+	UK2Node_VariableGet* LoopForStop = AddComponentGet(Graph, TEXT("LoopTrigger"), -640, -670);
 	UK2Node_CallFunction* StopLoop = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), 820, -570);
-	UK2Node_VariableGet* LoopForFire = AddComponentGet(Graph, TEXT("LoopTrigger"), 550, -180);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), -410, -570);
+	UK2Node_VariableSet* SetStopped = AddLoopStateSet(Graph, EHapbeatShowcaseLoopState::Stopped, -120, -570);
+	UK2Node_VariableGet* LoopForFire = AddComponentGet(Graph, TEXT("LoopTrigger"), -640, -285);
 	UK2Node_CallFunction* FireLoop = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire), 820, -300);
-	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), PlaybackExists->GetExecPin());
-	ConnectPins(LoopForPlayback->GetValuePin(), FindTargetPinChecked(GetPlayback));
-	ConnectPins(GetPlayback->GetReturnValuePin(), FindPinChecked(HasPlayback, TEXT("Object")));
-	ConnectPins(HasPlayback->GetReturnValuePin(), PlaybackExists->GetConditionPin());
-	ConnectPins(PlaybackExists->GetThenPin(), IsStoppedBranch->GetExecPin());
-	ConnectPins(PlaybackExists->GetElsePin(), FireLoop->GetExecPin());
-	ConnectPins(GetPlayback->GetReturnValuePin(), FindTargetPinChecked(IsStopped));
-	ConnectPins(IsStopped->GetReturnValuePin(), IsStoppedBranch->GetConditionPin());
-	ConnectPins(IsStoppedBranch->GetThenPin(), FireLoop->GetExecPin());
+		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Fire), -410, -285);
+	UK2Node_VariableSet* SetRunning = AddLoopStateSet(Graph, EHapbeatShowcaseLoopState::Running, -120, -285);
+	ConnectPins(FindPinChecked(ToggleInput, TEXT("Pressed")), ToggleState->GetExecPin());
+	ConnectPins(ToggleStateGet->GetValuePin(), FindPinChecked(ToggleState, TEXT("Selection")));
+	ConnectPins(FindPinChecked(ToggleState, TEXT("Running")), StopLoop->GetExecPin());
 	ConnectPins(LoopForStop->GetValuePin(), FindTargetPinChecked(StopLoop));
-	ConnectPins(IsStoppedBranch->GetElsePin(), StopLoop->GetExecPin());
+	ConnectPins(StopLoop->GetThenPin(), SetStopped->GetExecPin());
+	ConnectPins(FindPinChecked(ToggleState, TEXT("Stopped")), FireLoop->GetExecPin());
 	ConnectPins(LoopForFire->GetValuePin(), FindTargetPinChecked(FireLoop));
+	ConnectPins(FireLoop->GetThenPin(), SetRunning->GetExecPin());
 
 	UK2Node_Event* Activated = AddOverrideEvent(Graph, AHapbeatShowcaseBlueprintZoneActor::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(AHapbeatShowcaseBlueprintZoneActor, ReceiveZoneActivated), -1340, -120);
@@ -1144,15 +1102,23 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConsoleCast->CreateNewGuid();
 	ConsoleCast->PostPlacedNewNode();
 	ConsoleCast->AllocateDefaultPins();
-	UK2Node_VariableGet* GainForWidget = AddComponentGet(Graph, TEXT("GainBinding"), 400, 40);
-	UK2Node_VariableGet* PanForWidget = AddComponentGet(Graph, TEXT("PanBinding"), 400, 160);
-	UK2Node_VariableGet* TickForWidget = AddComponentGet(Graph, TEXT("TickEmitter"), 400, 280);
+	// Keep the three component getters beside Configure. They are references to
+	// the same components in the Components tree, not duplicate components.
+	UK2Node_VariableGet* GainForWidget = AddComponentGet(Graph, TEXT("GainBinding"), 460, 20);
+	UK2Node_VariableGet* PanForWidget = AddComponentGet(Graph, TEXT("PanBinding"), 460, 135);
+	UK2Node_VariableGet* TickForWidget = AddComponentGet(Graph, TEXT("TickEmitter"), 460, 250);
 	UK2Node_CallFunction* ConfigureWidget = AddCall(Graph, UHapbeatShowcaseZ4ConsoleWidget::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, Configure), 700, -120);
 	FindPinChecked(ConfigureWidget, TEXT("InTickSound"))->DefaultObject = TickSound;
 	UK2Node_CallFunction* AddToViewport = AddCall(Graph, UUserWidget::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UUserWidget, AddToViewport), 1040, -120);
 	UK2Node_VariableSet* StoreWidget = AddSelfVariableSet(Graph, TEXT("ConsoleWidget"), 1350, -120);
+	// The cast result is used by Configure, AddToViewport and StoreWidget. Route
+	// that shared reference above the execution row so no data wire runs behind
+	// node bodies. Each consumer gets a short, visible branch from the bus.
+	UK2Node_Knot* ConsoleReferenceForConfigure = AddReroute(Graph, 430, -250);
+	UK2Node_Knot* ConsoleReferenceForViewport = AddReroute(Graph, 950, -250);
+	UK2Node_Knot* ConsoleReferenceForStore = AddReroute(Graph, 1260, -250);
 	UK2Node_VariableGet* AddressForShow = AddComponentGet(Graph, TEXT("AddressPanel"), 1580, 40);
 	UK2Node_CallFunction* ShowAddress = AddCall(Graph, UHapbeatAddressOverridePanelComponent::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Show), 1880, -120);
@@ -1164,14 +1130,17 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(CreateWidget->GetReturnValuePin(), ConsoleCast->GetCastSourcePin());
 	ConnectPins(CreateWidget->GetThenPin(), ConsoleCast->GetExecPin());
 	ConnectPins(ConsoleCast->GetValidCastPin(), ConfigureWidget->GetExecPin());
-	ConnectPins(ConsoleCast->GetCastResultPin(), FindTargetPinChecked(ConfigureWidget));
+	ConnectPins(ConsoleCast->GetCastResultPin(), ConsoleReferenceForConfigure->GetInputPin());
+	ConnectPins(ConsoleReferenceForConfigure->GetOutputPin(), FindTargetPinChecked(ConfigureWidget));
 	ConnectPins(GainForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InGainBinding")));
 	ConnectPins(PanForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InPanBinding")));
 	ConnectPins(TickForWidget->GetValuePin(), FindPinChecked(ConfigureWidget, TEXT("InTickEmitter")));
 	ConnectPins(ConfigureWidget->GetThenPin(), AddToViewport->GetExecPin());
-	ConnectPins(ConsoleCast->GetCastResultPin(), FindTargetPinChecked(AddToViewport));
+	ConnectPins(ConsoleReferenceForConfigure->GetOutputPin(), ConsoleReferenceForViewport->GetInputPin());
+	ConnectPins(ConsoleReferenceForViewport->GetOutputPin(), FindTargetPinChecked(AddToViewport));
 	ConnectPins(AddToViewport->GetThenPin(), StoreWidget->GetExecPin());
-	ConnectPins(ConsoleCast->GetCastResultPin(), FindPinChecked(StoreWidget, TEXT("ConsoleWidget")));
+	ConnectPins(ConsoleReferenceForViewport->GetOutputPin(), ConsoleReferenceForStore->GetInputPin());
+	ConnectPins(ConsoleReferenceForStore->GetOutputPin(), FindPinChecked(StoreWidget, TEXT("ConsoleWidget")));
 	ConnectPins(StoreWidget->GetThenPin(), ShowAddress->GetExecPin());
 	ConnectPins(AddressForShow->GetValuePin(), FindTargetPinChecked(ShowAddress));
 
@@ -1180,18 +1149,20 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	UK2Node_VariableGet* LoopForDeactivate = AddComponentGet(Graph, TEXT("LoopTrigger"), -1090, 820);
 	UK2Node_CallFunction* StopForDeactivate = AddCall(Graph, UHapbeatTriggerComponent::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UHapbeatTriggerComponent, Stop), -990, 660);
-	UK2Node_VariableGet* StoredWidget = AddSelfVariableGet(Graph, TEXT("ConsoleWidget"), -670, 820);
+	UK2Node_VariableSet* ResetLoopState = AddLoopStateSet(Graph, EHapbeatShowcaseLoopState::Stopped, -680, 660);
+	UK2Node_VariableGet* StoredWidget = AddSelfVariableGet(Graph, TEXT("ConsoleWidget"), -430, 820);
 	UK2Node_CallFunction* IsWidgetValid = AddCall(Graph, UKismetSystemLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -570, 660);
-	UK2Node_IfThenElse* HasConsoleWidget = AddNode<UK2Node_IfThenElse>(Graph, -250, 660);
+		GET_FUNCTION_NAME_CHECKED(UKismetSystemLibrary, IsValid), -330, 660);
+	UK2Node_IfThenElse* HasConsoleWidget = AddNode<UK2Node_IfThenElse>(Graph, -10, 660);
 	UK2Node_CallFunction* RemoveWidget = AddCall(Graph, UUserWidget::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UUserWidget, RemoveFromParent), 60, 660);
-	UK2Node_VariableGet* AddressForHide = AddComponentGet(Graph, TEXT("AddressPanel"), 310, 820);
+		GET_FUNCTION_NAME_CHECKED(UUserWidget, RemoveFromParent), 300, 660);
+	UK2Node_VariableGet* AddressForHide = AddComponentGet(Graph, TEXT("AddressPanel"), 600, 820);
 	UK2Node_CallFunction* HideAddress = AddCall(Graph, UHapbeatAddressOverridePanelComponent::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Hide), 610, 660);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatAddressOverridePanelComponent, Hide), 900, 660);
 	ConnectPins(Deactivated->GetThenPin(), StopForDeactivate->GetExecPin());
 	ConnectPins(LoopForDeactivate->GetValuePin(), FindTargetPinChecked(StopForDeactivate));
-	ConnectPins(StopForDeactivate->GetThenPin(), HasConsoleWidget->GetExecPin());
+	ConnectPins(StopForDeactivate->GetThenPin(), ResetLoopState->GetExecPin());
+	ConnectPins(ResetLoopState->GetThenPin(), HasConsoleWidget->GetExecPin());
 	ConnectPins(StoredWidget->GetValuePin(), FindPinChecked(IsWidgetValid, TEXT("Object")));
 	ConnectPins(IsWidgetValid->GetReturnValuePin(), HasConsoleWidget->GetConditionPin());
 	ConnectPins(HasConsoleWidget->GetThenPin(), RemoveWidget->GetExecPin());

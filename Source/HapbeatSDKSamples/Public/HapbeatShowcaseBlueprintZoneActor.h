@@ -18,6 +18,14 @@ enum class EHapbeatShowcaseDoorState : uint8
 	Locked,
 };
 
+/** State owned by the Blueprint-authored Z4 stream console. */
+UENUM(BlueprintType)
+enum class EHapbeatShowcaseLoopState : uint8
+{
+	Stopped,
+	Running,
+};
+
 /**
  * Minimal Showcase shell for a zone authored in Blueprint.
  *

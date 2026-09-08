@@ -45,7 +45,16 @@ ball が pin に Hit
 
 `Pin Hit Event` は Actor に保存される編集可能な参照です。`EM_Showcase` 側で `z1_pin_hit` の Clip、Gain、Target を変えることも、別の entry を `Pin Hit Event` に選び直すこともできます。
 
-### C++ 実装を確認する
+:::tip[手を動かして試す]
+- **操作 A — 強さ:** `EM_Showcase > z1_pin_hit > Gain` を変更します。
+  - 例: 現在値を半分にする。
+  - **確認できること:** ball と pin の衝突は同じまま、触覚の強さだけが変わります。
+- **操作 B — entry:** `Z1_Bowling > Pin Hit Event` を変更します。
+  - 例: `z1_pin_hit` から `z2_door_slam` に切り替える。
+  - **確認できること:** 同じ pin 衝突が、選んだ entry の触覚を発火します。
+:::
+
+### SDK の接続を確認する（C++）
 
 **Tools → Open Visual Studio** を選び、次の SDK ファイルを開きます。
 
@@ -94,7 +103,13 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 
 `BP_Z2_Door` は、ドアの開閉と **Play Hapbeat Event** を同じ Event Graph で接続する Blueprint 完結の例です。Graph 内では各動作を `DoorOpen | z2_door_open -> Play Hapbeat Event` のように色付きの枠で分けています。
 
-### SDK の接続を最短で確認する
+:::tip[手を動かして試す]
+- **操作:** `BP_Z2_Door > EventGraph` の `DoorSlam` lane にある **Play Hapbeat Event** node の `Entry` を変更します。
+  - 例: `z2_door_slam` から `z2_door_close` に切り替える。
+  - **確認できること:** `G` の slam Timeline は同じまま、node で選んだ entry の触覚を発火します。
+:::
+
+### SDK の接続を確認する（Blueprint）
 
 1. World Outliner で `Z2_Door` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z2_Door` をダブルクリックします。
 2. 開いた Blueprint Editor の左上 **Components** パネルが component tree です。`DoorHinge`、`DoorLeafMesh`、`DoorHandleMesh` を確認します。
@@ -140,11 +155,15 @@ Shark の速度
 
 `Z3_Fishing` の **Hapbeat > Fishing > Hook** で Event Map を選び、**Hook Start Event**、**Hook Loop Event**、**Hook Release Event** の各プルダウンから entry を割り当てます。**Hook Wiring** は実際に Shark の sequence へ渡された結果を確認する読み取り専用の表示です。竿、`RodTipMarker`、釣り糸、Shark slot の位置は Details で編集します。
 
-### Details で触覚の接続を確認する
+:::tip[手を動かして試す]
+- **操作:** `Z3_Fishing > Hook Loop Event` を変更します。
+  - 例: `z3_hook_loop` から `z5_charge_loop` に切り替える。
+  - **確認できること:** **Hook Wiring > Loop Entry Name** が選択した entry になり、hook 中の loop が切り替わります。
+:::
+
+### SDK の接続を確認する（C++）
 
 `Z3_Fishing` の Details では、**Hapbeat > Fishing > Hook** の Event Map と 3 つの entry を選択します。**Hapbeat > Fishing > Hook Wiring** には実際に解決された start / loop / release の entry 名が表示されます。
-
-### C++ 実装を確認する
 
 **Tools → Open Visual Studio** を選び、次の SDK ファイルを開きます。
 
@@ -179,10 +198,9 @@ Plugins
 
 ```text
 Space
-  → LoopTrigger.Get Active Playback
-  → Is Valid（ハンドルなしなら Fire）
-  → Is Active
-  → Stop または Fire
+  → Switch on Loop State
+  → Stopped: LoopTrigger.Fire → Loop State = Running
+  → Running: LoopTrigger.Stop → Loop State = Stopped
 
 Gain / Pan slider
   → GainBinding / PanBinding.Set Value
@@ -190,11 +208,17 @@ Gain / Pan slider
   → Fire Hapbeat Tick From Value (TickEmitter)
 ```
 
-### SDK の接続を最短で確認する
+:::tip[手を動かして試す]
+- **操作:** `TickEmitter > Tick Threshold` を変更します。
+  - 例: `0.1` から `0.2` にする。
+  - **確認できること:** Gain / Pan slider を同じ距離だけ動かしたときの tick 回数が半分になります。
+:::
+
+### SDK の接続を確認する（Blueprint）
 
 1. World Outliner で `Z4_StreamConsole` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z4_StreamConsole` を開きます。
 2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickEmitter`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。`TickEmitter` の class は **Hapbeat Tick Emitter** です。
-3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から `LoopTrigger` の `Fire` / `Stop` を、`On Showcase Zone Activated` から `Create Widget` と `AddressPanel.Show` を確認します。
+3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から **Switch on Loop State** をたどり、Stopped の `LoopTrigger.Fire` と Running の `LoopTrigger.Stop` を確認します。`On Showcase Zone Activated` から `Create Widget` と `AddressPanel.Show` も確認します。
 4. **My Blueprint > Construction Script** を開きます。`GainBinding` と `PanBinding` の `Set Target Trigger` に、この Actor の `LoopTrigger` を接続しています。
 5. `BP_Z4_StreamConsoleWidget` を開き、**My Blueprint > Graphs > EventGraph** を開きます。`Handle Gain Value Changed` と `Handle Pan Value Changed` はそれぞれ `Binding.Set Value` → `Evaluate Now` → `Fire Hapbeat Tick From Value` に接続されています。
 
@@ -215,11 +239,15 @@ projectile が target に Hit
 
 `Z5_ChargeShot` の **Haptic Wiring** で、charge、shot、target hit の entry を確認します。charge 時間、launch speed、target slot は同 Actor の Details で変更できます。触覚の Clip、Gain、Target、loop は Event Map で変更します。
 
-### Details で触覚の接続を確認する
+:::tip[手を動かして試す]
+- **操作:** `Z5_ChargeShot > Heavy Threshold` を変更します。
+  - 例: `0.7` から `0.5` にする。
+  - **確認できること:** 同じ長さの charge でも heavy shot / target-hit の entry へ早く切り替わります。
+:::
+
+### SDK の接続を確認する（C++）
 
 `Z5_ChargeShot` の Details では、**Hapbeat > Event Map Override** と **Hapbeat > Showcase > Haptic Wiring** を確認します。後者には charge、shot、target hit の解決済み entry 名が表示されます。
-
-### C++ 実装を確認する
 
 **Tools → Open Visual Studio** を選び、次の SDK ファイルを開きます。
 

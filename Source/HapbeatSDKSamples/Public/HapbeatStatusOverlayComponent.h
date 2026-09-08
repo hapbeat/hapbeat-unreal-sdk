@@ -19,7 +19,7 @@
  * building a second one.
  */
 UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent, DisplayName = "Hapbeat Status Overlay"))
-class HAPBEATSDK_API UHapbeatStatusOverlayComponent : public UActorComponent
+class HAPBEATSDKSAMPLES_API UHapbeatStatusOverlayComponent : public UActorComponent
 {
 	GENERATED_BODY()
 

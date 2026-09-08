@@ -32,7 +32,7 @@ class UWidgetComponent;
  * sample (AHapbeatVRConfigExampleActor) owns that.
  */
 UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent, DisplayName = "Hapbeat Address Override Panel"))
-class HAPBEATSDK_API UHapbeatAddressOverridePanelComponent : public UActorComponent
+class HAPBEATSDKSAMPLES_API UHapbeatAddressOverridePanelComponent : public UActorComponent
 {
 	GENERATED_BODY()
 

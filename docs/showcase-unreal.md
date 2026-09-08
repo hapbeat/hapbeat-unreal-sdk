@@ -226,7 +226,7 @@ Gain / Pan slider
 
 `LoopTrigger` は `z4_stream_loop`、`TickEmitter` は `z4_slider_tick` を指します。各 component の Details で **Event Map** と entry を変更できます。Gain/Pan を切り替えた最初の値では tick の参照をリセットするため、別の slider の値との差による誤発火はありません。`GainBinding` と `PanBinding` の **Source = External** に slider 値を渡し、Construction Script で接続した `LoopTrigger` の再生だけを調整します。
 
-`AddressPanel` は Zone が表示中に `Show`、非表示時に `Hide` されます。Player / Group の選択はこの component の UI で Apply します。
+`AddressPanel`（Samples component）は Zone が表示中に `Show Address Panel (Hapbeat)`、非表示時に `Hide Address Panel (Hapbeat)` されます。Player / Group の選択はこの component の UI で Apply します。
 
 ## Z5 Target Range — charge / shot と target hit
 

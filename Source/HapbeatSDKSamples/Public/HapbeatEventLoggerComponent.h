@@ -22,7 +22,7 @@
  * component only prints strings.
  */
 UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent, DisplayName = "Hapbeat Event Logger (Diagnostic)"))
-class HAPBEATSDK_API UHapbeatEventLoggerComponent : public UActorComponent
+class HAPBEATSDKSAMPLES_API UHapbeatEventLoggerComponent : public UActorComponent
 {
 	GENERATED_BODY()
 

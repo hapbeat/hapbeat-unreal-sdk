@@ -149,14 +149,14 @@ Collision / Sequence / Tick Emitter は共通して次のノードを持ちま�
 
 | ノード | 用途 |
 | --- | --- |
-| `Connect` | UDP socket を開く |
-| `Play` / `Stop` / `Stop All` | event ID を直接送信・停止する |
-| `Ping` | 到達可能 device を確認する |
+| `Connect (Hapbeat)` | UDP socket を開く |
+| `Play Event (Hapbeat)` / `Stop Event (Hapbeat)` / `Stop All Events (Hapbeat)` | event ID を直接送信・停止する |
+| `Ping (Hapbeat)` | 到達可能 device を確認する |
 | `Play Stream Clip (Hapbeat)` / `Stop Streams (Hapbeat)` | Clip を直接 stream する |
-| `On Connected` / `On Disconnected` / `On Error` / `On Pong` | 接続状態を BP event として扱う |
-| `Is Connected` / `Is Alive` / `Get Alive Device Count` / `Is Streaming` | 状態を UI などに表示する |
+| `On Connected (Hapbeat)` / `On Disconnected (Hapbeat)` / `On Error (Hapbeat)` / `On Pong (Hapbeat)` | 接続状態を BP event として扱う |
+| `Is Connected (Hapbeat)` / `Is Device Alive (Hapbeat)` / `Get Alive Device Count (Hapbeat)` / `Is Streaming (Hapbeat)` | 状態を UI などに表示する |
 
-通常のゲームイベントには Event Map を使います。`Play` や `Stream Clip` は、event ID や宛先を実行時に動的に組み立てる必要があり、Event Map で管理できない場合に限ります。
+通常のゲームイベントには Event Map を使います。`Play Event (Hapbeat)` や `Play Stream Clip (Hapbeat)` は、event ID や宛先を実行時に動的に組み立てる必要があり、Event Map で管理できない場合に限ります。
 
 ## 7. 宛先、運用 UI、診断
 
@@ -164,13 +164,13 @@ Collision / Sequence / Tick Emitter は共通して次のノードを持ちま�
 
 | 種別 | 主なノード | 用途 |
 | --- | --- | --- |
-| Target Library | `Build Target`、`Parse Target`、`Resolve Target`、`Apply Address Placeholders`、`Address Matches` | Target 文字列の組み立てと検証 |
-| Address override | `Set Address Override`、`Clear Persisted Address Override` | 起動中の player / group を上書きする |
-| Address Override Panel | `Show`、`Hide`、`Toggle`、`Attach To Widget Component` | 展示用の切替 panel を出す |
-| Status Overlay | `Log`、`Clear Log` | 接続状態と簡易ログを画面表示する |
-| Event Logger | `Log Event`、`Log Hit`、`Log Begin Overlap` など | Output Log と画面への発火記録 |
+| Target Library | `Build Target (Hapbeat)`、`Parse Target (Hapbeat)`、`Resolve Target (Hapbeat)`、`Apply Address Placeholders (Hapbeat)`、`Does Address Match (Hapbeat)` | Target 文字列の組み立てと検証 |
+| Address override | `Set Address Override (Hapbeat)`、`Clear Saved Address Override (Hapbeat)` | 起動中の player / group を上書きする |
+| Address Override Panel（Samples） | `Show Address Panel (Hapbeat)`、`Hide Address Panel (Hapbeat)`、`Toggle Address Panel (Hapbeat)`、`Attach Address Panel (Hapbeat)` | 展示用の切替 panel を出す |
+| Status Overlay（Samples） | `Log Status Message (Hapbeat)`、`Clear Status Log (Hapbeat)` | 接続状態と簡易ログを画面表示する |
+| Event Logger（Samples） | `Log Event (Hapbeat)`、`Log Hit (Hapbeat)`、`Log Begin Overlap (Hapbeat)` など | Output Log と画面への発火記録 |
 
-Address override は Event Map や Trigger component の設定を変更しません。送信時に target を解決する値だけを上書きします。詳細は[応用](./advanced.md)を参照してください。
+Address override は Event Map や Trigger component の設定を変更しません。送信時に target を解決する値だけを上書きします。Address Override Panel、Status Overlay、Event Logger は Runtime API ではなく Samples module に属します。製品 UI では、必要な部分だけを自分の UMG widget と `Set Address Override (Hapbeat)` などの Runtime node で実装します。詳細は[応用](./advanced.md)を参照してください。
 
 ## 8. Data Asset の補助関数
 

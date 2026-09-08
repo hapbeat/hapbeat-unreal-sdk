@@ -6,9 +6,7 @@ sidebar:
 
 # Showcase の触覚配線
 
-Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルです。各 zone Actor の Details と <code class="hb-asset">EM_Showcase</code> を開くと、再生する触覚とその設定を確認・変更できます。
-
-<p class="hb-notation"><span class="hb-location">エディタ内の場所</span><span class="hb-field">Details の編集項目</span><span class="hb-bp-node">Blueprint ノード</span><code class="hb-cpp">C++</code><code class="hb-asset">asset / Actor</code><code class="hb-entry">entry ID</code></p>
+Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルです。各 zone Actor の Details と `EM_Showcase` を開くと、再生する触覚とその設定を確認・変更できます。
 
 | Zone | 実装方法 | 確認できる触覚配線 |
 | --- | --- | --- |
@@ -42,19 +40,16 @@ ball が pin に Hit
 
 <span class="hb-field">Pin Hit Event</span> は、6 本の pin が衝突したときに再生する Event Map entry です。
 
-### 編集する場所を開く
+### 編集して試す
 
 1. <span class="hb-location">Showcase map > World Outliner</span> で <code class="hb-asset">Z1_Bowling</code> を選びます。
 2. <span class="hb-location">Details > Hapbeat > Bowling > Pin Hit</span> を開きます。
-
-:::tip[手を動かして試す]
-- **操作 A — 強さ:** <span class="hb-location"><code class="hb-asset">EM_Showcase</code> の <code class="hb-entry">z1_pin_hit</code> entry</span> にある <span class="hb-field">Gain</span> を変更します。
-  - 例: 現在値を半分にする。
-  - **確認できること:** ball と pin の衝突は同じまま、触覚の強さだけが変わります。
-- **操作 B — entry:** <span class="hb-field">Pin Hit Event</span> を変更します。
-  - 例: <code class="hb-entry">z1_pin_hit</code> から <code class="hb-entry">z2_door_slam</code> に切り替える。
-  - **確認できること:** 同じ pin 衝突が、選んだ entry の触覚を発火します。
-:::
+3. <code class="hb-asset">EM_Showcase</code> の <code class="hb-entry">z1_pin_hit</code> entry にある <span class="hb-field">Gain</span> を変更します。
+   - 例: 現在値を半分にする。
+   - **確認できること:** ball と pin の衝突は同じまま、触覚の強さだけが変わります。
+4. <span class="hb-field">Pin Hit Event</span> を変更します。
+   - 例: <code class="hb-entry">z1_pin_hit</code> から <code class="hb-entry">z2_door_slam</code> に切り替える。
+   - **確認できること:** 同じ pin 衝突が、選んだ entry の触覚を発火します。
 
 ### SDK の接続を確認する（C++）
 
@@ -86,16 +81,13 @@ Pin->HitTrigger->EntryId = PinHitEntryId;
 
 <code class="hb-asset">BP_Z2_Door</code> は、ドア操作の各分岐から <span class="hb-bp-node">Play Event (Hapbeat)</span> を発火する Blueprint 完結の例です。
 
-### 編集箇所を開く（Blueprint）
+### 編集して試す（Blueprint）
 
 1. <span class="hb-location">Showcase map > World Outliner</span> で <code class="hb-asset">Z2_Door</code> を選び、<span class="hb-location">Details</span> の <span class="hb-field">Edit Blueprint</span> をクリックします。
 2. <span class="hb-location">My Blueprint > Graphs > EventGraph</span> を開きます。
-
-:::tip[手を動かして試す]
-- **操作:** <span class="hb-location">DoorSlam lane</span> の <span class="hb-bp-node">Play Event (Hapbeat)</span> にある <span class="hb-field">Entry</span> を変更します。
-  - 例: <code class="hb-entry">z2_door_slam</code> から <code class="hb-entry">z2_door_close</code> に切り替える。
-  - **確認できること:** `G` の slam Timeline は同じまま、node で選んだ entry の触覚を発火します。
-:::
+3. <span class="hb-location">DoorSlam lane</span> の <span class="hb-bp-node">Play Event (Hapbeat)</span> にある <span class="hb-field">Entry</span> を変更します。
+   - 例: <code class="hb-entry">z2_door_slam</code> から <code class="hb-entry">z2_door_close</code> に切り替える。
+   - **確認できること:** `G` の slam Timeline は同じまま、node で選んだ entry の触覚を発火します。
 
 ### SDK の接続を確認する（Blueprint）
 
@@ -125,16 +117,13 @@ Shark の速度
 
 <code class="hb-asset">Z3_Fishing</code> の <span class="hb-field">Hook Start / Loop / Release Event</span> は、左クリックの開始・継続・解除で再生する entry です。
 
-### 編集する場所を開く
+### 編集して試す
 
 1. <span class="hb-location">Showcase map > World Outliner</span> で <code class="hb-asset">Z3_Fishing</code> を選びます。
 2. <span class="hb-location">Details > Hapbeat > Fishing > Hook</span> を開き、Event Map と 3 つの entry を確認します。
-
-:::tip[手を動かして試す]
-- **操作:** <span class="hb-field">Hook Loop Event</span> を変更します。
-  - 例: <code class="hb-entry">z3_hook_loop</code> から <code class="hb-entry">z5_charge_loop</code> に切り替える。
-  - **確認できること:** <span class="hb-location">Hook Wiring</span> の <span class="hb-field">Loop Entry Name</span> が選択した entry になり、hook 中の loop が切り替わります。
-:::
+3. <span class="hb-field">Hook Loop Event</span> を変更します。
+   - 例: <code class="hb-entry">z3_hook_loop</code> から <code class="hb-entry">z5_charge_loop</code> に切り替える。
+   - **確認できること:** <span class="hb-location">Hook Wiring</span> の <span class="hb-field">Loop Entry Name</span> が選択した entry になり、hook 中の loop が切り替わります。
 
 ### SDK の接続を確認する（C++）
 
@@ -171,16 +160,13 @@ Gain / Pan slider
   → Fire Tick From Value (Hapbeat)
 ```
 
-### 編集箇所を開く（Blueprint）
+### 編集して試す（Blueprint）
 
 1. <span class="hb-location">Showcase map > World Outliner</span> で <code class="hb-asset">Z4_StreamConsole</code> を選び、<span class="hb-location">Details</span> の <span class="hb-field">Edit Blueprint</span> をクリックします。
 2. <span class="hb-location">My Blueprint > Graphs > EventGraph</span> を開きます。
-
-:::tip[手を動かして試す]
-- **操作:** <span class="hb-location">Components</span> で `TickEmitter` を選び、<span class="hb-location">Details</span> の <span class="hb-field">Tick Threshold</span> を変更します。
-  - 例: `0.1` から `0.2` にする。
-  - **確認できること:** Gain / Pan slider を同じ距離だけ動かしたときの tick 回数が半分になります。
-:::
+3. <span class="hb-location">Components</span> で `TickEmitter` を選び、<span class="hb-location">Details</span> の <span class="hb-field">Tick Threshold</span> を変更します。
+   - 例: `0.1` から `0.2` にする。
+   - **確認できること:** Gain / Pan slider を同じ距離だけ動かしたときの tick 回数が半分になります。
 
 ### SDK の接続を確認する（Blueprint）
 
@@ -203,22 +189,19 @@ projectile が target に Hit
 
 <code class="hb-asset">Z5_ChargeShot</code> の 6 つの Event プルダウンは、charge、shot、target hit で再生する entry を選びます。
 
-### 編集する場所を開く
+### 編集して試す
 
 1. <span class="hb-location">Showcase map > World Outliner</span> で <code class="hb-asset">Z5_ChargeShot</code> を選びます。
 2. <span class="hb-location">Details > Hapbeat > Showcase</span> を開きます。Event Map entry は <span class="hb-location">Haptic Events</span>、charge の調整は <span class="hb-location">Charge</span> にあります。
-
-:::tip[手を動かして試す]
-- **操作 A — threshold:** <span class="hb-field">Heavy Threshold</span> を変更します。
-  - 例: `0.7` から `0.4` にする。
-  - **確認できること:** threshold entry と heavy shot へ切り替わるタイミングが早くなります。
-- **操作 B — loop の増え方:** <span class="hb-field">Charge Loop Gain Curve</span> の中間を下げます。
-  - 例: `ChargeT = 0.5` の Gain を `0.2` にする。
-  - **確認できること:** charge 前半の loop は弱く、後半でより急に強くなります。
-- **操作 C — entry:** <span class="hb-field">Heavy Shot Event</span> を変更します。
-  - 例: <code class="hb-entry">z5_shot_heavy</code> から <code class="hb-entry">z1_pin_hit</code> に切り替える。
-  - **確認できること:** heavy charge の release が、選んだ entry を再生します。
-:::
+3. <span class="hb-field">Heavy Threshold</span> を変更します。
+   - 例: `0.7` から `0.4` にする。
+   - **確認できること:** threshold entry と heavy shot へ切り替わるタイミングが早くなります。
+4. <span class="hb-field">Charge Loop Gain Curve</span> の中間を下げます。
+   - 例: `ChargeT = 0.5` の Gain を `0.2` にする。
+   - **確認できること:** charge 前半の loop は弱く、後半でより急に強くなります。
+5. <span class="hb-field">Heavy Shot Event</span> を変更します。
+   - 例: <code class="hb-entry">z5_shot_heavy</code> から <code class="hb-entry">z1_pin_hit</code> に切り替える。
+   - **確認できること:** heavy charge の release が、選んだ entry を再生します。
 
 ### SDK の接続を確認する（C++）
 

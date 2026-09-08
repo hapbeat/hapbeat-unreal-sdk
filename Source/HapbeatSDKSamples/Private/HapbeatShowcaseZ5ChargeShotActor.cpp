@@ -124,6 +124,18 @@ AHapbeatShowcaseZ5ChargeShotActor::AHapbeatShowcaseZ5ChargeShotActor()
 	if (DefaultEventMap.Succeeded())
 	{
 		EventMapOverride = DefaultEventMap.Object;
+		ChargeLoopEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			EventMapOverride, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_loop"));
+		ChargeThresholdEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			EventMapOverride, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_thd"));
+		ShotLightEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			EventMapOverride, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_shot_light"));
+		ShotHeavyEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			EventMapOverride, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_shot_heavy"));
+		TarHitLightEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			EventMapOverride, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_light"));
+		TarHitHeavyEvent.EntryId = FHapbeatSampleLibrary::FindEntryId(
+			EventMapOverride, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_heavy"));
 	}
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> LightProjectile(
@@ -492,28 +504,29 @@ void AHapbeatShowcaseZ5ChargeShotActor::BuildEventMap()
 		return;
 	}
 
-	// Look the ids up by event name. The fallback map below authors the same
-	// categories / names / modes, so both paths go through this one resolution
-	// step instead of duplicating the wiring.
-	ChargeLoopEntryId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_loop"));
-	ChargeThresholdEntryId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_thd"));
-	ShotLightEntryId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_shot_light"));
-	ShotHeavyEntryId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_shot_heavy"));
-	TarHitLightEntryId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_light"));
-	TarHitHeavyEntryId = FHapbeatSampleLibrary::FindEntryId(
-		EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_heavy"));
+	// An authored Event Map uses the six entries selected in Details. The
+	// code-built fallback resolves the shipped event names so this sample still
+	// runs when the asset is unavailable.
+	ChargeLoopEntryId = EventMapOverride != nullptr ? ChargeLoopEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_loop"));
+	ChargeThresholdEntryId = EventMapOverride != nullptr ? ChargeThresholdEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_thd"));
+	ShotLightEntryId = EventMapOverride != nullptr ? ShotLightEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_shot_light"));
+	ShotHeavyEntryId = EventMapOverride != nullptr ? ShotHeavyEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_shot_heavy"));
+	TarHitLightEntryId = EventMapOverride != nullptr ? TarHitLightEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_light"));
+	TarHitHeavyEntryId = EventMapOverride != nullptr ? TarHitHeavyEvent.EntryId
+		: FHapbeatSampleLibrary::FindEntryId(EventMap, EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_tar_hit_heavy"));
 	ResolvedHapticEventMap = EventMap;
-	if (ChargeLoopEntryId.IsValid()) { ResolvedChargeLoopEntryName = TEXT("showcase-kit.z5_charge_loop"); }
-	if (ChargeThresholdEntryId.IsValid()) { ResolvedChargeThresholdEntryName = TEXT("showcase-kit.z5_charge_thd"); }
-	if (ShotLightEntryId.IsValid()) { ResolvedShotLightEntryName = TEXT("showcase-kit.z5_shot_light"); }
-	if (ShotHeavyEntryId.IsValid()) { ResolvedShotHeavyEntryName = TEXT("showcase-kit.z5_shot_heavy"); }
-	if (TarHitLightEntryId.IsValid()) { ResolvedTarHitLightEntryName = TEXT("showcase-kit.z5_tar_hit_light"); }
-	if (TarHitHeavyEntryId.IsValid()) { ResolvedTarHitHeavyEntryName = TEXT("showcase-kit.z5_tar_hit_heavy"); }
+	FHapbeatEventEntry ResolvedEntry;
+	if (EventMap->FindById(ChargeLoopEntryId, ResolvedEntry)) { ResolvedChargeLoopEntryName = ResolvedEntry.GetEventId(); }
+	if (EventMap->FindById(ChargeThresholdEntryId, ResolvedEntry)) { ResolvedChargeThresholdEntryName = ResolvedEntry.GetEventId(); }
+	if (EventMap->FindById(ShotLightEntryId, ResolvedEntry)) { ResolvedShotLightEntryName = ResolvedEntry.GetEventId(); }
+	if (EventMap->FindById(ShotHeavyEntryId, ResolvedEntry)) { ResolvedShotHeavyEntryName = ResolvedEntry.GetEventId(); }
+	if (EventMap->FindById(TarHitLightEntryId, ResolvedEntry)) { ResolvedTarHitLightEntryName = ResolvedEntry.GetEventId(); }
+	if (EventMap->FindById(TarHitHeavyEntryId, ResolvedEntry)) { ResolvedTarHitHeavyEntryName = ResolvedEntry.GetEventId(); }
 }
 
 UHapbeatEventMap* AHapbeatShowcaseZ5ChargeShotActor::BuildFallbackEventMap()

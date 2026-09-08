@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "HapbeatEntryRef.h"
 #include "HapbeatShowcaseZone.h" // IHapbeatShowcaseZone: the switcher asks the zone for its label / keys / spawn
 #include "HapbeatShowcaseZ5ChargeShotActor.generated.h"
 
@@ -291,8 +292,38 @@ private:
 	 *
 	 * Entries are resolved by event name, not by order (see BuildEventMap).
 	 */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat")
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Haptic Events", meta = (DisplayName = "Event Map"))
 	TObjectPtr<UHapbeatEventMap> EventMapOverride;
+
+	/** Loop started while the player holds the charge button. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Haptic Events",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Charge Loop Event"))
+	FHapbeatEntryRef ChargeLoopEvent;
+
+	/** One-shot fired when the charge crosses Heavy Threshold. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Haptic Events",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Charge Threshold Event"))
+	FHapbeatEntryRef ChargeThresholdEvent;
+
+	/** One-shot fired by a released light projectile. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Haptic Events",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Light Shot Event"))
+	FHapbeatEntryRef ShotLightEvent;
+
+	/** One-shot fired by a released heavy projectile. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Haptic Events",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Heavy Shot Event"))
+	FHapbeatEntryRef ShotHeavyEvent;
+
+	/** Collision event fired when a light projectile reaches the target. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Haptic Events",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Light Target Hit Event"))
+	FHapbeatEntryRef TarHitLightEvent;
+
+	/** Collision event fired when a heavy projectile reaches the target. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Showcase|Haptic Events",
+		meta = (HapbeatEventMap = "EventMapOverride", DisplayName = "Heavy Target Hit Event"))
+	FHapbeatEntryRef TarHitHeavyEvent;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHapbeatEventMap> EventMap;

@@ -33,7 +33,7 @@ public:
 	 * Look up an entry by its stable Id. Returns true and fills OutEntry when
 	 * found; returns false (OutEntry left default) for an invalid / unknown Id.
 	 */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Find Event Entry (Hapbeat)"))
 	bool FindById(FGuid Id, FHapbeatEventEntry& OutEntry) const;
 
 #if WITH_EDITOR

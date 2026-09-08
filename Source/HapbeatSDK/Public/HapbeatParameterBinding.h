@@ -155,15 +155,15 @@ public:
 	float EvaluateNow();
 
 	/** Current raw input value read last tick (before mapping). */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Binding Input (Hapbeat)"))
 	float GetCurrentInput() const { return CurrentInput; }
 
 	/** Current normalized value (0..1 after the input-range mapping). */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Binding Normalized Input (Hapbeat)"))
 	float GetCurrentNormalized() const { return CurrentNormalized; }
 
 	/** Current output value last written to the playback parameter. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Binding Output (Hapbeat)"))
 	float GetCurrentOutput() const { return CurrentOutput; }
 
 protected:

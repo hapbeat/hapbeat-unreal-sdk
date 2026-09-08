@@ -97,7 +97,7 @@ public:
 	 * Replaces whatever is currently shown (viewport or another surface). Pass a
 	 * component that is set to EWidgetSpace::World; nullptr is a logged no-op.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Attach Address Panel (Hapbeat)"))
 	void AttachToWidgetComponent(UWidgetComponent* Target);
 
 	/** Take the panel back down, from wherever Show() / AttachToWidgetComponent() put it. */
@@ -110,11 +110,11 @@ public:
 	 * on a UWidgetComponent should toggle that component's visibility instead,
 	 * so the surface keeps its place in the world.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Toggle Address Panel (Hapbeat)"))
 	void Toggle();
 
 	/** True while the panel is live, in either mode -- both keep PanelWidget set. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Address Panel Shown (Hapbeat)"))
 	bool IsShown() const { return PanelWidget.IsValid(); }
 
 protected:

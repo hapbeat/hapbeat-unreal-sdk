@@ -53,10 +53,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHapbeatTriggerFired, AActor*, Othe
  *
  * Latency compensation (UHapbeatConfig::HapticDelaySeconds + the entry's
  * DelayOffsetSeconds) therefore applies to these triggers exactly as it does to
- * the "Play Hapbeat Event" node — it lives inside PlayEntry / StopEntry.
+ * the "Play Event (Hapbeat)" node — it lives inside PlayEntry / StopEntry.
  *
  * NOT spawnable from Add Component on purpose (no BlueprintSpawnableComponent):
- * firing an entry from a graph is the "Play Hapbeat Event" node's job, and a
+ * firing an entry from a graph is the "Play Event (Hapbeat)" node's job, and a
  * bare trigger component adds nothing over it except an extra place to look for
  * the entry reference. This class stays as the C++ base for the collision /
  * sequence components (which DO carry their own detection logic, and their own
@@ -121,7 +121,7 @@ public:
 	 * Broadcast on the frame a haptic was actually sent (see FHapbeatTriggerFired).
 	 * Hang the impact SFX / VFX off this, so sound and haptic share one gate.
 	 */
-	UPROPERTY(BlueprintAssignable, Category = "Hapbeat")
+	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Trigger Fired (Hapbeat)"))
 	FHapbeatTriggerFired OnFired;
 
 	// ---- Fire surface (Blueprint / C++ / UnityEvent-equivalent) ----
@@ -139,7 +139,7 @@ public:
 	 * (Command: x GainMultiplier x Override; StreamClip: initial modulator =
 	 * GainMultiplier x Override). Useful for animation-event float params.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Fire Trigger With Gain (Hapbeat)"))
 	void FireWithGain(float GainOverride);
 
 	/**
@@ -147,7 +147,7 @@ public:
 	 * and used as the multiplier (parity with the code-first FireScaled helper).
 	 * Values at/below Min map to 0; at/above Max map to 1.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Fire Trigger Scaled (Hapbeat)"))
 	void FireScaled(float Velocity, float MinVelocity = 0.0f, float MaxVelocity = 10.0f);
 
 	/**
@@ -156,7 +156,7 @@ public:
 	 * multiplier (clamping, if any, is the curve author's choice; the composed
 	 * gain is clamped by the subsystem / playback ceilings).
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Fire Trigger With Curve (Hapbeat)"))
 	void FireWithCurve(float Value, UCurveFloat* Curve);
 
 	/**
@@ -175,7 +175,7 @@ public:
 	 * the GainMultiplier field does NOT push to the playback (UProperties have no
 	 * setter hook), unlike Unity's GainMultiplier property. Clamped to [0, 2].
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Set Trigger Gain Multiplier (Hapbeat)"))
 	void SetGainMultiplier(float NewMultiplier);
 
 	/**
@@ -183,11 +183,11 @@ public:
 	 * (imperative counterpart to a Pan ParameterBinding). No-op if nothing is
 	 * streaming. Ignored for mono clips by the playback handle.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Set Trigger Stream Pan (Hapbeat)"))
 	void SetStreamPan(float NewPan);
 
 	/** Active StreamClip playback handle this trigger started, or nullptr. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Trigger Playback (Hapbeat)"))
 	UHapbeatStreamPlayback* GetActivePlayback() const;
 
 protected:

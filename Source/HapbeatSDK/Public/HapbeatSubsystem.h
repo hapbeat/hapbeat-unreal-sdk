@@ -90,7 +90,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FHapbeatOnPong, const FString&, En
  * C++ and Blueprint. Sends Layer 1 commands over Wi-Fi UDP broadcast and
  * receives PONG / ERROR replies on the same bound socket.
  *
- * Firing an authored haptic goes through the "Play Hapbeat Event" node
+ * Firing an authored haptic goes through the "Play Event (Hapbeat)" node
  * (UHapbeatBlueprintLibrary), which lands on PlayEntry below; C++ may call
  * either. Play(event id, gain) stays available for the rare call site that
  * deliberately bypasses the Event Map.
@@ -131,7 +131,7 @@ public:
 	virtual void Deinitialize() override;
 
 	/** Open the UDP broadcast socket (reusable, bound to an OS port so replies arrive here). AppName (<=16 chars) shows on the device OLED. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Connect (Hapbeat)"))
 	void Connect(int32 InPort = 7700, const FString& InAppName = TEXT(""));
 
 	/**
@@ -142,18 +142,18 @@ public:
 	 * lands off-center without any stream involved. Devices running firmware
 	 * older than DEC-055 ignore it and play centered.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Play Event (Hapbeat)"))
 	void Play(const FString& EventId, float Gain = 1.0f, const FString& Target = TEXT(""), float Pan = 0.0f);
 
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop Event (Hapbeat)"))
 	void Stop(const FString& EventId, const FString& Target = TEXT(""));
 
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop All Events (Hapbeat)"))
 	void StopAll(const FString& Target = TEXT(""));
 
 	/**
 	 * Play an entry of an Event Map. Blueprint does not see this directly: a
-	 * graph calls "Play Hapbeat Event"
+	 * graph calls "Play Event (Hapbeat)"
 	 * (UHapbeatBlueprintLibrary::PlayHapbeatEvent), which validates its Map /
 	 * Entry pins and lands here; the AnimNotify lands here too.
 	 *
@@ -231,7 +231,7 @@ public:
 	 */
 	void StopEntry(UHapbeatEventMap* Map, FGuid EntryId);
 
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Ping (Hapbeat)"))
 	void Ping();
 
 	// ---- Real-time clip streaming (Phase 3) ----
@@ -262,7 +262,7 @@ public:
 	 *                     applied afterwards would have nothing to steer.
 	 * @return Per-stream handle, or nullptr if the clip was invalid.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (AdvancedDisplay = "3"))
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Play Stream Clip (Hapbeat)", AdvancedDisplay = "3"))
 	UHapbeatStreamPlayback* StreamClip(UHapbeatClip* Clip, float BaselineGain = 1.0f, float InitialGain = 1.0f,
 		const FString& Target = TEXT(""), bool bLoop = false, float InitialPan = 0.0f);
 
@@ -272,7 +272,7 @@ public:
 	 * then mark the handle stopped and unregister the watchdog ticker. No-op if
 	 * nothing is streaming.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop Streams (Hapbeat)"))
 	void StopStream();
 
 	// ---- Global address override (single-app, multi-HMD 1:1 deployments) ----
@@ -294,7 +294,7 @@ public:
 	 */
 	// NOTE: the group parameter is named InGroup per this class's existing
 	// `Connect(int32 InPort, const FString& InAppName)` naming convention.
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target", meta = (DisplayName = "Set Address Override (Hapbeat)"))
 	void SetAddressOverride(int32 Player, int32 InGroup, bool bPersist = false);
 
 	/**
@@ -305,7 +305,7 @@ public:
 	 * false, so the just-cleared keys aren't immediately re-saved). Mirrors
 	 * HapbeatManager.ClearPersistedAddressOverride (Unity SDK).
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target", meta = (DisplayName = "Clear Saved Address Override (Hapbeat)"))
 	void ClearPersistedAddressOverride();
 
 	/**
@@ -339,11 +339,11 @@ public:
 	static void RemovePersistedAddressOverride();
 
 	/** Currently effective forced player number, or AddressOverrideDisabled (-1) if this axis doesn't override the target's player. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat|Target", meta = (DisplayName = "Get Override Player (Hapbeat)"))
 	int32 GetOverridePlayer() const { return OverridePlayer; }
 
 	/** Currently effective forced group number, or AddressOverrideDisabled (-1) if this axis doesn't override the target's group. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat|Target", meta = (DisplayName = "Get Override Group (Hapbeat)"))
 	int32 GetOverrideGroup() const { return OverrideGroup; }
 
 	/**
@@ -361,39 +361,39 @@ public:
 	 * even with no device powered on. For device presence use IsAlive() /
 	 * GetAliveDeviceCount().
 	 */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Connected (Hapbeat)"))
 	bool IsConnected() const { return Socket != nullptr; }
 
 	/** Number of distinct devices that returned a PONG within max(5s, PingInterval*3). */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Alive Device Count (Hapbeat)"))
 	int32 GetAliveDeviceCount() const;
 
 	/** True if at least one device is responsive. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Device Alive (Hapbeat)"))
 	bool IsAlive() const { return GetAliveDeviceCount() > 0; }
 
 	/** True while at least one endpoint-scoped clip stream session is active. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Streaming (Hapbeat)"))
 	bool IsStreaming() const { return StreamSessions.Num() > 0; }
 
 	/** First active local source, or nullptr. Hold StreamClip's return value for source-specific control. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Active Stream Playback (Hapbeat)"))
 	UHapbeatStreamPlayback* GetActivePlayback() const;
 
 	/** Fires when a device first becomes reachable (alive count 0 -> positive). */
-	UPROPERTY(BlueprintAssignable, Category = "Hapbeat")
+	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Connected (Hapbeat)"))
 	FHapbeatOnConnected OnConnected;
 
 	/** Fires when the last reachable device ages out (alive count positive -> 0). */
-	UPROPERTY(BlueprintAssignable, Category = "Hapbeat")
+	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Disconnected (Hapbeat)"))
 	FHapbeatOnDisconnected OnDisconnected;
 
 	/** Fires when a device returns an ERROR packet. */
-	UPROPERTY(BlueprintAssignable, Category = "Hapbeat")
+	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Error (Hapbeat)"))
 	FHapbeatOnError OnError;
 
 	/** Fires for every PONG (one per responsive device per ping on broadcast). */
-	UPROPERTY(BlueprintAssignable, Category = "Hapbeat")
+	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Pong (Hapbeat)"))
 	FHapbeatOnPong OnPong;
 
 private:

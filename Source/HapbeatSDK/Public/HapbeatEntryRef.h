@@ -9,7 +9,7 @@
  * stable GUID.
  *
  * Which map the entry belongs to is ALWAYS stated right next to this value --
- * the Map argument of the same function call ("Play Hapbeat Event"), or the
+ * the Map argument of the same function call ("Play Event (Hapbeat)"), or the
  * UHapbeatEventMap property of the same class. This struct deliberately does
  * NOT carry the map itself.
  *

@@ -90,7 +90,7 @@ public:
 	 * declarative Phase-4 ParameterBinding so the formula lives in one place.
 	 * Typical modulator range is [0, 1] (= 0..authored); up to [0, 2] for boost.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Apply Stream Gain Modulation (Hapbeat)"))
 	void ApplyGainModulation(float Modulator);
 
 	/**
@@ -102,42 +102,42 @@ public:
 	 * mono clip, give the pan before the stream starts (the entry's Pan, the Play
 	 * node's Pan, or StreamClip's InitialPan).
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Set Stream Pan (Hapbeat)"))
 	void SetPan(float NewPan);
 
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Set Stream Loop (Hapbeat)"))
 	void SetLoop(bool bNewLoop);
 
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Stream Loop (Hapbeat)"))
 	bool GetLoop() const { return bLoop; }
 
 	/**
 	 * Request the stream to stop. The streamer notices this between chunks and
 	 * sends STREAM_END shortly after. Idempotent.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop Stream Playback (Hapbeat)"))
 	void Stop();
 
 	/** Current overall gain multiplier applied to every sample before sending. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Stream Gain (Hapbeat)"))
 	float GetGain() const { return Gain; }
 
 	/** Current stereo pan, -1 (full left) .. +1 (full right). */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Stream Pan (Hapbeat)"))
 	float GetPan() const { return Pan; }
 
 	/** True once Stop() has been called (or the clip finished on its own for non-loop). */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Stream Playback Stopped (Hapbeat)"))
 	bool IsStopped() const;
 
 /** True only while this source's StreamClip is actively producing haptic chunks. */
-UFUNCTION(BlueprintPure, Category = "Hapbeat")
+UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Stream Playback Active (Hapbeat)"))
 	bool IsActive() const { return Status == EHapbeatStreamPlaybackStatus::Active && !IsStopped(); }
 
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Stream Playback Status (Hapbeat)"))
 	EHapbeatStreamPlaybackStatus GetStatus() const { return IsStopped() ? EHapbeatStreamPlaybackStatus::Stopped : Status; }
 
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Stream Deferred Reason (Hapbeat)"))
 	EHapbeatStreamDeferredReason GetDeferredReason() const { return DeferredReason; }
 
 	/**

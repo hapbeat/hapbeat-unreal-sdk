@@ -42,21 +42,21 @@ public:
 	bool bAlsoDrawOnScreen = false;
 
 	/** Log an arbitrary tag. Bind anything here and name the event in the tag. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Event (Hapbeat)"))
 	void LogEvent(const FString& Tag);
 
 	// Shortcuts for events whose delegate signature can't pass a string.
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogBeginOverlap();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogEndOverlap();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogHit();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogClicked();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogReleased();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogBeginCursorOver();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogEndCursorOver();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogGrabbed();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogDropped();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogActivated();
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat") void LogDeactivated();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Begin Overlap (Hapbeat)")) void LogBeginOverlap();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log End Overlap (Hapbeat)")) void LogEndOverlap();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Hit (Hapbeat)")) void LogHit();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Clicked (Hapbeat)")) void LogClicked();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Released (Hapbeat)")) void LogReleased();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Begin Cursor Over (Hapbeat)")) void LogBeginCursorOver();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log End Cursor Over (Hapbeat)")) void LogEndCursorOver();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Grabbed (Hapbeat)")) void LogGrabbed();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Dropped (Hapbeat)")) void LogDropped();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Activated (Hapbeat)")) void LogActivated();
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Deactivated (Hapbeat)")) void LogDeactivated();
 
 private:
 	void Emit(const FString& Tag) const;

@@ -35,11 +35,11 @@ public:
 	bool bShowOverlay = true;
 
 	/** Append a one-line entry to the on-screen log. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Log Status Message (Hapbeat)"))
 	void Log(const FString& Message);
 
 	/** Drop every log line. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Clear Status Log (Hapbeat)"))
 	void ClearLog();
 
 protected:

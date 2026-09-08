@@ -11,7 +11,7 @@ Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続
 | Zone | 実装方法 | 確認できる触覚配線 |
 | --- | --- | --- |
 | Z1 Bowling | C++ Actor + collision trigger | pin の衝突から `z1_pin_hit` を発火する配線 |
-| Z2 Swing Door | Blueprint Event Graph | ドアの Timeline と `Play Hapbeat Event` を同じ操作分岐から始める配線 |
+| Z2 Swing Door | Blueprint Event Graph | ドアの Timeline と `Play Event (Hapbeat)` を同じ操作分岐から始める配線 |
 | Z3 Fishing | C++ Actor + Sequence / Parameter Binding | hook の開始・loop・解除と、魚の速度を loop Gain へ送る配線 |
 | Z4 Stream Console | Blueprint Event Graph + Widget Blueprint | stream の開始・停止、UI の Gain / Pan、tick、Address Override の配線 |
 | Z5 Target Range | C++ Actor + collision trigger | charge・shot の直接 SDK 呼び出しと、target hit の light / heavy 分岐 |
@@ -101,10 +101,10 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 
 ## Z2 Swing Door — Blueprint からイベントを発火する
 
-`BP_Z2_Door` は、ドアの開閉と **Play Hapbeat Event** を同じ Event Graph で接続する Blueprint 完結の例です。Graph 内では各動作を `DoorOpen | z2_door_open -> Play Hapbeat Event` のように色付きの枠で分けています。
+`BP_Z2_Door` は、ドアの開閉と **Play Event (Hapbeat)** を同じ Event Graph で接続する Blueprint 完結の例です。Graph 内では各動作を `DoorOpen | z2_door_open -> Play Event (Hapbeat)` のように色付きの枠で分けています。
 
 :::tip[手を動かして試す]
-- **操作:** `BP_Z2_Door > EventGraph` の `DoorSlam` lane にある **Play Hapbeat Event** node の `Entry` を変更します。
+- **操作:** `BP_Z2_Door > EventGraph` の `DoorSlam` lane にある **Play Event (Hapbeat)** node の `Entry` を変更します。
   - 例: `z2_door_slam` から `z2_door_close` に切り替える。
   - **確認できること:** `G` の slam Timeline は同じまま、node で選んだ entry の触覚を発火します。
 :::
@@ -114,13 +114,13 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 1. World Outliner で `Z2_Door` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z2_Door` をダブルクリックします。
 2. 開いた Blueprint Editor の左上 **Components** パネルが component tree です。`DoorHinge`、`DoorLeafMesh`、`DoorHandleMesh` を確認します。
 3. 左の **My Blueprint > Graphs > EventGraph** を開きます。
-4. `F`、`G`、`L` の Input Key node から **Switch on Door State** と **Play Hapbeat Event** をたどります。
+4. `F`、`G`、`L` の Input Key node から **Switch on Door State** と **Play Event (Hapbeat)** をたどります。
 
 ```text
 F / G / L Pressed
   → Switch on Door State
   → DoorOpen / DoorClose / DoorSlam / DoorRattle / Lock / Unlock
-  → 対応する z2_door_* entry の Play Hapbeat Event
+  → 対応する z2_door_* entry の Play Event (Hapbeat)
   → DoorHinge の Timeline
 ```
 
@@ -139,7 +139,7 @@ F は閉じたドアを開き、開いたドアを通常速度で閉じます。
 | Unlock Door | `z2_door_unlock` |
 | Locked Rattle | `z2_door_rattle` |
 
-各 **Play Hapbeat Event** node の `Map` と `Entry` pin で再生先を確認します。entry の Clip、Gain、Target は `EM_Showcase` で編集します。
+各 **Play Event (Hapbeat)** node の `Map` と `Entry` pin で再生先を確認します。entry の Clip、Gain、Target は `EM_Showcase` で編集します。
 
 ## Z3 Fishing — sequence と gain binding
 
@@ -207,7 +207,7 @@ Gain / Pan slider
   → BP_Z4_StreamConsole Event Graph
   → Set Binding Input (Hapbeat)
   → Update Stream Parameter (Hapbeat)
-  → Fire Hapbeat Tick From Value (TickEmitter)
+  → Fire Tick From Value (Hapbeat)
 ```
 
 :::tip[手を動かして試す]
@@ -222,7 +222,7 @@ Gain / Pan slider
 2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickEmitter`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。`TickEmitter` の class は **Hapbeat Tick Emitter** です。
 3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から **Switch on Loop State** をたどり、Stopped の `Fire Trigger (Hapbeat)` と Running の `Stop Trigger (Hapbeat)` を確認します。`On Showcase Zone Activated` から `Create Widget`、`On Gain Slider Changed`、`On Pan Slider Changed` の delegate を接続していることも確認します。
 4. **My Blueprint > Construction Script** を開きます。`GainBinding` と `PanBinding` の `Set Target Trigger` に、この Actor の `LoopTrigger` を接続しています。
-5. `On Gain Slider Changed` / `On Pan Slider Changed` から、それぞれ `Set Binding Input (Hapbeat)` → `Update Stream Parameter (Hapbeat)` → `Fire Hapbeat Tick From Value` をたどります。Widget BP は表示専用で、SDK 配線を確認するために開く必要はありません。
+5. `On Gain Slider Changed` / `On Pan Slider Changed` から、それぞれ `Set Binding Input (Hapbeat)` → `Update Stream Parameter (Hapbeat)` → `Fire Tick From Value (Hapbeat)` をたどります。Widget BP は表示専用で、SDK 配線を確認するために開く必要はありません。
 
 `LoopTrigger` は `z4_stream_loop`、`TickEmitter` は `z4_slider_tick` を指します。各 component の Details で **Event Map** と entry を変更できます。Gain/Pan を切り替えた最初の値では tick の参照をリセットするため、別の slider の値との差による誤発火はありません。`GainBinding` と `PanBinding` の **Source = External** に slider 値を渡し、Construction Script で接続した `LoopTrigger` の再生だけを調整します。
 

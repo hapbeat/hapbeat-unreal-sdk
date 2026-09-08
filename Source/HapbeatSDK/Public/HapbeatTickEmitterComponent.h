@@ -72,22 +72,22 @@ public:
 	bool bEmitOnInitialValue = false;
 
 	/** Scalar input handler. Bind a slider's value-changed delegate here. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Fire Tick From Value (Hapbeat)"))
 	void FireFromValue(float Value);
 
 	/** 2D input handler. Bind a scroll box / range slider here; reads the configured Axis. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Fire Tick From Vector2D (Hapbeat)"))
 	void FireFromVector2D(FVector2D Value);
 
 	/** Fire once, bypassing tick detection entirely. */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Fire Tick Now (Hapbeat)"))
 	void FireNow();
 
 	/**
 	 * Forget the tick anchor. Call after the input jumps discontinuously (a
 	 * programmatic snap, say) so the jump does not emit a flurry of ticks.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Reset Tick Reference (Hapbeat)"))
 	void ResetReference();
 
 protected:

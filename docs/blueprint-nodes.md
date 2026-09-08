@@ -10,7 +10,7 @@ Hapbeat SDK は、Blueprint から Event Map の entry を再生するための�
 
 ## ノード名の読み方
 
-Hapbeat SDK が提供する一般的な操作には、末尾に **`(Hapbeat)`** を付けます。例えば `Set Binding Input (Hapbeat)` と `Update Stream Parameter (Hapbeat)` は SDK の Parameter Binding に対するノードです。`Create Widget` や `Add to Viewport` のように表記のないノードは Unreal Engine の標準ノードです。固有名を含む SDK ノードは、既存の `Play Hapbeat Event` のようにタイトル自体で SDK 由来を示します。
+Hapbeat SDK が提供する Blueprint node は、末尾を **`(Hapbeat)`** に統一します。例えば `Play Event (Hapbeat)`、`Set Binding Input (Hapbeat)`、`Show Address Panel (Hapbeat)` です。`Create Widget` や `Add to Viewport` のように表記のない node は Unreal Engine の標準 node です。
 
 ## 最初に選ぶ入口
 
@@ -18,29 +18,29 @@ Hapbeat SDK が提供する一般的な操作には、末尾に **`(Hapbeat)`** 
 
 | 作りたいもの | 最初に使うもの | 理由 |
 | --- | --- | --- |
-| ボタン、UI、Animation Notify、独自の gameplay event で一度だけ鳴らす | **Play Hapbeat Event** | Event Graph から直接呼べる最短経路 |
+| ボタン、UI、Animation Notify、独自の gameplay event で一度だけ鳴らす | **Play Event (Hapbeat)** | Event Graph から直接呼べる最短経路 |
 | 衝突または overlap で鳴らす | **Hapbeat Collision Trigger** component | UE の Hit / Begin Overlap を component が監視する |
 | 掴む→保持→離す | **Hapbeat Sequence** component | start、loop、stop を 1 component で管理する |
 | スライダー・ノブで連続音の強さや左右を変える | **Hapbeat Parameter Binding** component | 入力値を stream の gain / pan に変換する |
 | ノブや slider の目盛りを越えたときに一発ずつ鳴らす | **Hapbeat Tick Emitter** component | 移動量に応じて tick 数を決める |
 | 接続・宛先・直接送信を独自管理する | **Hapbeat Subsystem** | 上の高水準 API では足りない場合だけ使う |
 
-`Hapbeat Trigger Component` は C++ 用の基底 class であり、意図的に **Add Component には表示されません**。Blueprint から任意のイベントを発火する用途には `Play Hapbeat Event` を使います。Collision / Sequence / Tick Emitter は検出ロジックを持つため、Add Component から追加できます。
+`Hapbeat Trigger Component` は C++ 用の基底 class であり、意図的に **Add Component には表示されません**。Blueprint から任意のイベントを発火する用途には `Play Event (Hapbeat)` を使います。Collision / Sequence / Tick Emitter は検出ロジックを持つため、Add Component から追加できます。
 
 ## 1. Event Map を直接再生する
 
-Event Graph の空白を右クリックして `Play Hapbeat Event` を検索します。`Map` と `Entry` に Event Map Data Asset とその entry を指定します。
+Event Graph の空白を右クリックして `Play Event (Hapbeat)` を検索します。`Map` と `Entry` に Event Map Data Asset とその entry を指定します。
 
 | ノード | 入力・出力 | 用途 |
 | --- | --- | --- |
-| **Play Hapbeat Event** | `Map`、`Entry`、任意で `Gain Multiplier` / `Pan` / `Delay Seconds`。StreamClip entry の場合は `Hapbeat Stream Playback` を返す | 単発 Command、単発 Clip、loop Clip の開始 |
-| **Stop Hapbeat Event** | `Map`、`Entry` | entry を停止する |
+| **Play Event (Hapbeat)** | `Map`、`Entry`、任意で `Gain Multiplier` / `Pan` / `Delay Seconds`。StreamClip entry の場合は `Hapbeat Stream Playback` を返す | 単発 Command、単発 Clip、loop Clip の開始 |
+| **Stop Event (Hapbeat)** | `Map`、`Entry` | entry を停止する |
 
 `Gain Multiplier` は Event Map の Gain に掛ける値です。`Pan` は Event Map の Pan に加算され、`Delay Seconds` はこの呼び出しだけに加える遅延です。いずれもノードの詳細ピンから表示します。
 
 ```text
 On Component Begin Overlap
-  → Play Hapbeat Event
+  → Play Event (Hapbeat)
       Map: DA_HapbeatEventMap
       Entry: pickup
 ```
@@ -81,15 +81,15 @@ Hit を使う場合、衝突する Primitive Component で **Simulation Generate
 
 ## 3. Stream Playback を操作する
 
-`Play Hapbeat Event` が StreamClip entry を開始した場合、戻り値の `Hapbeat Stream Playback` を変数に保存します。再生中のその source だけを操作できます。
+`Play Event (Hapbeat)` が StreamClip entry を開始した場合、戻り値の `Hapbeat Stream Playback` を変数に保存します。再生中のその source だけを操作できます。
 
 | ノード | 用途 |
 | --- | --- |
-| `Apply Gain Modulation` | 再生中の gain を変える |
-| `Set Pan` | 再生中の pan を変える（-1 = 左、+1 = 右） |
-| `Set Loop` / `Get Loop` | loop を切り替える・確認する |
+| `Apply Stream Gain Modulation (Hapbeat)` | 再生中の gain を変える |
+| `Set Stream Pan (Hapbeat)` | 再生中の pan を変える（-1 = 左、+1 = 右） |
+| `Set Stream Loop (Hapbeat)` / `Get Stream Loop (Hapbeat)` | loop を切り替える・確認する |
 | `Stop` | この playback source だけを停止する |
-| `Is Active` / `Is Stopped` / `Get Status` / `Get Deferred Reason` | 再生状態と待機理由を確認する |
+| `Is Stream Playback Active (Hapbeat)` / `Is Stream Playback Stopped (Hapbeat)` / `Get Stream Playback Status (Hapbeat)` / `Get Stream Deferred Reason (Hapbeat)` | 再生状態と待機理由を確認する |
 
 同時に複数の StreamClip を再生している場合でも、各戻り値を別々に保持すれば個別に制御できます。Z4 の BP 例では、開始時に handle を保存し、UI から gain・pan・loop・stop を操作します。
 
@@ -118,10 +118,10 @@ loop を開始した直後に `Update Stream Parameter (Hapbeat)` を一度呼�
 
 | ノード | 用途 |
 | --- | --- |
-| `Fire From Value` | 1 次元の slider 値を渡す |
-| `Fire From Vector2D` | 2 次元入力の指定 axis を使う |
-| `Fire Now` | 目盛り検出を通さず 1 回発火する |
-| `Reset Reference` | UI 値をプログラムから飛ばした後、不要な連続 tick を防ぐ |
+| `Fire Tick From Value (Hapbeat)` | 1 次元の slider 値を渡す |
+| `Fire Tick From Vector2D (Hapbeat)` | 2 次元入力の指定 axis を使う |
+| `Fire Tick Now (Hapbeat)` | 目盛り検出を通さず 1 回発火する |
+| `Reset Tick Reference (Hapbeat)` | UI 値をプログラムから飛ばした後、不要な連続 tick を防ぐ |
 
 Z4 では Parameter Binding と Tick Emitter を併用します。前者は連続した stream の変調、後者は操作感を示す one-shot です。
 
@@ -132,13 +132,13 @@ Collision / Sequence / Tick Emitter は共通して次のノードを持ちま�
 | ノード | 用途 |
 | --- | --- |
 | `Fire` | 設定済み entry を再生する |
-| `Fire With Gain` | 呼び出しごとの倍率を掛けて再生する |
-| `Fire Scaled` | 速度などの値を指定範囲で 0〜1 にして再生する |
-| `Fire With Curve` | 値を `Curve Float` で倍率へ変換して再生する |
+| `Fire Trigger With Gain (Hapbeat)` | 呼び出しごとの倍率を掛けて再生する |
+| `Fire Trigger Scaled (Hapbeat)` | 速度などの値を指定範囲で 0〜1 にして再生する |
+| `Fire Trigger With Curve (Hapbeat)` | 値を `Curve Float` で倍率へ変換して再生する |
 | `Stop` | この component が開始した entry を停止する |
-| `Set Gain Multiplier` | 再生中 stream にも gain を即時反映する |
-| `Set Stream Pan` | 再生中 stream の pan を即時変更する |
-| `Get Active Playback` | component が開始した Stream Playback handle を取得する |
+| `Set Trigger Gain Multiplier (Hapbeat)` | 再生中 stream にも gain を即時反映する |
+| `Set Trigger Stream Pan (Hapbeat)` | 再生中 stream の pan を即時変更する |
+| `Get Trigger Playback (Hapbeat)` | component が開始した Stream Playback handle を取得する |
 | `On Fired` event | 実際に触覚を送った時だけ SFX / VFX も実行する |
 
 `On Fired` には、触覚と同じ gate を通したい音・光・アニメーションをつなぎます。cooldown、無効状態、entry 未設定で触覚が送られなかった場合には実行されません。
@@ -152,7 +152,7 @@ Collision / Sequence / Tick Emitter は共通して次のノードを持ちま�
 | `Connect` | UDP socket を開く |
 | `Play` / `Stop` / `Stop All` | event ID を直接送信・停止する |
 | `Ping` | 到達可能 device を確認する |
-| `Stream Clip` / `Stop Stream` | Clip を直接 stream する |
+| `Play Stream Clip (Hapbeat)` / `Stop Streams (Hapbeat)` | Clip を直接 stream する |
 | `On Connected` / `On Disconnected` / `On Error` / `On Pong` | 接続状態を BP event として扱う |
 | `Is Connected` / `Is Alive` / `Get Alive Device Count` / `Is Streaming` | 状態を UI などに表示する |
 
@@ -189,10 +189,10 @@ Showcase はすべての node を並べる場所ではなく、実際の gamepla
 
 | Zone | BP で示す範囲 |
 | --- | --- |
-| Z2 Door | `Play Hapbeat Event` による単発 event の発火 |
+| Z2 Door | `Play Event (Hapbeat)` による単発 event の発火 |
 | Z4 Stream Console | Stream Playback、Parameter Binding、Tick Emitter による連続制御 |
 
-`BP_Z2_Door` と `BP_Z4_StreamConsole` は Showcase map に配置済みの直接 BP 例です。前者は Event Graph の `Play Hapbeat Event`、後者は loop の開始・停止と slider の runtime parameter / tick を示します。Z4 の Components には `LoopTrigger`、Gain/Pan ごとの `Hapbeat Parameter Binding`、1つの `Hapbeat Tick Emitter` が設定されています。Collision / Sequence は Z1 / Z3 の C++ 実装でも component の設定と lifecycle を確認できます。接続・Target・診断はこのページと[応用](./advanced.md)で確認します。Showcase 内の Actor / Component と Event Map の配線は[Showcase の触覚配線ガイド](./showcase-unreal.md)を参照してください。
+`BP_Z2_Door` と `BP_Z4_StreamConsole` は Showcase map に配置済みの直接 BP 例です。前者は Event Graph の `Play Event (Hapbeat)`、後者は loop の開始・停止と slider の runtime parameter / tick を示します。Z4 の Components には `LoopTrigger`、Gain/Pan ごとの `Hapbeat Parameter Binding`、1つの `Hapbeat Tick Emitter` が設定されています。Collision / Sequence は Z1 / Z3 の C++ 実装でも component の設定と lifecycle を確認できます。接続・Target・診断はこのページと[応用](./advanced.md)で確認します。Showcase 内の Actor / Component と Event Map の配線は[Showcase の触覚配線ガイド](./showcase-unreal.md)を参照してください。
 
 ## 実装の参照先
 

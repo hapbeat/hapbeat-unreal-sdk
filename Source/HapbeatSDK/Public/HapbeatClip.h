@@ -36,18 +36,18 @@ public:
 	TArray<uint8> Pcm16;
 
 	/** Total interleaved int16 sample count across all channels (bytes / 2). */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Clip Sample Count (Hapbeat)"))
 	int32 NumSamples() const { return Pcm16.Num() / 2; }
 
 	/** Number of sample frames (NumSamples / channels). */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Clip Frame Count (Hapbeat)"))
 	int32 NumFrames() const
 	{
 		return NumChannels > 0 ? (NumSamples() / NumChannels) : 0;
 	}
 
 	/** Clip duration in seconds (frames / sample rate). 0 if unset. */
-	UFUNCTION(BlueprintPure, Category = "Hapbeat")
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Clip Duration (Hapbeat)"))
 	float DurationSeconds() const
 	{
 		return SampleRate > 0 ? (static_cast<float>(NumFrames()) / static_cast<float>(SampleRate)) : 0.0f;

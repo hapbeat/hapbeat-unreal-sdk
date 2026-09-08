@@ -37,7 +37,7 @@ public:
 	 * (Wildcard examples are spelled out in words: the literal target text would
 	 *  contain an asterisk-slash pair, which terminates this comment block.)
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target", meta = (DisplayName = "Build Target (Hapbeat)"))
 	static FString BuildTarget(int32 Player = -1, const FString& Position = TEXT(""), int32 Group = -1);
 
 	/**
@@ -47,7 +47,7 @@ public:
 	 * Unset parts return sentinels: OutPlayer = -1, OutGroup = -1, OutPosition = "".
 	 * '*' and any free-prefix segments are ignored.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target", meta = (DisplayName = "Parse Target (Hapbeat)"))
 	static void ParseTarget(const FString& Target, int32& OutPlayer, FString& OutPosition, int32& OutGroup);
 
 	/**
@@ -75,7 +75,7 @@ public:
 	 *         this is what keeps existing projects' behavior byte-for-byte identical
 	 *         when the feature isn't used. Otherwise the rewritten target string.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target", meta = (DisplayName = "Resolve Target (Hapbeat)"))
 	static FString ResolveTarget(const FString& Target, int32 OverridePlayer, int32 OverrideGroup);
 
 	/**
@@ -90,7 +90,7 @@ public:
 	 * (BuildConnectStatus already does), so substitute BEFORE capping — capping
 	 * the raw template first could cut a placeholder in half.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target", meta = (DisplayName = "Apply Address Placeholders (Hapbeat)"))
 	static FString ApplyAddressPlaceholders(const FString& AppName, int32 OverridePlayer, int32 OverrideGroup);
 
 	/**
@@ -106,6 +106,6 @@ public:
 	 * @param Target        Resolved target string (post-ResolveTarget).
 	 * @param DeviceAddress The device's own address, from the PONG extension.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target")
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Target", meta = (DisplayName = "Does Address Match (Hapbeat)"))
 	static bool AddressMatches(const FString& Target, const FString& DeviceAddress);
 };

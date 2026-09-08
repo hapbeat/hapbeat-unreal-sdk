@@ -11,8 +11,8 @@ class UHapbeatStreamPlayback;
 class UHapbeatTickEmitterComponent;
 
 /**
- * The call site for firing an authored haptic: "Play Hapbeat Event" /
- * "Stop Hapbeat Event". This is the normal entry point from a Blueprint GRAPH,
+ * The call site for firing an authored haptic: "Play Event (Hapbeat)" /
+ * "Stop Event (Hapbeat)". This is the normal entry point from a Blueprint GRAPH,
  * and C++ may call it too -- it is exactly equivalent to
  * UHapbeatSubsystem::PlayEntry / StopEntry, which it delegates to (so the
  * Command vs Stream Clip decision stays in one place).
@@ -20,7 +20,7 @@ class UHapbeatTickEmitterComponent;
  * Why a function library rather than methods on the subsystem: a subsystem
  * method only appears in the graph's node search once its Target is known, so
  * an author had to place "Get Hapbeat Subsystem" FIRST and drag off it before
- * "Play Hapbeat Event" existed as far as the search was concerned. A static
+ * "Play Event (Hapbeat)" existed as far as the search was concerned. A static
  * library function with meta=(WorldContext=...) is found by name from anywhere
  * in the graph and fills its own context in -- the same arrangement
  * UGameplayStatics uses, and for the same reason.
@@ -69,16 +69,16 @@ public:
 	 *         null when the arguments do not resolve to an entry.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Play Hapbeat Event",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Play Event (Hapbeat)",
 			AdvancedDisplay = "GainMultiplier, Pan, DelaySeconds",
 			Keywords = "haptic play event hapbeat pan delay"))
 	static UHapbeatStreamPlayback* PlayHapbeatEvent(const UObject* WorldContextObject,
 		UHapbeatEventMap* Map, FHapbeatEntryRef Entry, float GainMultiplier = 1.0f, float Pan = 0.0f,
 		float DelaySeconds = 0.0f);
 
-	/** Stop an entry started by Play Hapbeat Event: STOP for Command, ends the stream for Stream Clip. */
+	/** Stop an entry started by Play Event (Hapbeat): STOP for Command, ends the stream for Stream Clip. */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat",
-		meta = (WorldContext = "WorldContextObject", DisplayName = "Stop Hapbeat Event",
+		meta = (WorldContext = "WorldContextObject", DisplayName = "Stop Event (Hapbeat)",
 			Keywords = "haptic stop event hapbeat"))
 	static void StopHapbeatEvent(const UObject* WorldContextObject,
 		UHapbeatEventMap* Map, FHapbeatEntryRef Entry);
@@ -89,6 +89,6 @@ public:
 	 * non-tick trigger from being wired by accident.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat",
-		meta = (DisplayName = "Fire Hapbeat Tick From Value", Keywords = "haptic tick detent slider value hapbeat"))
+		meta = (DisplayName = "Fire Tick From Value (Hapbeat)", Keywords = "haptic tick detent slider value hapbeat"))
 	static void FireHapbeatTickFromValue(UHapbeatTickEmitterComponent* TickEmitter, float Value);
 };

@@ -8,6 +8,8 @@ sidebar:
 
 Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルです。各 zone Actor の Details と `EM_Showcase` を開くと、再生する触覚とその設定を確認・変更できます。
 
+<p class="hb-notation"><span class="hb-location">エディタ内の場所</span><span class="hb-field">Details の編集項目</span><span class="hb-bp-node">Blueprint ノード</span><code>C++・asset・entry ID</code></p>
+
 | Zone | 実装方法 | 確認できる触覚配線 |
 | --- | --- | --- |
 | Z1 Bowling | C++ Actor + collision trigger | pin の衝突から `z1_pin_hit` を発火する配線 |
@@ -18,10 +20,10 @@ Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続
 
 ## 最初に見る場所
 
-1. Content Browser の Settings で **Show Plugin Content** を有効にします。
-2. `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Maps/Showcase` を開きます。
-3. World Outliner で対象の zone Actor を選びます。
-4. Content Browser の `HapbeatSamples/Showcase/EM_Showcase` を開き、entry の Clip、Gain、Target、loop を編集します。
+1. <span class="hb-location">Content Browser > Settings</span> で <span class="hb-field">Show Plugin Content</span> を有効にします。
+2. <span class="hb-location">Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/Maps/Showcase</span> を開きます。
+3. <span class="hb-location">World Outliner</span> で対象の zone Actor を選びます。
+4. <span class="hb-location">Content Browser > HapbeatSamples/Showcase/EM_Showcase</span> を開き、entry の <span class="hb-field">Clip</span>、<span class="hb-field">Gain</span>、<span class="hb-field">Target</span>、<span class="hb-field">Loop</span> を編集します。
 
 ```text
 ゲーム入力 / 衝突 / 状態遷移 / UI
@@ -38,18 +40,18 @@ ball が pin に Hit
   → Pin Hit Event
 ```
 
-`Pin Hit Event` は、6 本の pin が衝突したときに再生する Event Map entry です。
+<span class="hb-field">Pin Hit Event</span> は、6 本の pin が衝突したときに再生する Event Map entry です。
 
 ### 編集する場所を開く
 
-1. `Showcase` map を開き、World Outliner で `Z1_Bowling` を選びます。
-2. Details の **Hapbeat > Bowling > Pin Hit** を開きます。
+1. <span class="hb-location">Showcase map > World Outliner</span> で `Z1_Bowling` を選びます。
+2. <span class="hb-location">Details > Hapbeat > Bowling > Pin Hit</span> を開きます。
 
 :::tip[手を動かして試す]
-- **操作 A — 強さ:** `EM_Showcase > z1_pin_hit > Gain` を変更します。
+- **操作 A — 強さ:** <span class="hb-location">`EM_Showcase` の `z1_pin_hit` entry</span> にある <span class="hb-field">Gain</span> を変更します。
   - 例: 現在値を半分にする。
   - **確認できること:** ball と pin の衝突は同じまま、触覚の強さだけが変わります。
-- **操作 B — entry:** `Z1_Bowling > Pin Hit Event` を変更します。
+- **操作 B — entry:** <span class="hb-field">Pin Hit Event</span> を変更します。
   - 例: `z1_pin_hit` から `z2_door_slam` に切り替える。
   - **確認できること:** 同じ pin 衝突が、選んだ entry の触覚を発火します。
 :::
@@ -82,22 +84,22 @@ Pin->HitTrigger->EntryId = PinHitEntryId;
 
 ## Z2 Swing Door — Blueprint からイベントを発火する
 
-`BP_Z2_Door` は、ドア操作の各分岐から **Play Event (Hapbeat)** を発火する Blueprint 完結の例です。
+`BP_Z2_Door` は、ドア操作の各分岐から <span class="hb-bp-node">Play Event (Hapbeat)</span> を発火する Blueprint 完結の例です。
 
 ### 編集箇所を開く（Blueprint）
 
-1. `Showcase` map の World Outliner で `Z2_Door` を選び、Details の **Edit Blueprint** をクリックします。
-2. 左の **My Blueprint > Graphs > EventGraph** を開きます。
+1. <span class="hb-location">Showcase map > World Outliner</span> で `Z2_Door` を選び、<span class="hb-location">Details</span> の <span class="hb-field">Edit Blueprint</span> をクリックします。
+2. <span class="hb-location">My Blueprint > Graphs > EventGraph</span> を開きます。
 
 :::tip[手を動かして試す]
-- **操作:** `BP_Z2_Door > EventGraph` の `DoorSlam` lane にある **Play Event (Hapbeat)** node の `Entry` を変更します。
+- **操作:** <span class="hb-location">DoorSlam lane</span> の <span class="hb-bp-node">Play Event (Hapbeat)</span> にある <span class="hb-field">Entry</span> を変更します。
   - 例: `z2_door_slam` から `z2_door_close` に切り替える。
   - **確認できること:** `G` の slam Timeline は同じまま、node で選んだ entry の触覚を発火します。
 :::
 
 ### SDK の接続を確認する（Blueprint）
 
-`F`、`G`、`L` の Input Key node から **Switch on Door State**、対応する動作 lane、**Play Event (Hapbeat)** をたどります。
+`F`、`G`、`L` の <span class="hb-bp-node">Input Key</span> から <span class="hb-bp-node">Switch on Door State</span>、対応する動作 lane、<span class="hb-bp-node">Play Event (Hapbeat)</span> をたどります。
 
 ```text
 F / G / L Pressed
@@ -107,7 +109,7 @@ F / G / L Pressed
   → DoorHinge の Timeline
 ```
 
-各 lane の **Play Event (Hapbeat)** node の `Map` と `Entry` が、ゲーム内操作と Hapbeat 再生を結ぶ箇所です。Timeline は同じ lane で始まるため、ドアの動きと触覚の開始点がそろいます。
+各 lane の <span class="hb-bp-node">Play Event (Hapbeat)</span> にある <span class="hb-field">Map</span> と <span class="hb-field">Entry</span> が、ゲーム内操作と Hapbeat 再生を結ぶ箇所です。Timeline は同じ lane で始まるため、ドアの動きと触覚の開始点がそろいます。
 
 ## Z3 Fishing — sequence と gain binding
 
@@ -121,17 +123,17 @@ Shark の速度
   → loop の Gain
 ```
 
-`Z3_Fishing` の **Hook Start / Loop / Release Event** は、左クリックの開始・継続・解除で再生する entry です。
+`Z3_Fishing` の <span class="hb-field">Hook Start / Loop / Release Event</span> は、左クリックの開始・継続・解除で再生する entry です。
 
 ### 編集する場所を開く
 
-1. `Showcase` map の World Outliner で `Z3_Fishing` を選びます。
-2. Details の **Hapbeat > Fishing > Hook** を開き、Event Map と 3 つの entry を確認します。
+1. <span class="hb-location">Showcase map > World Outliner</span> で `Z3_Fishing` を選びます。
+2. <span class="hb-location">Details > Hapbeat > Fishing > Hook</span> を開き、Event Map と 3 つの entry を確認します。
 
 :::tip[手を動かして試す]
-- **操作:** `Z3_Fishing > Hook Loop Event` を変更します。
+- **操作:** <span class="hb-field">Hook Loop Event</span> を変更します。
   - 例: `z3_hook_loop` から `z5_charge_loop` に切り替える。
-  - **確認できること:** **Hook Wiring > Loop Entry Name** が選択した entry になり、hook 中の loop が切り替わります。
+  - **確認できること:** <span class="hb-location">Hook Wiring</span> の <span class="hb-field">Loop Entry Name</span> が選択した entry になり、hook 中の loop が切り替わります。
 :::
 
 ### SDK の接続を確認する（C++）
@@ -171,20 +173,20 @@ Gain / Pan slider
 
 ### 編集箇所を開く（Blueprint）
 
-1. `Showcase` map の World Outliner で `Z4_StreamConsole` を選び、Details の **Edit Blueprint** をクリックします。
-2. 左の **My Blueprint > Graphs > EventGraph** を開きます。
+1. <span class="hb-location">Showcase map > World Outliner</span> で `Z4_StreamConsole` を選び、<span class="hb-location">Details</span> の <span class="hb-field">Edit Blueprint</span> をクリックします。
+2. <span class="hb-location">My Blueprint > Graphs > EventGraph</span> を開きます。
 
 :::tip[手を動かして試す]
-- **操作:** 左上の **Components** で `TickEmitter` を選び、Details の **Tick Threshold** を変更します。
+- **操作:** <span class="hb-location">Components</span> で `TickEmitter` を選び、<span class="hb-location">Details</span> の <span class="hb-field">Tick Threshold</span> を変更します。
   - 例: `0.1` から `0.2` にする。
   - **確認できること:** Gain / Pan slider を同じ距離だけ動かしたときの tick 回数が半分になります。
 :::
 
 ### SDK の接続を確認する（Blueprint）
 
-1. `Space Bar` から **Switch on Loop State** をたどります。Stopped の `Fire Trigger (Hapbeat)` が `z4_stream_loop` を開始し、Running の `Stop Trigger (Hapbeat)` が同じ loop を停止します。
-2. `On Gain Slider Changed` / `On Pan Slider Changed` から **Set Binding Input (Hapbeat)** → **Update Stream Parameter (Hapbeat)** をたどります。slider の float 値を `GainBinding` / `PanBinding` に入れ、両 binding が `LoopTrigger` の再生中 stream の Gain / Pan を更新します。
-3. 続く **Fire Tick From Value (Hapbeat)** は、slider が `Tick Threshold` をまたいだときだけ `z4_slider_tick` を再生します。
+1. `Space Bar` から <span class="hb-bp-node">Switch on Loop State</span> をたどります。Stopped の <span class="hb-bp-node">Fire Trigger (Hapbeat)</span> が `z4_stream_loop` を開始し、Running の <span class="hb-bp-node">Stop Trigger (Hapbeat)</span> が同じ loop を停止します。
+2. <span class="hb-bp-node">On Gain Slider Changed</span> / <span class="hb-bp-node">On Pan Slider Changed</span> から <span class="hb-bp-node">Set Binding Input (Hapbeat)</span> → <span class="hb-bp-node">Update Stream Parameter (Hapbeat)</span> をたどります。slider の float 値を `GainBinding` / `PanBinding` に入れ、両 binding が `LoopTrigger` の再生中 stream の Gain / Pan を更新します。
+3. 続く <span class="hb-bp-node">Fire Tick From Value (Hapbeat)</span> は、slider が <span class="hb-field">Tick Threshold</span> をまたいだときだけ `z4_slider_tick` を再生します。
 
 Address Override は、Player / Group に対応する Hapbeat だけへ送るための実行時の送信先指定です。Event Map の entry や再生配線は変えません。詳しくは[複数の HMD に 1 台ずつ Hapbeat を割り当てる](./advanced.md#複数の-hmd-に-1-台ずつ-hapbeat-を割り当てる)を参照してください。
 
@@ -203,11 +205,11 @@ projectile が target に Hit
 
 ### 編集する場所を開く
 
-1. `Showcase` map の World Outliner で `Z5_ChargeShot` を選びます。
-2. Details の **Hapbeat > Showcase > Haptic Events** を開きます。
+1. <span class="hb-location">Showcase map > World Outliner</span> で `Z5_ChargeShot` を選びます。
+2. <span class="hb-location">Details > Hapbeat > Showcase > Haptic Events</span> を開きます。
 
 :::tip[手を動かして試す]
-- **操作:** **Heavy Shot Event** を変更します。
+- **操作:** <span class="hb-field">Heavy Shot Event</span> を変更します。
   - 例: `z5_shot_heavy` から `z1_pin_hit` に切り替える。
   - **確認できること:** heavy charge の release が、選んだ entry を再生します。
 :::
@@ -234,8 +236,8 @@ Plugins
 | 変更したい内容 | 変更場所 |
 | --- | --- |
 | Clip、Gain、Target、loop | `EM_Showcase` の entry |
-| Z1 の pin-hit entry | `Z1_Bowling` > **Event Map / Pin Hit Event** |
-| Z5 の charge / shot / target-hit entry | `Z5_ChargeShot` > **Haptic Events** |
+| Z1 の pin-hit entry | `Z1_Bowling` の <span class="hb-field">Event Map / Pin Hit Event</span> |
+| Z5 の charge / shot / target-hit entry | `Z5_ChargeShot` の <span class="hb-field">Haptic Events</span> |
 | 実行時の送信先 | Address Override |
 
 `Target` は送信先を表す論理フィルタです。Address Override は Event Map や Actor の配線を変更しません。詳細は[応用](./advanced.md)を参照してください。

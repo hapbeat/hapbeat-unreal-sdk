@@ -1043,9 +1043,9 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 		FLinearColor(0.18f, 0.18f, 0.18f));
 	AddComment(Graph, TEXT("ON SHOWCASE ZONE ACTIVATED  |  seed bindings, create console, bind slider delegates, show address override"), -1430, -210, 4400, 600,
 		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("GAIN SLIDER  |  Set Binding Input (Hapbeat)  ->  Update Stream Parameter (Hapbeat)  ->  Fire Hapbeat Tick From Value"), -1430, 590, 2250, 280,
+	AddComment(Graph, TEXT("GAIN SLIDER  |  Set Binding Input (Hapbeat)  ->  Update Stream Parameter (Hapbeat)  ->  Fire Hapbeat Tick From Value"), 760, 330, 1600, 320,
 		FLinearColor(0.10f, 0.42f, 0.22f));
-	AddComment(Graph, TEXT("PAN SLIDER  |  Set Binding Input (Hapbeat)  ->  Update Stream Parameter (Hapbeat)  ->  Fire Hapbeat Tick From Value"), -1430, 940, 2250, 280,
+	AddComment(Graph, TEXT("PAN SLIDER  |  Set Binding Input (Hapbeat)  ->  Update Stream Parameter (Hapbeat)  ->  Fire Hapbeat Tick From Value"), 1110, 690, 1600, 320,
 		FLinearColor(0.12f, 0.30f, 0.52f));
 	AddComment(Graph, TEXT("ON SHOWCASE ZONE DEACTIVATED  |  stop loop, remove console, hide address override"), -1430, 1290, 2500, 420,
 		FLinearColor(0.50f, 0.15f, 0.15f));
@@ -1098,9 +1098,9 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 		GET_FUNCTION_NAME_CHECKED(UHapbeatShowcaseZ4ConsoleWidget, Configure), 700, -120);
 	FindPinChecked(ConfigureWidget, TEXT("InTickSound"))->DefaultObject = TickSound;
 	FWidgetSliderDelegateNodes GainDelegate = AddWidgetSliderDelegate(Graph, TEXT("OnGainSliderChanged"), TEXT("OnGainSliderChanged"),
-		1040, -120, -1340, 670);
+		1040, -120, 830, 420);
 	FWidgetSliderDelegateNodes PanDelegate = AddWidgetSliderDelegate(Graph, TEXT("OnPanSliderChanged"), TEXT("OnPanSliderChanged"),
-		1380, -120, -1340, 1020);
+		1380, -120, 1180, 780);
 	UK2Node_CallFunction* AddToViewport = AddCall(Graph, UUserWidget::StaticClass(),
 		GET_FUNCTION_NAME_CHECKED(UUserWidget, AddToViewport), 1720, -120);
 	UK2Node_VariableSet* StoreWidget = AddSelfVariableSet(Graph, TEXT("ConsoleWidget"), 2030, -120);
@@ -1142,16 +1142,16 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(StoreWidget->GetThenPin(), ShowAddress->GetExecPin());
 	ConnectPins(AddressForShow->GetValuePin(), FindTargetPinChecked(ShowAddress));
 
-	// The UI dispatchers enter the Actor Blueprint here. Each lane makes the
-	// complete SDK path visible without opening the Widget Blueprint.
-	UK2Node_VariableGet* GainBindingForInput = AddComponentGet(Graph, TEXT("GainBinding"), -1090, 820);
+	// The UI dispatchers sit below their Bind Event nodes. The short vertical
+	// delegate wires make the ownership visible without spanning the graph.
+	UK2Node_VariableGet* GainBindingForInput = AddComponentGet(Graph, TEXT("GainBinding"), 1080, 570);
 	UK2Node_CallFunction* SetGainInput = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -990, 670);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), 1180, 420);
 	UK2Node_CallFunction* UpdateGainParameter = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), -650, 670);
-	UK2Node_VariableGet* GainTickEmitter = AddComponentGet(Graph, TEXT("TickEmitter"), -400, 820);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), 1520, 420);
+	UK2Node_VariableGet* GainTickEmitter = AddComponentGet(Graph, TEXT("TickEmitter"), 1870, 570);
 	UK2Node_CallFunction* FireGainTick = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), -300, 670);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), 1970, 420);
 	ConnectPins(GainDelegate.Event->GetThenPin(), SetGainInput->GetExecPin());
 	ConnectPins(GainBindingForInput->GetValuePin(), FindTargetPinChecked(SetGainInput));
 	ConnectPins(FindPinChecked(GainDelegate.Event, TEXT("Value")), FindPinChecked(SetGainInput, TEXT("Value")));
@@ -1161,14 +1161,14 @@ void CreateStreamConsoleBlueprint(UBlueprint* Blueprint, UWidgetBlueprint* Widge
 	ConnectPins(GainTickEmitter->GetValuePin(), FindPinChecked(FireGainTick, TEXT("TickEmitter")));
 	ConnectPins(FindPinChecked(GainDelegate.Event, TEXT("Value")), FindPinChecked(FireGainTick, TEXT("Value")));
 
-	UK2Node_VariableGet* PanBindingForInput = AddComponentGet(Graph, TEXT("PanBinding"), -1090, 1170);
+	UK2Node_VariableGet* PanBindingForInput = AddComponentGet(Graph, TEXT("PanBinding"), 1430, 930);
 	UK2Node_CallFunction* SetPanInput = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), -990, 1020);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, SetValue), 1530, 780);
 	UK2Node_CallFunction* UpdatePanParameter = AddCall(Graph, UHapbeatParameterBinding::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), -650, 1020);
-	UK2Node_VariableGet* PanTickEmitter = AddComponentGet(Graph, TEXT("TickEmitter"), -400, 1170);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatParameterBinding, EvaluateNow), 1870, 780);
+	UK2Node_VariableGet* PanTickEmitter = AddComponentGet(Graph, TEXT("TickEmitter"), 2220, 930);
 	UK2Node_CallFunction* FirePanTick = AddCall(Graph, UHapbeatBlueprintLibrary::StaticClass(),
-		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), -300, 1020);
+		GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, FireHapbeatTickFromValue), 2320, 780);
 	ConnectPins(PanDelegate.Event->GetThenPin(), SetPanInput->GetExecPin());
 	ConnectPins(PanBindingForInput->GetValuePin(), FindTargetPinChecked(SetPanInput));
 	ConnectPins(FindPinChecked(PanDelegate.Event, TEXT("Value")), FindPinChecked(SetPanInput, TEXT("Value")));

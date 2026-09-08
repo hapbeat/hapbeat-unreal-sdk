@@ -45,6 +45,12 @@ ball が pin に Hit
 
 `Pin Hit Event` は Actor に保存される編集可能な参照です。`EM_Showcase` 側で `z1_pin_hit` の Clip、Gain、Target を変えることも、別の entry を `Pin Hit Event` に選び直すこともできます。
 
+### 編集する場所を開く
+
+1. `Showcase` map を開き、World Outliner で `Z1_Bowling` を選びます。
+2. Details の **Hapbeat > Bowling > Pin Hit** を開きます。
+3. entry 自体の Clip、Gain、Target を変える場合は、Content Browser で `HapbeatSamples/Showcase/EM_Showcase` を開きます。
+
 :::tip[手を動かして試す]
 - **操作 A — 強さ:** `EM_Showcase > z1_pin_hit > Gain` を変更します。
   - 例: 現在値を半分にする。
@@ -103,6 +109,12 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 
 `BP_Z2_Door` は、ドアの開閉と **Play Event (Hapbeat)** を同じ Event Graph で接続する Blueprint 完結の例です。Graph 内では各動作を `DoorOpen | z2_door_open -> Play Event (Hapbeat)` のように色付きの枠で分けています。
 
+### Blueprint を開く
+
+1. `Showcase` map の World Outliner で `Z2_Door` を選び、Details の **Edit Blueprint** をクリックします。
+2. 開いた Blueprint Editor 左上の **Components** で、`DoorHinge`、`DoorLeafMesh`、`DoorHandleMesh` を確認します。
+3. 左の **My Blueprint > Graphs > EventGraph** を開きます。
+
 :::tip[手を動かして試す]
 - **操作:** `BP_Z2_Door > EventGraph` の `DoorSlam` lane にある **Play Event (Hapbeat)** node の `Entry` を変更します。
   - 例: `z2_door_slam` から `z2_door_close` に切り替える。
@@ -111,10 +123,7 @@ Showcase の入力・物理などの挙動は [Showcase の動作](./showcase-be
 
 ### SDK の接続を確認する（Blueprint）
 
-1. World Outliner で `Z2_Door` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z2_Door` をダブルクリックします。
-2. 開いた Blueprint Editor の左上 **Components** パネルが component tree です。`DoorHinge`、`DoorLeafMesh`、`DoorHandleMesh` を確認します。
-3. 左の **My Blueprint > Graphs > EventGraph** を開きます。
-4. `F`、`G`、`L` の Input Key node から **Switch on Door State** と **Play Event (Hapbeat)** をたどります。
+`F`、`G`、`L` の Input Key node から **Switch on Door State** と **Play Event (Hapbeat)** をたどります。
 
 ```text
 F / G / L Pressed
@@ -154,6 +163,12 @@ Shark の速度
 ```
 
 `Z3_Fishing` の **Hapbeat > Fishing > Hook** で Event Map を選び、**Hook Start Event**、**Hook Loop Event**、**Hook Release Event** の各プルダウンから entry を割り当てます。**Hook Wiring** は実際に Shark の sequence へ渡された結果を確認する読み取り専用の表示です。竿、`RodTipMarker`、釣り糸、Shark slot の位置は Details で編集します。
+
+### 編集する場所を開く
+
+1. `Showcase` map の World Outliner で `Z3_Fishing` を選びます。
+2. Details の **Hapbeat > Fishing > Hook** を開き、Event Map と 3 つの entry を確認します。
+3. 配線結果は、同じ Details の **Hapbeat > Fishing > Hook Wiring** で確認します。
 
 :::tip[手を動かして試す]
 - **操作:** `Z3_Fishing > Hook Loop Event` を変更します。
@@ -210,6 +225,12 @@ Gain / Pan slider
   → Fire Tick From Value (Hapbeat)
 ```
 
+### Blueprint を開く
+
+1. `Showcase` map の World Outliner で `Z4_StreamConsole` を選び、Details の **Edit Blueprint** をクリックします。
+2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickEmitter`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。
+3. 左の **My Blueprint > Graphs > EventGraph** を開きます。
+
 :::tip[手を動かして試す]
 - **操作:** `TickEmitter > Tick Threshold` を変更します。
   - 例: `0.1` から `0.2` にする。
@@ -218,11 +239,10 @@ Gain / Pan slider
 
 ### SDK の接続を確認する（Blueprint）
 
-1. World Outliner で `Z4_StreamConsole` を選び、Details の **Edit Blueprint** をクリックします。Content Browser から開く場合は `Plugins/HapbeatSDK/Content/HapbeatSamples/Showcase/BP_Z4_StreamConsole` を開きます。
-2. 開いた Blueprint Editor 左上の **Components** で、`LoopTrigger`、`TickEmitter`、`GainBinding`、`PanBinding`、`AddressPanel` を確認します。`TickEmitter` の class は **Hapbeat Tick Emitter** です。
-3. **My Blueprint > Graphs > EventGraph** を開きます。`Space Bar` から **Switch on Loop State** をたどり、Stopped の `Fire Trigger (Hapbeat)` と Running の `Stop Trigger (Hapbeat)` を確認します。`On Showcase Zone Activated` から `Create Widget`、`On Gain Slider Changed`、`On Pan Slider Changed` の delegate を接続していることも確認します。
-4. **My Blueprint > Construction Script** を開きます。`GainBinding` と `PanBinding` の `Set Target Trigger` に、この Actor の `LoopTrigger` を接続しています。
-5. `On Gain Slider Changed` / `On Pan Slider Changed` から、それぞれ `Set Binding Input (Hapbeat)` → `Update Stream Parameter (Hapbeat)` → `Fire Tick From Value (Hapbeat)` をたどります。Widget BP は表示専用で、SDK 配線を確認するために開く必要はありません。
+1. `TickEmitter` の class が **Hapbeat Tick Emitter** であることを確認します。
+2. `Space Bar` から **Switch on Loop State** をたどり、Stopped の `Fire Trigger (Hapbeat)` と Running の `Stop Trigger (Hapbeat)` を確認します。`On Showcase Zone Activated` から `Create Widget`、`On Gain Slider Changed`、`On Pan Slider Changed` の delegate を接続していることも確認します。
+3. **My Blueprint > Construction Script** を開きます。`GainBinding` と `PanBinding` の `Set Target Trigger` に、この Actor の `LoopTrigger` を接続しています。
+4. Event Graph に戻り、`On Gain Slider Changed` / `On Pan Slider Changed` から、それぞれ `Set Binding Input (Hapbeat)` → `Update Stream Parameter (Hapbeat)` → `Fire Tick From Value (Hapbeat)` をたどります。Widget BP は表示専用で、SDK 配線を確認するために開く必要はありません。
 
 `LoopTrigger` は `z4_stream_loop`、`TickEmitter` は `z4_slider_tick` を指します。各 component の Details で **Event Map** と entry を変更できます。Gain/Pan を切り替えた最初の値では tick の参照をリセットするため、別の slider の値との差による誤発火はありません。`GainBinding` と `PanBinding` の **Source = External** に slider 値を渡し、Construction Script で接続した `LoopTrigger` の再生だけを調整します。
 
@@ -240,6 +260,12 @@ projectile が target に Hit
 ```
 
 `Z5_ChargeShot` の **Haptic Wiring** で、charge、shot、target hit の entry を確認します。charge 時間、launch speed、target slot は同 Actor の Details で変更できます。触覚の Clip、Gain、Target、loop は Event Map で変更します。
+
+### 編集する場所を開く
+
+1. `Showcase` map の World Outliner で `Z5_ChargeShot` を選びます。
+2. Details の **Hapbeat > Event Map Override** と **Hapbeat > Showcase > Haptic Wiring** を開きます。
+3. entry 自体の Clip、Gain、Target、loop を変える場合は、Content Browser で `HapbeatSamples/Showcase/EM_Showcase` を開きます。
 
 :::tip[手を動かして試す]
 - **操作:** `Z5_ChargeShot > Heavy Threshold` を変更します。

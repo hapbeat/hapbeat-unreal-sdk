@@ -1,10 +1,10 @@
 ---
 sidebar:
   order: 1
-  label: はじめかた
+  label: Getting Started
 ---
 
-# はじめかた
+# Getting Started
 
 このページでは、プラグインを有効にして、同梱の `BasicExample` から Hapbeat を 1 回再生するところまでを行います。Event Map の作成、Blueprint / C++ の実装、複数端末への送信は次のページへ分けています。
 
@@ -16,7 +16,7 @@ sidebar:
 2. `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。ZIP の親フォルダまで入れて、`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` となる配置は誤りです。
 3. project files を再生成して、プロジェクトを build します。
 
-### AI に初期セットアップを任せる
+:::tip[ヒント: AI に初期セットアップを任せる]
 
 ファイル操作と Unreal の build を実行できる AI には、次の依頼文を渡します。`<ProjectRoot>` は対象プロジェクトの絶対パスに置き換えます。
 
@@ -26,6 +26,7 @@ https://github.com/hapbeat/hapbeat-unreal-sdk.git を <ProjectRoot>/Plugins/Hapb
 Hapbeat SDK を有効化し、Plugin Content の BasicExample マップを開いてください。
 PIE、Test Play、実機への触覚送信は実行しないでください。
 ```
+:::
 
 ## 2. プラグインを有効にする
 

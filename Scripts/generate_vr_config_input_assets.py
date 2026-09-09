@@ -39,12 +39,15 @@ def get_or_create(asset_name, package_path, asset_class):
     return asset
 
 
-def map_key(context, action, key_name):
+def make_mapping(action, key_name):
     # FKey has no value-taking Python constructor in UE 5.4. Build the struct
     # through its reflected KeyName property instead.
     key = unreal.Key()
     key.set_editor_property('key_name', key_name)
-    context.map_key(action, key)
+    mapping = unreal.EnhancedActionKeyMapping()
+    mapping.set_editor_property('action', action)
+    mapping.set_editor_property('key', key)
+    return mapping
 
 
 def configure_project_default(context):
@@ -85,7 +88,7 @@ def main():
     navigate.set_editor_property('value_type', unreal.InputActionValueType.AXIS2D)
 
     context = get_or_create('IMC_HapbeatVRConfig', ROOT, unreal.InputMappingContext)
-    context.unmap_all()
+    mappings = []
 
     # Meta Quest / Touch, Vive, Windows Mixed Reality, and Valve Index. Both
     # hands are symmetric: each stick moves the same panel cursor, matching the
@@ -106,7 +109,7 @@ def main():
         'OculusTouch_Right_FaceButton1',
         'OculusTouch_Right_FaceButton2',
     ):
-        map_key(context, interact, key)
+        mappings.append(make_mapping(interact, key))
     for key in (
         'OculusTouch_Left_Thumbstick_Click',
         'OculusTouch_Right_Thumbstick_Click',
@@ -117,7 +120,7 @@ def main():
         'ValveIndex_Left_Thumbstick_Click',
         'ValveIndex_Right_Thumbstick_Click',
     ):
-        map_key(context, recenter, key)
+        mappings.append(make_mapping(recenter, key))
 
     # Map actual 2D axes rather than the virtual Up / Down / Left / Right keys.
     # OpenXR reliably exposes the paired axes, whereas several runtimes do not
@@ -138,14 +141,38 @@ def main():
         'Gamepad_Left2D',
         'Gamepad_Right2D',
     ):
-        map_key(context, navigate, key)
+        mappings.append(make_mapping(navigate, key))
+
+    # Assign the complete array once. In UE 5.4 the Python wrapper for the
+    # MapKey UFUNCTION returns a reference to an array element; repeatedly
+    # discarding that wrapper can leave only the last mapping for an action in
+    # the serialized asset. Direct array assignment preserves every hand and
+    # every controller profile deterministically.
+    context.set_editor_property('mappings', mappings)
 
     unreal.EditorAssetLibrary.save_loaded_asset(interact)
     unreal.EditorAssetLibrary.save_loaded_asset(recenter)
     unreal.EditorAssetLibrary.save_loaded_asset(navigate)
     unreal.EditorAssetLibrary.save_loaded_asset(context)
+
+    saved_keys = {
+        str(mapping.get_editor_property('key').get_editor_property('key_name'))
+        for mapping in context.get_editor_property('mappings')
+        if mapping.get_editor_property('action') is not None
+        and mapping.get_editor_property('action').get_name() == navigate.get_name()
+    }
+    required_quest_keys = {
+        'OculusTouch_Left_Thumbstick_2D',
+        'OculusTouch_Right_Thumbstick_2D',
+    }
+    missing_quest_keys = sorted(required_quest_keys - saved_keys)
+    if missing_quest_keys:
+        raise RuntimeError(
+            'VRConfigExample input asset did not retain required Quest stick mappings: '
+            + ', '.join(missing_quest_keys))
+
     configure_project_default(context)
-    unreal.log('[Hapbeat] VRConfigExample input assets installed. Restart the editor before VR Preview.')
+    unreal.log('[Hapbeat] VRConfigExample input assets installed (%d mappings). Restart the editor before VR Preview.' % len(mappings))
 
 
 main()

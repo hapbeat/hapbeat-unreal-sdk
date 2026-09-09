@@ -11,6 +11,7 @@ third one's different invocation:
 UnrealEditor-Cmd.exe <YourProject>.uproject -run=pythonscript -script="<abs path>/generate_sample_assets.py"
 UnrealEditor-Cmd.exe <YourProject>.uproject -run=pythonscript -script="<abs path>/import_showcase_assets.py"
 UnrealEditor.exe     <YourProject>.uproject -ExecCmds="py <abs path>/generate_showcase_map.py" -unattended -nosplash
+UnrealEditor.exe     <YourProject>.uproject -ExecCmds="py <abs path>/generate_basic_example_map.py" -unattended -nosplash
 ```
 
 The map generator needs a full editor rather than the `pythonscript`
@@ -27,8 +28,12 @@ close it once the log reports the map was written.
 - `generate_showcase_map.py` — builds `Showcase/Maps/Showcase.umap`: floor,
   lighting, PlayerStart, the `Hapbeat Showcase` actor, and the map's GameMode
   Override.
+- `generate_basic_example_map.py` — builds `BasicExample/Maps/BasicExample.umap`:
+  floor, lighting, PlayerStart, one `Hapbeat Basic Example` actor, and the
+  map's GameMode Override. It assigns the shipped `EM_BasicExample` Event Map
+  to the actor so its Details panel is immediately editable.
 
 The first two touch disjoint assets, so either can be run alone. The third takes
 the floor's material from the art import and the zones' Event Map from the
 sample assets, but only writes the map package — changing the map never means
-re-running the other two. All three are re-runnable.
+re-running the other two. Both map generators are re-runnable.

@@ -6,7 +6,7 @@ sidebar:
 
 # Event Map と再生
 
-Event Map は、ゲーム側の「いつ鳴らすか」と、触覚側の Clip・Gain・Target・Loop を分ける Data Asset です。ゲーム実装は entry を指定して再生し、触覚の調整は Event Map で行います。
+Event Map は、ゲーム側の「いつ鳴らすか」と、再生する触覚刺激のパラメータ（Clip・Gain・Target・Loop）を分ける Data Asset です。ゲーム実装は entry を指定して再生し、触覚の調整は Event Map で行います。
 
 ## Event Map を作る
 

@@ -8,7 +8,12 @@ sidebar:
 
 このページでは、プラグインを有効にして、同梱の `BasicExample` から Hapbeat を 1 回再生するところまでを行います。Event Map の作成、Blueprint / C++ の実装、複数端末への送信は次のページへ分けています。
 
-## 1. プラグインを有効にする
+## 1. プロジェクトへ追加する
+
+1. このリポジトリを C++ プロジェクトの `Plugins/HapbeatSDK/` に置きます。`Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在する配置にしてください。
+2. project files を再生成して、プロジェクトを build します。
+
+## 2. プラグインを有効にする
 
 1. Unreal Editor の **Edit → Plugins** で `Hapbeat SDK` を有効にします。
 2. 再起動を求められた場合は Editor を再起動します。
@@ -18,7 +23,7 @@ sidebar:
 音声出力の遅延は環境ごとに異なるため、触覚が音より先に感じられることがあります。`Haptic Delay Seconds` に少量の遅延を足し、音と触覚のタイミングを合わせます。
 :::
 
-## 2. BasicExample を再生する
+## 3. BasicExample を再生する
 
 1. Content Browser の Settings から **Show Plugin Content** を有効にします。
 2. `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Maps/BasicExample` を開きます。
@@ -32,7 +37,7 @@ sidebar:
 
 | レベル | 確認できること |
 | --- | --- |
-| [BasicExample](./getting-started.md#2-basicexample-を再生する) | 最小構成の Event Map 再生 |
+| [BasicExample](./getting-started.md#3-basicexample-を再生する) | 最小構成の Event Map 再生 |
 | [VR Config Example](./vr-config-example.md) | VR コントローラーでの Address Override 設定と Test 再生 |
 
 ## 次に読むもの

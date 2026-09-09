@@ -93,6 +93,10 @@ void FHapbeatSDKEditorModule::StartupModule()
 		TEXT("Hapbeat.GenerateBlueprintZ4Assets"),
 		TEXT("Generate BP_Z4_StreamConsole and its Widget Blueprint without changing the Showcase map."),
 		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::GenerateStreamConsoleAssets));
+	EnableRealtimeDoorEventOverridesCommand = IConsoleManager::Get().RegisterConsoleCommand(
+		TEXT("Hapbeat.EnableRealtimeDoorEventOverrides"),
+		TEXT("Add PIE-editable Z2 event references without changing the existing Event Graph layout."),
+		FConsoleCommandDelegate::CreateStatic(&HapbeatShowcaseBlueprintBuilder::EnableRealtimeDoorEventOverrides));
 	// ExecCmds is evaluated before Editor modules at LoadingPhase=Default are
 	// available. These flags are the deterministic no-UI routes for local
 	// authoring: wait until the Editor has completed its initial map load, run
@@ -100,9 +104,10 @@ void FHapbeatSDKEditorModule::StartupModule()
 	const bool bGenerateDoorAsset = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintDoorAsset"));
 	const bool bGenerateStreamConsoleAssets = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintZ4Assets"));
 	const bool bGenerateShowcase = FParse::Param(FCommandLine::Get(), TEXT("HapbeatGenerateBlueprintShowcase"));
-	if (bGenerateDoorAsset || bGenerateStreamConsoleAssets || bGenerateShowcase)
+	const bool bEnableRealtimeDoorEventOverrides = FParse::Param(FCommandLine::Get(), TEXT("HapbeatEnableRealtimeDoorEventOverrides"));
+	if (bGenerateDoorAsset || bGenerateStreamConsoleAssets || bGenerateShowcase || bEnableRealtimeDoorEventOverrides)
 	{
-		EditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddLambda([bGenerateShowcase, bGenerateStreamConsoleAssets](double /*Duration*/)
+		EditorInitializedHandle = FEditorDelegates::OnEditorInitialized.AddLambda([bGenerateShowcase, bGenerateStreamConsoleAssets, bEnableRealtimeDoorEventOverrides](double /*Duration*/)
 		{
 			if (bGenerateShowcase)
 			{
@@ -111,6 +116,10 @@ void FHapbeatSDKEditorModule::StartupModule()
 			else if (bGenerateStreamConsoleAssets)
 			{
 				HapbeatShowcaseBlueprintBuilder::GenerateStreamConsoleAssets();
+			}
+			else if (bEnableRealtimeDoorEventOverrides)
+			{
+				HapbeatShowcaseBlueprintBuilder::EnableRealtimeDoorEventOverrides();
 			}
 			else
 			{
@@ -157,6 +166,11 @@ void FHapbeatSDKEditorModule::ShutdownModule()
 	{
 		IConsoleManager::Get().UnregisterConsoleObject(GenerateStreamConsoleAssetsCommand);
 		GenerateStreamConsoleAssetsCommand = nullptr;
+	}
+	if (EnableRealtimeDoorEventOverridesCommand != nullptr)
+	{
+		IConsoleManager::Get().UnregisterConsoleObject(EnableRealtimeDoorEventOverridesCommand);
+		EnableRealtimeDoorEventOverridesCommand = nullptr;
 	}
 	FHapbeatUpdateCheck::Unregister();
 

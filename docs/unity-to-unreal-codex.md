@@ -50,7 +50,7 @@ Showcase の C++ では、値がいつ作られるかで Editor で見える内�
 | `BeginPlay` | input、physics、子 Actor への runtime 設定を始める | PIE を始めて初めて設定される。 |
 | `Tick` | 毎 frame の動き・状態更新 | PIE 中だけ実行される。 |
 
-Z1 pin、Z3 Shark、Z5 Target の Hapbeat Event Map / entry ID は `BeginPlay` に zone から設定します。これは、子 Actor を zone の Event Map override に必ず従わせるためです。したがって、PIE 前の Details だけでは最終的な runtime 値が見えない場合があります。
+Z1 pin、Z3 Shark、Z5 Target の Hapbeat Event Map / entry ID は `BeginPlay` に zone から設定します。これは、子 Actor を zone の Event Map override に必ず従わせるためです。PIE 中に親 zone Actor の Event Map / entry を Details で変更した場合は、Showcase が既存の child trigger を再配線するため、次の発火から反映されます。
 
 一方、mesh の補正や preview のように `OnConstruction` が計算する transform は派生値です。内部 mesh を直接動かしても、親 Actor の property を変更した時や再読み込み時に計算し直されることがあります。Showcase では zone / Child Actor slot の公開 property を正本として扱います。
 

@@ -216,6 +216,10 @@ public:
 protected:
 	/** Keep the target child actor's local mesh fit and haptic wiring in sync while authoring and in PIE. */
 	virtual void OnConstruction(const FTransform& Transform) override;
+#if WITH_EDITOR
+	/** Rewire the PIE target and shot entry references when their Details values change. */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;

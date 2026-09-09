@@ -114,6 +114,10 @@ public:
 protected:
 	/** Keep the pin child actors' visual fit in sync while authoring and in PIE. */
 	virtual void OnConstruction(const FTransform& Transform) override;
+#if WITH_EDITOR
+	/** Rewire the PIE pins when the parent Event Map or Pin Hit Event is changed in Details. */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 

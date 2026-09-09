@@ -365,6 +365,199 @@ void AddObjectMember(UBlueprint* Blueprint, const TCHAR* Name, UClass* Class)
 		TEXT("Could not add generated object variable '%s'."), Name);
 }
 
+void ConnectPins(UEdGraphPin* From, UEdGraphPin* To);
+
+/**
+ * Add an instance-editable reference used by the existing Z2 graph.  This is
+ * deliberately separate from CreateDoorBlueprint(): that generator rebuilds
+ * the graph, whereas this upgrade must preserve an artist's graph layout.
+ */
+void AddInstanceEditableEventMapMember(UBlueprint* Blueprint, const TCHAR* Name, UHapbeatEventMap* DefaultMap)
+{
+	FEdGraphPinType Type;
+	Type.PinCategory = UEdGraphSchema_K2::PC_Object;
+	Type.PinSubCategoryObject = UHapbeatEventMap::StaticClass();
+	checkf(FBlueprintEditorUtils::AddMemberVariable(Blueprint, FName(Name), Type,
+		DefaultMap != nullptr ? DefaultMap->GetPathName() : FString()),
+		TEXT("Could not add realtime Z2 Event Map variable '%s'."), Name);
+
+	FBPVariableDescription* Variable = Blueprint->NewVariables.FindByPredicate(
+		[Name](const FBPVariableDescription& Candidate) { return Candidate.VarName == FName(Name); });
+	checkf(Variable != nullptr, TEXT("Could not find realtime Z2 Event Map variable '%s'."), Name);
+	Variable->PropertyFlags |= CPF_Edit | CPF_BlueprintVisible;
+	Variable->PropertyFlags &= ~CPF_DisableEditOnInstance;
+	FBlueprintEditorUtils::SetBlueprintVariableCategory(Blueprint, FName(Name), nullptr,
+		FText::FromString(TEXT("Hapbeat|Door Events")), /* bDontRecompile */ true);
+}
+
+void AddInstanceEditableEntryMember(UBlueprint* Blueprint, const TCHAR* Name, const FGuid& DefaultEntryId)
+{
+	FEdGraphPinType Type;
+	Type.PinCategory = UEdGraphSchema_K2::PC_Struct;
+	Type.PinSubCategoryObject = FHapbeatEntryRef::StaticStruct();
+	const FString DefaultValue = FString::Printf(TEXT("(EntryId=(A=%d,B=%d,C=%d,D=%d))"),
+		static_cast<int32>(DefaultEntryId.A), static_cast<int32>(DefaultEntryId.B),
+		static_cast<int32>(DefaultEntryId.C), static_cast<int32>(DefaultEntryId.D));
+	checkf(FBlueprintEditorUtils::AddMemberVariable(Blueprint, FName(Name), Type, DefaultValue),
+		TEXT("Could not add realtime Z2 Entry variable '%s'."), Name);
+
+	FBPVariableDescription* Variable = Blueprint->NewVariables.FindByPredicate(
+		[Name](const FBPVariableDescription& Candidate) { return Candidate.VarName == FName(Name); });
+	checkf(Variable != nullptr, TEXT("Could not find realtime Z2 Entry variable '%s'."), Name);
+	Variable->PropertyFlags |= CPF_Edit | CPF_BlueprintVisible;
+	Variable->PropertyFlags &= ~CPF_DisableEditOnInstance;
+	FBlueprintEditorUtils::SetBlueprintVariableCategory(Blueprint, FName(Name), nullptr,
+		FText::FromString(TEXT("Hapbeat|Door Events")), /* bDontRecompile */ true);
+	FBlueprintEditorUtils::SetBlueprintVariableMetaData(Blueprint, FName(Name), nullptr,
+		TEXT("HapbeatEventMap"), TEXT("DoorEventMap"));
+}
+
+void AddRealtimeDoorEventMembers(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
+{
+	check(Blueprint != nullptr && EventMap != nullptr);
+	struct FDoorEventVariable
+	{
+		const TCHAR* VariableName;
+		const TCHAR* EventName;
+	};
+	constexpr FDoorEventVariable EventVariables[] = {
+		{ TEXT("DoorOpenEvent"), TEXT("z2_door_open") },
+		{ TEXT("DoorCloseEvent"), TEXT("z2_door_close") },
+		{ TEXT("DoorSlamEvent"), TEXT("z2_door_slam") },
+		{ TEXT("DoorRattleEvent"), TEXT("z2_door_rattle") },
+		{ TEXT("DoorLockEvent"), TEXT("z2_door_lock") },
+		{ TEXT("DoorUnlockEvent"), TEXT("z2_door_unlock") },
+	};
+
+	if (Blueprint->NewVariables.ContainsByPredicate([](const FBPVariableDescription& Candidate)
+		{ return Candidate.VarName == TEXT("DoorEventMap"); }))
+	{
+		return;
+	}
+
+	AddInstanceEditableEventMapMember(Blueprint, TEXT("DoorEventMap"), EventMap);
+	for (const FDoorEventVariable& EventVariable : EventVariables)
+	{
+		AddInstanceEditableEntryMember(Blueprint, EventVariable.VariableName,
+			FindEntryId(EventMap, EventVariable.EventName));
+	}
+}
+
+const TCHAR* GetRealtimeDoorEntryVariable(const FGuid& EntryId, UHapbeatEventMap* EventMap)
+{
+	struct FDoorEventVariable
+	{
+		const TCHAR* VariableName;
+		const TCHAR* EventName;
+	};
+	constexpr FDoorEventVariable EventVariables[] = {
+		{ TEXT("DoorOpenEvent"), TEXT("z2_door_open") },
+		{ TEXT("DoorCloseEvent"), TEXT("z2_door_close") },
+		{ TEXT("DoorSlamEvent"), TEXT("z2_door_slam") },
+		{ TEXT("DoorRattleEvent"), TEXT("z2_door_rattle") },
+		{ TEXT("DoorLockEvent"), TEXT("z2_door_lock") },
+		{ TEXT("DoorUnlockEvent"), TEXT("z2_door_unlock") },
+	};
+	for (const FDoorEventVariable& EventVariable : EventVariables)
+	{
+		if (FindEntryId(EventMap, EventVariable.EventName) == EntryId)
+		{
+			return EventVariable.VariableName;
+		}
+	}
+	return nullptr;
+}
+
+bool TryReadEntryId(const UEdGraphPin* Pin, FGuid& OutEntryId)
+{
+	if (Pin == nullptr || Pin->DefaultValue.IsEmpty())
+	{
+		return false;
+	}
+	FHapbeatEntryRef EntryRef;
+	return FHapbeatEntryRef::StaticStruct()->ImportText(*Pin->DefaultValue, &EntryRef, nullptr,
+		PPF_SerializedAsImportText, GLog, TEXT("FHapbeatEntryRef")) != nullptr && EntryRef.EntryId.IsValid()
+		? (OutEntryId = EntryRef.EntryId, true)
+		: false;
+}
+
+/** Adds only Get nodes and their two links per existing Play node. */
+void ConnectRealtimeDoorEventMembers(UBlueprint* Blueprint, UHapbeatEventMap* EventMap)
+{
+	UEdGraph* Graph = GetEventGraph(Blueprint);
+	// AddSelfVariableGet appends to Graph->Nodes, so snapshot the authored
+	// nodes before creating anything.  Iterating the live array would both
+	// invalidate the iterator and let newly-added Get nodes become candidates.
+	const TArray<UEdGraphNode*> ExistingNodes = Graph->Nodes;
+	for (UEdGraphNode* Node : ExistingNodes)
+	{
+		UK2Node_CallFunction* PlayNode = Cast<UK2Node_CallFunction>(Node);
+		if (PlayNode == nullptr
+			|| PlayNode->FunctionReference.GetMemberName() != GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, PlayHapbeatEvent))
+		{
+			continue;
+		}
+
+		UEdGraphPin* EntryPin = FindPinChecked(PlayNode, TEXT("Entry"));
+		UEdGraphPin* MapPin = FindPinChecked(PlayNode, TEXT("Map"));
+		if (EntryPin->LinkedTo.Num() > 0 || MapPin->LinkedTo.Num() > 0)
+		{
+			continue;
+		}
+
+		FGuid ExistingEntryId;
+		if (!TryReadEntryId(EntryPin, ExistingEntryId))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[Hapbeat] Skipped a Z2 Play Hapbeat Event node without a readable Entry default."));
+			continue;
+		}
+		const TCHAR* EntryVariable = GetRealtimeDoorEntryVariable(ExistingEntryId, EventMap);
+		if (EntryVariable == nullptr)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[Hapbeat] Skipped a Z2 Play Hapbeat Event node that is not one of the six door events."));
+			continue;
+		}
+
+		// Do not move the authored call node. These two reads are the only graph
+		// nodes this command creates; users can place them as desired later.
+		UK2Node_VariableGet* MapGet = AddSelfVariableGet(Graph, TEXT("DoorEventMap"),
+			PlayNode->NodePosX - 260, PlayNode->NodePosY - 60);
+		UK2Node_VariableGet* EntryGet = AddSelfVariableGet(Graph, EntryVariable,
+			PlayNode->NodePosX - 260, PlayNode->NodePosY + 75);
+		ConnectPins(MapGet->GetValuePin(), MapPin);
+		ConnectPins(EntryGet->GetValuePin(), EntryPin);
+	}
+}
+
+void CheckRealtimeDoorEventMembers(const UBlueprint* Blueprint)
+{
+	check(Blueprint != nullptr);
+	const UEdGraph* Graph = GetEventGraph(const_cast<UBlueprint*>(Blueprint));
+	int32 RealtimePlayCallCount = 0;
+	for (const UEdGraphNode* Node : Graph->Nodes)
+	{
+		const UK2Node_CallFunction* PlayNode = Cast<UK2Node_CallFunction>(Node);
+		if (PlayNode == nullptr
+			|| PlayNode->FunctionReference.GetMemberName() != GET_FUNCTION_NAME_CHECKED(UHapbeatBlueprintLibrary, PlayHapbeatEvent))
+		{
+			continue;
+		}
+
+		const UEdGraphPin* MapPin = FindPinChecked(const_cast<UK2Node_CallFunction*>(PlayNode), TEXT("Map"));
+		const UEdGraphPin* EntryPin = FindPinChecked(const_cast<UK2Node_CallFunction*>(PlayNode), TEXT("Entry"));
+		const UK2Node_VariableGet* MapGet = MapPin->LinkedTo.Num() == 1
+			? Cast<UK2Node_VariableGet>(MapPin->LinkedTo[0]->GetOwningNode()) : nullptr;
+		const UK2Node_VariableGet* EntryGet = EntryPin->LinkedTo.Num() == 1
+			? Cast<UK2Node_VariableGet>(EntryPin->LinkedTo[0]->GetOwningNode()) : nullptr;
+		checkf(MapGet != nullptr && MapGet->VariableReference.GetMemberName() == TEXT("DoorEventMap")
+			&& EntryGet != nullptr && EntryGet->VariableReference.GetMemberName().ToString().StartsWith(TEXT("Door")),
+			TEXT("Every existing Z2 Play Hapbeat Event must use the PIE-editable door Map and Entry variables."));
+		++RealtimePlayCallCount;
+	}
+	checkf(RealtimePlayCallCount == 7,
+		TEXT("BP_Z2_Door must retain its seven haptic Play calls after adding PIE-editable event references."));
+}
+
 void SaveBlueprintAsset(UBlueprint* Blueprint)
 {
 	check(Blueprint != nullptr);
@@ -1348,6 +1541,27 @@ void GenerateDoorAsset()
 	}
 	CheckDoorComponentTree(Door);
 	UE_LOG(LogTemp, Display, TEXT("[Hapbeat] Generated BP_Z2_Door without changing the Showcase map."));
+}
+
+void EnableRealtimeDoorEventOverrides()
+{
+	UHapbeatEventMap* EventMap = GetShowcaseEventMap();
+	checkf(EventMap != nullptr, TEXT("Could not load EM_Showcase."));
+
+	bool bWasCreated = false;
+	UBlueprint* Door = LoadOrCreateBlueprint(TEXT("BP_Z2_Door"), bWasCreated);
+	checkf(Door != nullptr && !bWasCreated,
+		TEXT("BP_Z2_Door must already exist; refusing to create a graph while preserving layout."));
+
+	// This intentionally does not call CreateDoorBlueprint(), ClearGeneratedGraph(),
+	// or any component-tree helper.  It only augments the authored Event Graph.
+	AddRealtimeDoorEventMembers(Door, EventMap);
+	ConnectRealtimeDoorEventMembers(Door, EventMap);
+	CheckRealtimeDoorEventMembers(Door);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Door);
+	SaveBlueprintAsset(Door);
+	UE_LOG(LogTemp, Display,
+		TEXT("[Hapbeat] Added PIE-editable Z2 event references without moving existing Event Graph nodes."));
 }
 
 }

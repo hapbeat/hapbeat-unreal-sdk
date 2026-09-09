@@ -218,6 +218,11 @@ void AHapbeatShowcaseZ3FishingActor::PostEditChangeProperty(FPropertyChangedEven
 		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodMountExtraRotation)
 		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, bFlipRodForward)
 		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, RodMeshAsset);
+	const bool bHapticWiringProperty =
+		ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, EventMapOverride)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, HookStartEvent)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, HookLoopEvent)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, HookReleaseEvent);
 
 #if WITH_EDITORONLY_DATA
 	if (ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ3FishingActor, bShowRodTipMarkerInPIE)
@@ -226,6 +231,14 @@ void AHapbeatShowcaseZ3FishingActor::PostEditChangeProperty(FPropertyChangedEven
 		RodTipMarker->SetHiddenInGame(!bShowRodTipMarkerInPIE);
 	}
 #endif
+	if (bHapticWiringProperty && GetWorld() != nullptr && GetWorld()->IsGameWorld())
+	{
+		// HookSequence reads these map/id references at each Fire / Stop. Update
+		// the existing PIE shark only; do not recreate its child actor or reset
+		// the fishing state while an author is tuning the selected entries.
+		BuildEventMapAndHaptics();
+	}
+
 	if (!bRodMountProperty)
 	{
 		return;

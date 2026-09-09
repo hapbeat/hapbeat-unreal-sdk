@@ -211,6 +211,33 @@ void AHapbeatShowcaseZ5ChargeShotActor::OnConstruction(const FTransform& Transfo
 	SetUpTarget();
 }
 
+#if WITH_EDITOR
+void AHapbeatShowcaseZ5ChargeShotActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	const FName ChangedMember = PropertyChangedEvent.GetMemberPropertyName();
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	const bool bHapticWiringProperty =
+		ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ5ChargeShotActor, EventMapOverride)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ5ChargeShotActor, ChargeLoopEvent)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ5ChargeShotActor, ChargeThresholdEvent)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ5ChargeShotActor, ShotLightEvent)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ5ChargeShotActor, ShotHeavyEvent)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ5ChargeShotActor, TarHitLightEvent)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ5ChargeShotActor, TarHitHeavyEvent);
+	if (!bHapticWiringProperty || GetWorld() == nullptr || !GetWorld()->IsGameWorld())
+	{
+		return;
+	}
+
+	// Keep the target actor and the actor-owned charge/shot paths on the newly
+	// selected entries. This is deliberately a rewire only: projectiles, charge
+	// amount and every authored transform continue unchanged.
+	BuildEventMap();
+	SetUpTarget();
+}
+#endif
+
 void AHapbeatShowcaseZ5ChargeShotActor::BeginPlay()
 {
 	Super::BeginPlay();

@@ -173,6 +173,28 @@ void AHapbeatShowcaseZ1BowlingActor::OnConstruction(const FTransform& Transform)
 	// runtime-only child wiring belongs in BeginPlay(), where every pin exists.
 }
 
+#if WITH_EDITOR
+void AHapbeatShowcaseZ1BowlingActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	const FName ChangedMember = PropertyChangedEvent.GetMemberPropertyName();
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	const bool bHapticWiringProperty =
+		ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ1BowlingActor, EventMapOverride)
+		|| ChangedMember == GET_MEMBER_NAME_CHECKED(AHapbeatShowcaseZ1BowlingActor, PinHitEvent);
+	if (!bHapticWiringProperty || GetWorld() == nullptr || !GetWorld()->IsGameWorld())
+	{
+		return;
+	}
+
+	// Pin child actors are already alive in PIE. Re-resolve the authored entry
+	// and hand its current map/id to each HitTrigger, without rebuilding slots
+	// or touching their authored transforms.
+	BuildEventMap();
+	SetUpPins();
+}
+#endif
+
 void AHapbeatShowcaseZ1BowlingActor::BeginPlay()
 {
 	Super::BeginPlay();

@@ -8,6 +8,10 @@ sidebar:
 
 Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルです。各 zone Actor の Details と `EM_Showcase` を開くと、再生する触覚とその設定を確認・変更できます。
 
+:::tip[PIE 中にイベントを切り替える]
+PIE を開始後、`Shift + F1` で editor 操作へ戻り、**Play World** の zone Actor を選びます。Details の Event Map / Event を変えると、次の衝突・入力・shot から反映されます。Blueprint の EventGraph を PIE 中に編集しても実行中 instance には反映されません。停止後は値が戻るため、残す変更は Editor World の同じ Actor に設定して保存します。
+:::
+
 :::note[音と触覚のタイミング]
 音声出力の遅延は環境ごとに異なるため、触覚が音より先に感じられることがあります。これは想定内です。`Tools → Hapbeat → Hapbeat Settings > Behavior > Haptic Delay Seconds` を少しずつ上げ、触覚に遅延を加えて合わせます。詳しくは[音と触覚のタイミングを合わせる](./getting-started.md#音と触覚のタイミングを合わせる)を参照してください。
 :::
@@ -85,13 +89,13 @@ Pin->HitTrigger->EntryId = PinHitEntryId;
 
 <code class="hb-asset">BP_Z2_Door</code> は、ドア操作の各分岐から <span class="hb-bp-node">Play Event (Hapbeat)</span> を発火する Blueprint 完結の例です。
 
-### 編集して試す（Blueprint）
+### 編集して試す（PIE Details）
 
-1. <span class="hb-location">Showcase map > World Outliner</span> で <code class="hb-asset">Z2_Door</code> を選び、<span class="hb-location">Details</span> の <span class="hb-field">Edit Blueprint</span> をクリックします。
-2. <span class="hb-location">My Blueprint > Graphs > EventGraph</span> を開きます。
-3. <span class="hb-location">DoorSlam lane</span> の <span class="hb-bp-node">Play Event (Hapbeat)</span> にある <span class="hb-field">Entry</span> を変更します。
+1. PIE を開始し、`Shift + F1` を押します。
+2. <span class="hb-location">World Outliner > Play World</span> で <code class="hb-asset">Z2_Door</code> を選びます。
+3. <span class="hb-location">Details > Hapbeat > Door Events</span> の <span class="hb-field">Door Slam Event</span> を変更します。
    - 例: <code class="hb-entry">z2_door_slam</code> から <code class="hb-entry">z2_door_close</code> に切り替える。
-   - **確認できること:** `G` の slam Timeline は同じまま、node で選んだ entry の触覚を発火します。
+   - **確認できること:** `G` の slam Timeline は同じまま、選んだ entry の触覚を発火します。
 
 ### SDK の接続を確認する（Blueprint）
 
@@ -105,7 +109,7 @@ F / G / L Pressed
   → DoorHinge の Timeline
 ```
 
-各 lane の <span class="hb-bp-node">Play Event (Hapbeat)</span> にある <span class="hb-field">Map</span> と <span class="hb-field">Entry</span> が、ゲーム内操作と Hapbeat 再生を結ぶ箇所です。Timeline は同じ lane で始まるため、ドアの動きと触覚の開始点がそろいます。
+各 lane の <span class="hb-bp-node">Play Event (Hapbeat)</span> は、<span class="hb-bp-node">Door Event Map</span> と対応する <span class="hb-bp-node">Door … Event</span> の Get node を受け取ります。これが PIE Details の選択をゲーム内操作へ渡す箇所です。Timeline は同じ lane で始まるため、ドアの動きと触覚の開始点がそろいます。
 
 ## Z3 Fishing — sequence と gain binding
 
@@ -164,13 +168,15 @@ Gain / Pan slider
   → Fire Tick From Value (Hapbeat)
 ```
 
-### 編集して試す（Blueprint）
+### 編集して試す（PIE Details）
 
-1. <span class="hb-location">Showcase map > World Outliner</span> で <code class="hb-asset">Z4_StreamConsole</code> を選び、<span class="hb-location">Details</span> の <span class="hb-field">Edit Blueprint</span> をクリックします。
-2. <span class="hb-location">My Blueprint > Graphs > EventGraph</span> を開きます。
-3. <span class="hb-location">Components</span> で `TickEmitter` を選び、<span class="hb-location">Details</span> の <span class="hb-field">Tick Threshold</span> を変更します。
+1. PIE を開始し、`Shift + F1` を押します。
+2. <span class="hb-location">World Outliner > Play World</span> で <code class="hb-asset">Z4_StreamConsole</code> を選びます。
+3. <span class="hb-location">Details 上部の component tree > TickEmitter</span> を選び、<span class="hb-location">Details > Hapbeat > Tick</span> の <span class="hb-field">Tick Threshold</span> を変更します。
    - 例: `0.1` から `0.2` にする。
-   - **確認できること:** Gain / Pan slider を同じ距離だけ動かしたときの tick 回数が半分になります。
+   - **確認できること:** 次に Gain / Pan slider を同じ距離だけ動かしたときの tick 回数が半分になります。
+
+`Tick Threshold` は実行中の `TickEmitter` が slider 入力ごとに読む値なので、PIE を再起動する必要はありません。一方、EventGraph の node や接続を編集した場合は、停止後に compile して PIE を開始し直します。
 
 ### SDK の接続を確認する（Blueprint）
 

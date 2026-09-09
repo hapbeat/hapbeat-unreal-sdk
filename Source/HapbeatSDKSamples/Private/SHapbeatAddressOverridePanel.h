@@ -34,6 +34,13 @@ public:
 
 	void Construct(const FArguments& InArgs);
 
+	/** Move the active control through the compact two-row controller navigation grid. */
+	void MoveFocus(FIntPoint Direction);
+	/** Invoke the active control, equivalent to a click. */
+	void ActivateFocused();
+	/** Reveal the yellow controller-selection cursor. */
+	void ShowFocusHighlight();
+
 private:
 	// ---- staged edits ----
 	void StepPlayer(int32 Delta);
@@ -67,6 +74,7 @@ private:
 
 	/** Row builder, so the two stepper rows cannot drift apart. */
 	TSharedRef<SWidget> MakeStepperRow(
+		int32 Row,
 		const FText& Label,
 		TAttribute<FText> ValueText,
 		TAttribute<FSlateColor> ValueColor,
@@ -81,6 +89,19 @@ private:
 		TAttribute<FText> GroupText,
 		TAttribute<FSlateColor> GroupColor);
 
+	/** Builds a focusable control with a thin yellow cursor surround when selected. */
+	TSharedRef<SWidget> MakeFocusButton(
+		FIntPoint Coordinate,
+		const FText& Label,
+		const FText& ToolTip,
+		TFunction<FReply()> OnClicked,
+		TAttribute<bool> IsEnabled = TAttribute<bool>(true));
+	void RegisterFocusEntry(FIntPoint Coordinate, const TSharedPtr<class SBorder>& Border, TFunction<FReply()> Activate);
+	void RegisterFocusAlias(FIntPoint Coordinate, FIntPoint SourceCoordinate);
+	bool IsFocused(FIntPoint Coordinate) const;
+	FSlateColor GetFocusBorderColor(FIntPoint Coordinate) const;
+	void RefreshFocusVisual();
+
 	TWeakObjectPtr<UHapbeatSubsystem> WeakSubsystem;
 	bool bPersistOnApply = true;
 	bool bShowCloseButton = true;
@@ -89,4 +110,14 @@ private:
 
 	int32 EditingPlayer = -1;
 	int32 EditingGroup = -1;
+
+	struct FFocusEntry
+	{
+		TSharedPtr<class SBorder> Border;
+		TFunction<FReply()> Activate;
+	};
+	TMap<FIntPoint, FFocusEntry> FocusEntries;
+	FIntPoint FocusedCoordinate = FIntPoint::ZeroValue;
+	bool bHasFocus = false;
+	bool bFocusHighlightVisible = false;
 };

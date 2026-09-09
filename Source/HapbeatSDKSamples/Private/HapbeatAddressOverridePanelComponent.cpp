@@ -172,3 +172,27 @@ void UHapbeatAddressOverridePanelComponent::Toggle()
 		Show();
 	}
 }
+
+void UHapbeatAddressOverridePanelComponent::MoveFocus(int32 Horizontal, int32 Vertical)
+{
+	if (PanelWidget.IsValid())
+	{
+		PanelWidget->MoveFocus(FIntPoint(FMath::Clamp(Horizontal, -1, 1), FMath::Clamp(Vertical, -1, 1)));
+	}
+}
+
+void UHapbeatAddressOverridePanelComponent::ActivateFocused()
+{
+	if (PanelWidget.IsValid())
+	{
+		PanelWidget->ActivateFocused();
+	}
+}
+
+void UHapbeatAddressOverridePanelComponent::ShowFocusHighlight()
+{
+	if (PanelWidget.IsValid())
+	{
+		PanelWidget->ShowFocusHighlight();
+	}
+}

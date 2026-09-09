@@ -17,14 +17,16 @@ VR Preview を開始すると、HMD 前方約 1.9 m に幅約 1 m の設定パ�
 
 ## 操作
 
-右手コントローラーのレイをパネルに向け、トリガーで操作します。
+パネルには起動時から黄色の選択カーソルがあります。コントローラーの位置やレイは使いません。
 
 | 操作 | 結果 |
 | --- | --- |
+| 左右どちらかのスティック | 倒した方向へ選択カーソルを移動する。押し続けると一定間隔で移動を繰り返す。 |
+| 左右どちらかのトリガー | 現在の選択を決定する。 |
 | `Player` / `Group` | 送信先の player / group を選ぶ |
 | `Apply` | 選択値を Address Override として適用する |
 | `Test` | 適用済み Target に `sample-kit.sine_100hz` を再生する |
 | `Clear` | 保存済み Address Override を消し、player / group を off に戻す |
-| 右スティック押し込み | パネルを正面へ戻す |
+| 左右どちらかのスティック押し込み | パネルを正面へ戻す |
 
 同じ build を複数の HMD へ配るときは、各 HMD で `Player` または `Group` を変えて `Apply` します。Address Override の仕組みは[宛先と複数 HMD](./targeting-and-multi-hmd.md)を参照してください。

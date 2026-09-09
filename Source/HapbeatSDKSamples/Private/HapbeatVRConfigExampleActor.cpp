@@ -2,19 +2,14 @@
 #include "HapbeatVRConfigExampleActor.h"
 
 #include "HapbeatAddressOverridePanelComponent.h"
-#include "HapbeatSampleLibrary.h"
-#include "HapbeatSubsystem.h"
 
 #include "Camera/PlayerCameraManager.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/WidgetComponent.h"
-#include "Components/WidgetInteractionComponent.h"
 #include "EnhancedInputComponent.h"
-#include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
-#include "MotionControllerComponent.h"
 #include "InputAction.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatVRConfigExample, Log, All);
@@ -40,12 +35,10 @@ AHapbeatVRConfigExampleActor::AHapbeatVRConfigExampleActor()
 	// Two-sided so walking around the surface -- or a follow frame that has not
 	// caught up yet -- never leaves the wearer looking at an invisible panel.
 	PanelSurface->SetTwoSided(true);
-	// Purely a display; it must not block traces, projectiles, or the pawn.
-	// WidgetInteraction traces on Visibility. QueryOnly keeps it out of all
-	// physics/projectile collision while allowing that one UI ray through.
-	PanelSurface->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	// Purely a display; controller navigation has no scene ray, so it cannot
+	// block traces, projectiles, or the pawn.
+	PanelSurface->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PanelSurface->SetCollisionResponseToAllChannels(ECR_Ignore);
-	PanelSurface->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	// The follow rewrites its transform every frame, so it cannot be Static.
 	PanelSurface->SetMobility(EComponentMobility::Movable);
 
@@ -54,22 +47,19 @@ AHapbeatVRConfigExampleActor::AHapbeatVRConfigExampleActor()
 	// down, leaving a visible but empty surface on the next toggle.
 	PanelComponent->bShowCloseButton = false;
 
-	RightHandController = CreateDefaultSubobject<UMotionControllerComponent>(TEXT("RightHandController"));
-	RightHandController->SetupAttachment(Root);
-	RightHandController->SetTrackingMotionSource(TEXT("Right"));
-
-	WidgetInteraction = CreateDefaultSubobject<UWidgetInteractionComponent>(TEXT("WidgetInteraction"));
-	WidgetInteraction->SetupAttachment(RightHandController);
-	WidgetInteraction->InteractionSource = EWidgetInteractionSource::World;
-	WidgetInteraction->TraceChannel = ECC_Visibility;
-	WidgetInteraction->VirtualUserIndex = 1;
-	WidgetInteraction->PointerIndex = 1;
-
 	// Enhanced Input Mapping Contexts must be rooted in /Game for OpenXR to
 	// register them before its session attaches. The shipped setup script creates
-	// these two assets there and records the context in DefaultInput.ini.
+	// these actions there and records the context in DefaultInput.ini.
 	InteractAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRInteract.IA_HapbeatVRInteract")));
+	NavigateUpAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigateUp.IA_HapbeatVRNavigateUp")));
+	NavigateDownAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigateDown.IA_HapbeatVRNavigateDown")));
+	NavigateLeftAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigateLeft.IA_HapbeatVRNavigateLeft")));
+	NavigateRightAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigateRight.IA_HapbeatVRNavigateRight")));
 	RecenterAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRRecenter.IA_HapbeatVRRecenter")));
 }
@@ -88,10 +78,10 @@ void AHapbeatVRConfigExampleActor::BeginPlay()
 		{
 			PanelComponent->Show();
 		}
+		PanelComponent->ShowFocusHighlight();
 	}
 
 	BindInput();
-	AttachInteractionToPawn();
 }
 
 void AHapbeatVRConfigExampleActor::BindInput()
@@ -117,19 +107,34 @@ void AHapbeatVRConfigExampleActor::BindInput()
 
 	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
 	UInputAction* Interact = InteractAction.LoadSynchronous();
+	UInputAction* NavigateUp = NavigateUpAction.LoadSynchronous();
+	UInputAction* NavigateDown = NavigateDownAction.LoadSynchronous();
+	UInputAction* NavigateLeft = NavigateLeftAction.LoadSynchronous();
+	UInputAction* NavigateRight = NavigateRightAction.LoadSynchronous();
 	UInputAction* Recenter = RecenterAction.LoadSynchronous();
-	if (EnhancedInput == nullptr || Interact == nullptr || Recenter == nullptr)
+	if (EnhancedInput == nullptr || Interact == nullptr || NavigateUp == nullptr || NavigateDown == nullptr ||
+		NavigateLeft == nullptr || NavigateRight == nullptr || Recenter == nullptr)
 	{
 		UE_LOG(LogHapbeatVRConfigExample, Warning,
-			TEXT("AHapbeatVRConfigExampleActor: OpenXR interaction is not configured. Run Scripts/generate_vr_config_input_assets.py, restart the editor, then start VR Preview."));
+			TEXT("AHapbeatVRConfigExampleActor: OpenXR controller navigation is not configured. Run Scripts/generate_vr_config_input_assets.py, restart the editor, then start VR Preview."));
 		return;
 	}
 
-	// Started/Completed preserve a normal button click, including a release when
-	// OpenXR cancels focus while the trigger is held.
-	EnhancedInput->BindAction(Interact, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandlePointerPressed);
-	EnhancedInput->BindAction(Interact, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandlePointerReleased);
-	EnhancedInput->BindAction(Interact, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandlePointerReleased);
+	// A trigger confirms the already-visible selection cursor. This intentionally
+	// does not use WidgetInteraction or a controller pose/ray.
+	EnhancedInput->BindAction(Interact, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleActivate);
+	EnhancedInput->BindAction(NavigateUp, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleMoveUpPressed);
+	EnhancedInput->BindAction(NavigateDown, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleMoveDownPressed);
+	EnhancedInput->BindAction(NavigateLeft, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleMoveLeftPressed);
+	EnhancedInput->BindAction(NavigateRight, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleMoveRightPressed);
+	EnhancedInput->BindAction(NavigateUp, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleMoveUpReleased);
+	EnhancedInput->BindAction(NavigateDown, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleMoveDownReleased);
+	EnhancedInput->BindAction(NavigateLeft, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleMoveLeftReleased);
+	EnhancedInput->BindAction(NavigateRight, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleMoveRightReleased);
+	EnhancedInput->BindAction(NavigateUp, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleMoveUpReleased);
+	EnhancedInput->BindAction(NavigateDown, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleMoveDownReleased);
+	EnhancedInput->BindAction(NavigateLeft, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleMoveLeftReleased);
+	EnhancedInput->BindAction(NavigateRight, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleMoveRightReleased);
 	EnhancedInput->BindAction(Recenter, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleRecenterKey);
 }
 
@@ -159,19 +164,90 @@ void AHapbeatVRConfigExampleActor::HandleRecenterKey()
 	RecenterPanel();
 }
 
-void AHapbeatVRConfigExampleActor::HandlePointerPressed()
+void AHapbeatVRConfigExampleActor::HandleActivate()
 {
-	if (WidgetInteraction != nullptr)
+	if (PanelComponent != nullptr)
 	{
-		WidgetInteraction->PressPointerKey(EKeys::LeftMouseButton);
+		PanelComponent->ActivateFocused();
 	}
 }
 
-void AHapbeatVRConfigExampleActor::HandlePointerReleased()
+void AHapbeatVRConfigExampleActor::HandleMoveUpPressed()
 {
-	if (WidgetInteraction != nullptr)
+	BeginMove(FIntPoint(0, -1));
+}
+
+void AHapbeatVRConfigExampleActor::HandleMoveDownPressed()
+{
+	BeginMove(FIntPoint(0, 1));
+}
+
+void AHapbeatVRConfigExampleActor::HandleMoveLeftPressed()
+{
+	BeginMove(FIntPoint(-1, 0));
+}
+
+void AHapbeatVRConfigExampleActor::HandleMoveRightPressed()
+{
+	BeginMove(FIntPoint(1, 0));
+}
+
+void AHapbeatVRConfigExampleActor::HandleMoveUpReleased()
+{
+	EndMove(FIntPoint(0, -1));
+}
+
+void AHapbeatVRConfigExampleActor::HandleMoveDownReleased()
+{
+	EndMove(FIntPoint(0, 1));
+}
+
+void AHapbeatVRConfigExampleActor::HandleMoveLeftReleased()
+{
+	EndMove(FIntPoint(-1, 0));
+}
+
+void AHapbeatVRConfigExampleActor::HandleMoveRightReleased()
+{
+	EndMove(FIntPoint(1, 0));
+}
+
+void AHapbeatVRConfigExampleActor::BeginMove(FIntPoint Direction)
+{
+	if (PanelComponent == nullptr)
 	{
-		WidgetInteraction->ReleasePointerKey(EKeys::LeftMouseButton);
+		return;
+	}
+
+	// A new direction acts immediately, then repeats only when held. This is
+	// intentionally identical to keyboard-navigation behaviour, not an every-
+	// frame analog-axis scroll.
+	ActiveMoveDirection = Direction;
+	MoveRepeatTimer = 0.0f;
+	PanelComponent->MoveFocus(Direction.X, Direction.Y);
+}
+
+void AHapbeatVRConfigExampleActor::EndMove(FIntPoint Direction)
+{
+	if (ActiveMoveDirection == Direction)
+	{
+		ActiveMoveDirection = FIntPoint::ZeroValue;
+		MoveRepeatTimer = 0.0f;
+	}
+}
+
+void AHapbeatVRConfigExampleActor::RepeatMove(float DeltaSeconds)
+{
+	if (PanelComponent == nullptr || ActiveMoveDirection == FIntPoint::ZeroValue)
+	{
+		return;
+	}
+
+	MoveRepeatTimer += DeltaSeconds;
+	if (MoveRepeatTimer >= MoveRepeatIntervalSeconds)
+	{
+		MoveRepeatTimer = 0.0f;
+		PanelComponent->MoveFocus(ActiveMoveDirection.X, ActiveMoveDirection.Y);
 	}
 }
 
@@ -183,73 +259,7 @@ void AHapbeatVRConfigExampleActor::Tick(float DeltaSeconds)
 	{
 		UpdateFollow(DeltaSeconds);
 	}
-	if (!bInteractionAttachedToPawn)
-	{
-		AttachInteractionToPawn();
-	}
-	if (WidgetInteraction != nullptr)
-	{
-		WidgetInteraction->InteractionDistance = InteractionDistance;
-		WidgetInteraction->bShowDebug = bShowInteractionRay;
-	}
-
-	HudRefreshTimer -= DeltaSeconds;
-	if (HudRefreshTimer > 0.0f)
-	{
-		return;
-	}
-	HudRefreshTimer = HudRefreshIntervalSeconds;
-
-	const float HudDuration = HudRefreshIntervalSeconds * 2.0f;
-
-	FHapbeatSampleLibrary::ShowDeviceStatusLine(this, StatusHudLineKey + 1, HudDuration);
-
-	int32 OverridePlayer = UHapbeatSubsystem::AddressOverrideDisabled;
-	int32 OverrideGroup = UHapbeatSubsystem::AddressOverrideDisabled;
-	if (UGameInstance* GameInstance = GetGameInstance())
-	{
-		if (const UHapbeatSubsystem* Subsystem = GameInstance->GetSubsystem<UHapbeatSubsystem>())
-		{
-			OverridePlayer = Subsystem->GetOverridePlayer();
-			OverrideGroup = Subsystem->GetOverrideGroup();
-		}
-	}
-
-	// -1 means "this axis does not override the target", which reads better as
-	// "off" than as a number the wearer could mistake for a device address.
-	const FString PlayerText = OverridePlayer == UHapbeatSubsystem::AddressOverrideDisabled
-		? TEXT("off") : FString::FromInt(OverridePlayer);
-	const FString GroupText = OverrideGroup == UHapbeatSubsystem::AddressOverrideDisabled
-		? TEXT("off") : FString::FromInt(OverrideGroup);
-
-	FHapbeatSampleLibrary::ShowHudLine(StatusHudLineKey,
-		FString::Printf(TEXT("Hapbeat override: player=%s group=%s"), *PlayerText, *GroupText),
-		FColor::Green, HudDuration);
-
-	FHapbeatSampleLibrary::ShowHudLine(KeyGuideHudLineKey,
-		FString::Printf(TEXT("Hapbeat VRConfigExample -- %s: toggle panel | panel: %s"),
-			*ToggleKey.GetDisplayName().ToString(),
-			bWorldSpacePanel ? TEXT("world-space") : TEXT("viewport overlay")),
-		FColor::Cyan, HudDuration);
-}
-
-void AHapbeatVRConfigExampleActor::AttachInteractionToPawn()
-{
-	if (bInteractionAttachedToPawn || RightHandController == nullptr || GetWorld() == nullptr)
-	{
-		return;
-	}
-
-	APlayerController* PC = GetWorld()->GetFirstPlayerController();
-	APawn* Pawn = PC != nullptr ? PC->GetPawn() : nullptr;
-	USceneComponent* PawnRoot = Pawn != nullptr ? Pawn->GetRootComponent() : nullptr;
-	if (PawnRoot == nullptr)
-	{
-		return;
-	}
-
-	RightHandController->AttachToComponent(PawnRoot, FAttachmentTransformRules::SnapToTargetNotIncludingScale);
-	bInteractionAttachedToPawn = true;
+	RepeatMove(DeltaSeconds);
 }
 
 void AHapbeatVRConfigExampleActor::UpdateFollow(float DeltaSeconds)

@@ -3,7 +3,7 @@
 
 Enhanced Input's default Mapping Context list deliberately accepts only assets
 below /Game. Plugin content cannot be registered with OpenXR at XR-session
-creation time, so this script creates the two sample Input Actions and Mapping
+creation time, so this script creates the sample Input Actions and Mapping
 Context below the host project's Content directory and records that context in
 DefaultInput.ini.
 
@@ -23,6 +23,12 @@ import unreal
 ROOT = '/Game/HapbeatVRConfig/Input'
 INTERACT_PATH = ROOT + '/IA_HapbeatVRInteract'
 RECENTER_PATH = ROOT + '/IA_HapbeatVRRecenter'
+NAVIGATE_ACTIONS = {
+    'Up': ROOT + '/IA_HapbeatVRNavigateUp',
+    'Down': ROOT + '/IA_HapbeatVRNavigateDown',
+    'Left': ROOT + '/IA_HapbeatVRNavigateLeft',
+    'Right': ROOT + '/IA_HapbeatVRNavigateRight',
+}
 CONTEXT_PATH = ROOT + '/IMC_HapbeatVRConfig'
 
 
@@ -79,29 +85,62 @@ def main():
     recenter = get_or_create('IA_HapbeatVRRecenter', ROOT, unreal.InputAction)
     recenter.set_editor_property('action_description', unreal.Text('Recenter Hapbeat VR Config panel'))
 
+    navigate = {}
+    for direction, path in NAVIGATE_ACTIONS.items():
+        asset_name = path.rsplit('/', 1)[-1]
+        navigate[direction] = get_or_create(asset_name, ROOT, unreal.InputAction)
+        navigate[direction].set_editor_property(
+            'action_description', unreal.Text('Move Hapbeat VR Config selection ' + direction.lower()))
+
     context = get_or_create('IMC_HapbeatVRConfig', ROOT, unreal.InputMappingContext)
     context.unmap_all()
 
-    # Meta Quest / Touch, Vive, Windows Mixed Reality, and Valve Index. The
-    # generic gamepad binding keeps desktop controller testing possible.
+    # Meta Quest / Touch, Vive, Windows Mixed Reality, and Valve Index. Both
+    # hands are symmetric: each stick moves the same panel cursor, matching the
+    # Unity VR Config Example. Generic gamepad keys keep desktop testing possible.
     for key in (
+        'OculusTouch_Left_Trigger_Click',
         'OculusTouch_Right_Trigger_Click',
+        'Vive_Left_Trigger_Click',
         'Vive_Right_Trigger_Click',
+        'MixedReality_Left_Trigger_Click',
         'MixedReality_Right_Trigger_Click',
+        'ValveIndex_Left_Trigger_Click',
         'ValveIndex_Right_Trigger_Click',
+        'Gamepad_LeftTrigger',
         'Gamepad_RightTrigger',
+        'OculusTouch_Left_FaceButton1',
+        'OculusTouch_Left_FaceButton2',
+        'OculusTouch_Right_FaceButton1',
+        'OculusTouch_Right_FaceButton2',
     ):
         map_key(context, interact, key)
     for key in (
+        'OculusTouch_Left_Thumbstick_Click',
         'OculusTouch_Right_Thumbstick_Click',
+        'Vive_Left_Trackpad_Click',
         'Vive_Right_Trackpad_Click',
+        'MixedReality_Left_Thumbstick_Click',
         'MixedReality_Right_Thumbstick_Click',
+        'ValveIndex_Left_Thumbstick_Click',
         'ValveIndex_Right_Thumbstick_Click',
     ):
         map_key(context, recenter, key)
 
+    for direction, action in navigate.items():
+        for hand in ('Left', 'Right'):
+            map_key(context, action, 'OculusTouch_%s_Thumbstick_%s' % (hand, direction))
+            map_key(context, action, 'Vive_%s_Trackpad_%s' % (hand, direction))
+            map_key(context, action, 'MixedReality_%s_Thumbstick_%s' % (hand, direction))
+            map_key(context, action, 'ValveIndex_%s_Thumbstick_%s' % (hand, direction))
+        map_key(context, action, 'Gamepad_LeftStick_%s' % direction)
+        map_key(context, action, 'Gamepad_RightStick_%s' % direction)
+        map_key(context, action, 'Gamepad_DPad_%s' % direction)
+
     unreal.EditorAssetLibrary.save_loaded_asset(interact)
     unreal.EditorAssetLibrary.save_loaded_asset(recenter)
+    for action in navigate.values():
+        unreal.EditorAssetLibrary.save_loaded_asset(action)
     unreal.EditorAssetLibrary.save_loaded_asset(context)
     configure_project_default(context)
     unreal.log('[Hapbeat] VRConfigExample input assets installed. Restart the editor before VR Preview.')

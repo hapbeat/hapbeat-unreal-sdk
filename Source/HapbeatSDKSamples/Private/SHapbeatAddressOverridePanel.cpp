@@ -73,7 +73,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 				[
-					MakeStepperRow(LOCTEXT("Player", "Player"),
+					MakeStepperRow(0, LOCTEXT("Player", "Player"),
 						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetPlayerLabel),
 						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetPlayerEditColor),
 						TAttribute<bool>(this, &SHapbeatAddressOverridePanel::IsPlayerEditable),
@@ -82,7 +82,7 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 				[
-					MakeStepperRow(LOCTEXT("Group", "Group"),
+					MakeStepperRow(1, LOCTEXT("Group", "Group"),
 						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetGroupLabel),
 						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetGroupEditColor),
 						TAttribute<bool>(this, &SHapbeatAddressOverridePanel::IsGroupEditable),
@@ -135,27 +135,21 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
 						[
-							SNew(SButton)
-							.IsFocusable(false)
-							.Text(LOCTEXT("Apply", "Apply"))
-							.ToolTipText(LOCTEXT("ApplyTooltip", "Send every later command to this player / group."))
-							.OnClicked(this, &SHapbeatAddressOverridePanel::OnApplyClicked)
+							MakeFocusButton(FIntPoint(2, 0), LOCTEXT("Apply", "Apply"),
+								LOCTEXT("ApplyTooltip", "Send every later command to this player / group."),
+								[this] { return OnApplyClicked(); })
 						]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
 						[
-							SNew(SButton)
-							.IsFocusable(false)
-							.Text(LOCTEXT("Test", "Test"))
-							.ToolTipText(LOCTEXT("TestTooltip", "Fire one event so you can feel which device you are addressing."))
-							.OnClicked(this, &SHapbeatAddressOverridePanel::OnTestClicked)
+							MakeFocusButton(FIntPoint(3, 0), LOCTEXT("Test", "Test"),
+								LOCTEXT("TestTooltip", "Fire one event so you can feel which device you are addressing."),
+								[this] { return OnTestClicked(); })
 						]
 					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
 						[
-							SNew(SButton)
-							.IsFocusable(false)
-							.Text(LOCTEXT("Clear", "Clear"))
-							.ToolTipText(LOCTEXT("ClearTooltip", "Turn both axes off and forget the saved choice."))
-							.OnClicked(this, &SHapbeatAddressOverridePanel::OnClearClicked)
+							MakeFocusButton(FIntPoint(4, 0), LOCTEXT("Clear", "Clear"),
+								LOCTEXT("ClearTooltip", "Turn both axes off and forget the saved choice."),
+								[this] { return OnClearClicked(); })
 						]
 					+ SHorizontalBox::Slot().AutoWidth()
 						[
@@ -168,9 +162,17 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 				]
 		]
 	];
+
+	// Apply/Test/Clear visually occupy one row, but are addressable from either
+	// Player or Group. This matches the controller grid in the Unity sample:
+	// moving left after visiting an action returns to the stepper row entered.
+	RegisterFocusAlias(FIntPoint(2, 1), FIntPoint(2, 0));
+	RegisterFocusAlias(FIntPoint(3, 1), FIntPoint(3, 0));
+	RegisterFocusAlias(FIntPoint(4, 1), FIntPoint(4, 0));
 }
 
 TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
+	int32 Row,
 	const FText& Label,
 	TAttribute<FText> ValueText,
 	TAttribute<FSlateColor> ValueColor,
@@ -187,13 +189,9 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 			]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
 			[
-				SNew(SButton)
-				.IsFocusable(false)
-				.IsEnabled(IsEditable)
-				.OnClicked_Lambda([OnStep] { OnStep(-1); return FReply::Handled(); })
-				[
-					SNew(STextBlock).Text(LOCTEXT("Minus", "-")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
-				]
+				MakeFocusButton(FIntPoint(0, Row),
+					LOCTEXT("Minus", "-"), FText::GetEmpty(),
+					[OnStep] { OnStep(-1); return FReply::Handled(); }, IsEditable)
 			]
 		// Fixed width: the value swings between "off" and two digits, and a
 		// row that resized would shove the +/- buttons around under the cursor.
@@ -209,13 +207,9 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
 			]
 		+ SHorizontalBox::Slot().AutoWidth().Padding(4.0f, 0.0f)
 			[
-				SNew(SButton)
-				.IsFocusable(false)
-				.IsEnabled(IsEditable)
-				.OnClicked_Lambda([OnStep] { OnStep(1); return FReply::Handled(); })
-				[
-					SNew(STextBlock).Text(LOCTEXT("Plus", "+")).Font(BodyFont).ColorAndOpacity(FLinearColor::White)
-				]
+				MakeFocusButton(FIntPoint(1, Row),
+					LOCTEXT("Plus", "+"), FText::GetEmpty(),
+					[OnStep] { OnStep(1); return FReply::Handled(); }, IsEditable)
 			];
 }
 
@@ -257,6 +251,147 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeTargetRow(
 		[
 			SNew(STextBlock).Text(GroupText).Font(BodyFont).ColorAndOpacity(GroupColor)
 		];
+}
+
+TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeFocusButton(
+	FIntPoint Coordinate,
+	const FText& Label,
+	const FText& ToolTip,
+	TFunction<FReply()> OnClicked,
+	TAttribute<bool> IsEnabled)
+{
+	TSharedPtr<SBorder> FocusBorder;
+	TSharedRef<SWidget> Result =
+		SAssignNew(FocusBorder, SBorder)
+		.BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+		.BorderBackgroundColor(TAttribute<FSlateColor>::CreateLambda([this, Coordinate]
+		{
+			return GetFocusBorderColor(Coordinate);
+		}))
+		.Padding(2.0f)
+		[
+			SNew(SButton)
+			.IsFocusable(false)
+			.IsEnabled(IsEnabled)
+			.Text(Label)
+			.ToolTipText(ToolTip)
+			.OnClicked_Lambda([OnClicked]
+			{
+				return OnClicked();
+			})
+		];
+
+	RegisterFocusEntry(Coordinate, FocusBorder, MoveTemp(OnClicked));
+	return Result;
+}
+
+void SHapbeatAddressOverridePanel::RegisterFocusEntry(
+	FIntPoint Coordinate,
+	const TSharedPtr<SBorder>& Border,
+	TFunction<FReply()> Activate)
+{
+	FocusEntries.Add(Coordinate, { Border, MoveTemp(Activate) });
+	if (!bHasFocus)
+	{
+		bHasFocus = true;
+		FocusedCoordinate = Coordinate;
+	}
+}
+
+void SHapbeatAddressOverridePanel::RegisterFocusAlias(FIntPoint Coordinate, FIntPoint SourceCoordinate)
+{
+	if (const FFocusEntry* Source = FocusEntries.Find(SourceCoordinate))
+	{
+		FocusEntries.Add(Coordinate, *Source);
+	}
+}
+
+bool SHapbeatAddressOverridePanel::IsFocused(FIntPoint Coordinate) const
+{
+	if (!bFocusHighlightVisible || !bHasFocus)
+	{
+		return false;
+	}
+
+	const FFocusEntry* Entry = FocusEntries.Find(Coordinate);
+	const FFocusEntry* FocusedEntry = FocusEntries.Find(FocusedCoordinate);
+	return Entry != nullptr && FocusedEntry != nullptr && Entry->Border == FocusedEntry->Border;
+}
+
+FSlateColor SHapbeatAddressOverridePanel::GetFocusBorderColor(FIntPoint Coordinate) const
+{
+	return IsFocused(Coordinate)
+		? FSlateColor(FLinearColor(1.0f, 0.85f, 0.2f, 1.0f))
+		: FSlateColor(FLinearColor::Transparent);
+}
+
+void SHapbeatAddressOverridePanel::RefreshFocusVisual()
+{
+	for (const TPair<FIntPoint, FFocusEntry>& Pair : FocusEntries)
+	{
+		if (Pair.Value.Border.IsValid())
+		{
+			Pair.Value.Border->Invalidate(EInvalidateWidgetReason::Paint);
+		}
+	}
+}
+
+void SHapbeatAddressOverridePanel::ShowFocusHighlight()
+{
+	if (!bFocusHighlightVisible)
+	{
+		bFocusHighlightVisible = true;
+		RefreshFocusVisual();
+	}
+}
+
+void SHapbeatAddressOverridePanel::MoveFocus(FIntPoint Direction)
+{
+	if (FocusEntries.IsEmpty() || (!bHasFocus) || (Direction.X == 0 && Direction.Y == 0))
+	{
+		return;
+	}
+
+	ShowFocusHighlight();
+	const bool bHorizontal = FMath::Abs(Direction.X) >= FMath::Abs(Direction.Y);
+	FIntPoint BestCoordinate = FocusedCoordinate;
+	int32 BestPrimaryDistance = MAX_int32;
+	int32 BestSecondaryDistance = MAX_int32;
+
+	for (const TPair<FIntPoint, FFocusEntry>& Pair : FocusEntries)
+	{
+		const FIntPoint Offset = Pair.Key - FocusedCoordinate;
+		const int32 SignedPrimary = bHorizontal ? Offset.X * Direction.X : Offset.Y * Direction.Y;
+		if (SignedPrimary <= 0)
+		{
+			continue;
+		}
+
+		const int32 PrimaryDistance = FMath::Abs(bHorizontal ? Offset.X : Offset.Y);
+		const int32 SecondaryDistance = FMath::Abs(bHorizontal ? Offset.Y : Offset.X);
+		if (PrimaryDistance < BestPrimaryDistance ||
+			(PrimaryDistance == BestPrimaryDistance && SecondaryDistance < BestSecondaryDistance))
+		{
+			BestCoordinate = Pair.Key;
+			BestPrimaryDistance = PrimaryDistance;
+			BestSecondaryDistance = SecondaryDistance;
+		}
+	}
+
+	if (BestPrimaryDistance != MAX_int32)
+	{
+		FocusedCoordinate = BestCoordinate;
+		RefreshFocusVisual();
+	}
+}
+
+void SHapbeatAddressOverridePanel::ActivateFocused()
+{
+	ShowFocusHighlight();
+	if (const FFocusEntry* Entry = FocusEntries.Find(FocusedCoordinate))
+	{
+		Entry->Activate();
+	}
 }
 
 UHapbeatSubsystem* SHapbeatAddressOverridePanel::GetSubsystem() const

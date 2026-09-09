@@ -8,8 +8,6 @@
 
 class UHapbeatAddressOverridePanelComponent;
 class UInputAction;
-class UMotionControllerComponent;
-class UWidgetInteractionComponent;
 class UWidgetComponent;
 
 /**
@@ -30,15 +28,14 @@ class UWidgetComponent;
  *
 	 * Usage: run Scripts/generate_vr_config_input_assets.py once for a project,
 	 * then open the shipped VRConfigExample map in VR Preview. The panel follows
-	 * the HMD, and a standard OpenXR right-hand controller ray can press its
-	 * buttons: pull the trigger to click. The right stick click recentres the
-	 * panel. P / R remain desktop fallbacks for showing and recentring it.
+	 * the HMD. Tilt either controller stick to move the yellow selection cursor;
+	 * pull either trigger to activate it. Stick click recentres the panel. P / R
+	 * remain desktop fallbacks for showing and recentring it.
  *
- * The sample deliberately uses UMotionControllerComponent and
- * UWidgetInteractionComponent rather than a vendor SDK. OpenXR supplies the
- * controller pose, while WidgetInteraction sends a normal Slate mouse click to
- * the same address panel used by desktop and Showcase. There is no duplicate
- * VR-only address-setting implementation to drift out of sync.
+	 * The sample uses OpenXR's project-level Enhanced Input mapping context, not a
+	 * vendor SDK and not a controller ray. Its explicit focus grid operates the
+	 * same Slate address panel as desktop and Showcase, so there is no duplicate
+	 * VR-only address-setting implementation to drift out of sync.
  */
 UCLASS()
 class HAPBEATSDKSAMPLES_API AHapbeatVRConfigExampleActor : public AActor
@@ -73,27 +70,35 @@ public:
 		meta = (Tooltip = "Interpolation speed for the follow. Higher = tighter to the head; 0 or less = snap instantly."))
 	float FollowSpeed = 4.0f;
 
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
-		meta = (Tooltip = "Show the right-hand controller interaction ray. Leave on in the sample so the user can see what will be clicked."))
-	bool bShowInteractionRay = true;
-
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
-		meta = (Tooltip = "Maximum distance in cm at which the right-hand ray can press the panel."))
-	float InteractionDistance = 300.0f;
-
 	/**
-	 * Enhanced Input action fired by the right controller trigger. The setup
+	 * Enhanced Input action fired by either controller trigger. The setup
 	 * script creates it under /Game because OpenXR only registers Mapping
 	 * Contexts from the host project's root content.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
-		meta = (Tooltip = "Enhanced Input action used to click the panel with the right controller trigger."))
+		meta = (Tooltip = "Enhanced Input action used to activate the selected panel control with either controller trigger."))
 	TSoftObjectPtr<UInputAction> InteractAction;
 
-	/** Enhanced Input action fired by the right controller stick / trackpad click. */
+	/** Enhanced Input actions fired by either controller stick / trackpad direction. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Moves the address-panel selection cursor up."))
+	TSoftObjectPtr<UInputAction> NavigateUpAction;
+
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Moves the address-panel selection cursor down."))
+	TSoftObjectPtr<UInputAction> NavigateDownAction;
+
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Moves the address-panel selection cursor left."))
+	TSoftObjectPtr<UInputAction> NavigateLeftAction;
+
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Moves the address-panel selection cursor right."))
+	TSoftObjectPtr<UInputAction> NavigateRightAction;
+
+	/** Enhanced Input action fired by either controller stick / trackpad click. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
-		meta = (Tooltip = "Enhanced Input action used to recenter the panel with the right controller stick or trackpad click."))
+		meta = (Tooltip = "Enhanced Input action used to recenter the panel with either controller stick or trackpad click."))
 	TSoftObjectPtr<UInputAction> RecenterAction;
+
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (ClampMin = "0.05", Tooltip = "Seconds between repeated selection moves while a stick direction stays held."))
+	float MoveRepeatIntervalSeconds = 0.4f;
 
 	UPROPERTY(EditAnywhere, Category = "Hapbeat",
 		meta = (Tooltip = "Key that hides / shows the panel."))
@@ -108,26 +113,28 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	/** Binds desktop fallback keys and the project's two OpenXR Enhanced Input actions. */
+	/** Binds desktop fallback keys and the project's OpenXR Enhanced Input actions. */
 	void BindInput();
 
 	void HandleToggleKey();
 	void HandleRecenterKey();
-	void HandlePointerPressed();
-	void HandlePointerReleased();
+	void HandleActivate();
+	void HandleMoveUpPressed();
+	void HandleMoveDownPressed();
+	void HandleMoveLeftPressed();
+	void HandleMoveRightPressed();
+	void HandleMoveUpReleased();
+	void HandleMoveDownReleased();
+	void HandleMoveLeftReleased();
+	void HandleMoveRightReleased();
+	void BeginMove(FIntPoint Direction);
+	void EndMove(FIntPoint Direction);
+	void RepeatMove(float DeltaSeconds);
 
 	/** Move/aim PanelSurface to sit in front of the camera this frame. No-op on frames with no camera. */
 	void UpdateFollow(float DeltaSeconds);
 	/** Put PanelSurface at the current camera-front pose immediately, without follow smoothing. */
 	void RecenterPanel();
-
-	/** Attach the controller ray to the local pawn once it exists; safe to retry while PIE initialises. */
-	void AttachInteractionToPawn();
-
-	/** Fixed on-screen-message keys, offset into the 600s so they don't collide with the other samples' HUD lines. */
-	static constexpr int32 KeyGuideHudLineKey = 600;
-	static constexpr int32 StatusHudLineKey = 601;
-	static constexpr float HudRefreshIntervalSeconds = 0.5f;
 
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<USceneComponent> Root;
@@ -139,16 +146,6 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UHapbeatAddressOverridePanelComponent> PanelComponent;
 
-	/** Right-hand OpenXR grip pose, attached to the local pawn at runtime. */
-	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|VR Input")
-	TObjectPtr<UMotionControllerComponent> RightHandController;
-
-	/** Standard UE laser-pointer interaction for PanelSurface's Slate buttons. */
-	UPROPERTY(VisibleAnywhere, Category = "Hapbeat|VR Input")
-	TObjectPtr<UWidgetInteractionComponent> WidgetInteraction;
-
-	bool bInteractionAttachedToPawn = false;
-
-	/** Counts down to 0 to throttle the HUD refresh; fires on the first Tick (starts at 0). */
-	float HudRefreshTimer = 0.0f;
+	FIntPoint ActiveMoveDirection = FIntPoint::ZeroValue;
+	float MoveRepeatTimer = 0.0f;
 };

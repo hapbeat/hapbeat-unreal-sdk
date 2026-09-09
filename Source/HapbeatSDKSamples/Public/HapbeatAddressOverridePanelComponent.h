@@ -18,10 +18,10 @@ class UWidgetComponent;
  * has to be reachable from inside the running app -- including from a headset,
  * where there is no keyboard.
  *
- * Port of Hapbeat.HapbeatAddressOverridePanel (Unity SDK). The Unity version
- * hand-builds a uGUI canvas plus its own 2D focus-navigation grid; this uses
- * Slate, whose focus navigation already handles keyboard and gamepad, so the
- * panel is a plain widget and the grid disappears.
+ * Port of Hapbeat.HapbeatAddressOverridePanel (Unity SDK). The panel keeps a
+ * small explicit 2D focus grid so non-pointer input (VR controllers, gamepad
+ * or a custom accessibility input source) can operate the same controls as
+ * mouse and touch users.
  *
  * Two ways to put it on screen. Show() adds it to the viewport, which is what a
  * desktop build wants. In VR there is no viewport to overlay -- the panel has to
@@ -116,6 +116,18 @@ public:
 	/** True while the panel is live, in either mode -- both keep PanelWidget set. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Address Panel Shown (Hapbeat)"))
 	bool IsShown() const { return PanelWidget.IsValid(); }
+
+	/** Move the controller-selection cursor by one cell. Horizontal/Vertical must be -1, 0 or 1. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Address", meta = (DisplayName = "Move Address Panel Focus (Hapbeat)"))
+	void MoveFocus(int32 Horizontal, int32 Vertical);
+
+	/** Activate the currently selected address-panel control, equivalent to clicking it. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Address", meta = (DisplayName = "Activate Address Panel Focus (Hapbeat)"))
+	void ActivateFocused();
+
+	/** Make the controller-selection cursor visible. VR callers normally call this once when opening the panel. */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Address", meta = (DisplayName = "Show Address Panel Focus (Hapbeat)"))
+	void ShowFocusHighlight();
 
 protected:
 	virtual void BeginPlay() override;

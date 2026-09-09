@@ -214,7 +214,7 @@ void FHapbeatUpdateCheck::Register()
 		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ProjectSettings.TabIcon"),
 		FUIAction(FExecuteAction::CreateLambda([]
 		{
-			FModuleManager::LoadModuleChecked<ISettingsModule>("Settings").ShowViewer("Project", "Plugins", "Hapbeat");
+			FModuleManager::LoadModuleChecked<ISettingsModule>("Settings").ShowViewer("Project", "Plugins", "HapbeatConfig");
 		})));
 
 	Section.AddMenuEntry("HapbeatRuntimeStatus",

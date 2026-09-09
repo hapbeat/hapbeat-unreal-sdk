@@ -8,14 +8,6 @@ sidebar:
 
 このページでは、プラグインを有効にして、同梱の `BasicExample` から Hapbeat を 1 回再生するところまでを行います。Event Map の作成、Blueprint / C++ の実装、複数端末への送信は次のページへ分けています。
 
-## 1. プロジェクトへ追加する
-
-1. 次のいずれかで、このリポジトリの**内容**を C++ プロジェクトの `Plugins/HapbeatSDK/` に置きます。
-   - Git: `git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git <ProjectRoot>/Plugins/HapbeatSDK`
-   - ZIP: GitHub から ZIP をダウンロードして解凍し、展開されたフォルダの中身を `<ProjectRoot>/Plugins/HapbeatSDK/` へコピーします。
-2. `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。ZIP の親フォルダまで入れて、`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` となる配置は誤りです。
-3. project files を再生成して、プロジェクトを build します。
-
 :::tip[ヒント: AI に初期セットアップを任せる]
 
 ファイル操作と Unreal の build を実行できる AI には、次の依頼文を渡します。`<ProjectRoot>` は対象プロジェクトの絶対パスに置き換えます。
@@ -28,11 +20,18 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 ```
 :::
 
+## 1. プロジェクトへ追加する
+
+1. 次のいずれかで、このリポジトリの**内容**を C++ プロジェクトの `Plugins/HapbeatSDK/` に置きます。
+   - Git: `git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git <ProjectRoot>/Plugins/HapbeatSDK`
+   - ZIP: GitHub から ZIP をダウンロードして解凍し、展開されたフォルダの中身を `<ProjectRoot>/Plugins/HapbeatSDK/` へコピーします。
+2. `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。ZIP の親フォルダまで入れて、`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` となる配置は誤りです。
+3. project files を再生成して、プロジェクトを build します。
+
 ## 2. プラグインを有効にする
 
 1. Unreal Editor の **Edit → Plugins** で `Hapbeat SDK` を有効にします。
-2. 再起動を求められた場合は Editor を再起動します。
-3. **Tools → Hapbeat → Hapbeat Settings** を開き、Hapbeat と同じネットワークで使う UDP port を確認します。既定値は `7700` です。
+2. **Tools → Hapbeat → Hapbeat Settings** を開きます。Project Settings の **Plugins → Hapbeat** で、`Connection > Port` を Hapbeat と同じネットワークで使う UDP port と一致させます。既定値は `7700` です。
 
 :::note[音と触覚のタイミング]
 音声出力の遅延は環境ごとに異なるため、触覚が音より先に感じられることがあります。`Haptic Delay Seconds` に少量の遅延を足し、音と触覚のタイミングを合わせます。

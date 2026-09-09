@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatShowcaseBlueprintZoneActor.h"
 
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 
 AHapbeatShowcaseBlueprintZoneActor::AHapbeatShowcaseBlueprintZoneActor()

@@ -3,6 +3,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Components/SlateWrapperTypes.h"
 #include "HapbeatAddressOverridePanelComponent.generated.h"
 
 class SHapbeatAddressOverridePanel;

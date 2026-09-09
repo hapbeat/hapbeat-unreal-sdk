@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatClip.h"
 
+#include "UObject/Package.h"
+
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatClip, Log, All);
 
 namespace

@@ -160,7 +160,10 @@ TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeMainControls()
 				Steppers
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(8.0f, 2.0f, 0.0f, 2.0f)
-			.VAlign(VAlign_Fill)
+			// Keep the three action buttons as one compact row centred against
+			// the two Player / Group rows, rather than stretching them to the
+			// row block's full height.
+			.VAlign(VAlign_Center)
 			[
 				MakeActionButtons()
 			];

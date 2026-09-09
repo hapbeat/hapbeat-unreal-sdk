@@ -10,7 +10,10 @@ sidebar:
 
 ## 開く
 
-Content Browser の Settings から **Show Plugin Content** を有効にし、`Plugins/HapbeatSDK/Content/HapbeatSamples/VRConfigExample/Maps/VRConfigExample` を開きます。VR Preview を開始すると、HMD 前方に設定パネルが表示されます。
+1. プラグインの `Scripts/generate_vr_config_input_assets.py` を一度実行し、Editor を再起動します。これは OpenXR が VR controller の Input Mapping Context を VR session 開始前に登録するために必要です。
+2. Content Browser の Settings から **Show Plugin Content** を有効にし、`Plugins/HapbeatSDK/Content/HapbeatSamples/VRConfigExample/Maps/VRConfigExample` を開きます。
+
+VR Preview を開始すると、HMD 前方約 1.9 m に幅約 1 m の設定パネルが表示されます。
 
 ## 操作
 

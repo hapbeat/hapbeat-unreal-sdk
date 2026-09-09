@@ -10,10 +10,12 @@
 #include "Components/SceneComponent.h"
 #include "Components/WidgetComponent.h"
 #include "Components/WidgetInteractionComponent.h"
+#include "EnhancedInputComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "MotionControllerComponent.h"
+#include "InputAction.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatVRConfigExample, Log, All);
 
@@ -32,6 +34,9 @@ AHapbeatVRConfigExampleActor::AHapbeatVRConfigExampleActor()
 	// Draw size in Slate units; the panel's own layout decides how much of this
 	// it fills. Roughly 4:3 so the stepper rows are not stretched.
 	PanelSurface->SetDrawSize(FVector2D(480.0f, 460.0f));
+	// World-space widgets interpret DrawSize as centimetres at unit scale. Keep
+	// the Slate layout comfortably readable without making it room-sized.
+	PanelSurface->SetWorldScale3D(FVector(0.20f));
 	// Two-sided so walking around the surface -- or a follow frame that has not
 	// caught up yet -- never leaves the wearer looking at an invisible panel.
 	PanelSurface->SetTwoSided(true);
@@ -59,6 +64,14 @@ AHapbeatVRConfigExampleActor::AHapbeatVRConfigExampleActor()
 	WidgetInteraction->TraceChannel = ECC_Visibility;
 	WidgetInteraction->VirtualUserIndex = 1;
 	WidgetInteraction->PointerIndex = 1;
+
+	// Enhanced Input Mapping Contexts must be rooted in /Game for OpenXR to
+	// register them before its session attaches. The shipped setup script creates
+	// these two assets there and records the context in DefaultInput.ini.
+	InteractAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRInteract.IA_HapbeatVRInteract")));
+	RecenterAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRRecenter.IA_HapbeatVRRecenter")));
 }
 
 void AHapbeatVRConfigExampleActor::BeginPlay()
@@ -102,31 +115,22 @@ void AHapbeatVRConfigExampleActor::BindInput()
 	InputComponent->BindKey(ToggleKey, IE_Pressed, this, &AHapbeatVRConfigExampleActor::HandleToggleKey);
 	InputComponent->BindKey(RecenterKey, IE_Pressed, this, &AHapbeatVRConfigExampleActor::HandleRecenterKey);
 
-	// OpenXR's motion source supplies the pose; these standard UE input keys
-	// cover Quest/Touch, Vive, Windows MR, Valve Index, and gamepad fallback.
-	// Every physical press becomes a left mouse click at the ray hit point.
-	const TArray<FKey> PressKeys = {
-		EKeys::OculusTouch_Right_Trigger_Click,
-		EKeys::Vive_Right_Trigger_Click,
-		EKeys::MixedReality_Right_Trigger_Click,
-		EKeys::ValveIndex_Right_Trigger_Click,
-		EKeys::Gamepad_RightTrigger,
-	};
-	for (const FKey& Key : PressKeys)
+	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
+	UInputAction* Interact = InteractAction.LoadSynchronous();
+	UInputAction* Recenter = RecenterAction.LoadSynchronous();
+	if (EnhancedInput == nullptr || Interact == nullptr || Recenter == nullptr)
 	{
-		InputComponent->BindKey(Key, IE_Pressed, this, &AHapbeatVRConfigExampleActor::HandlePointerPressed);
-		InputComponent->BindKey(Key, IE_Released, this, &AHapbeatVRConfigExampleActor::HandlePointerReleased);
+		UE_LOG(LogHapbeatVRConfigExample, Warning,
+			TEXT("AHapbeatVRConfigExampleActor: OpenXR interaction is not configured. Run Scripts/generate_vr_config_input_assets.py, restart the editor, then start VR Preview."));
+		return;
 	}
-	const TArray<FKey> RecenterKeys = {
-		EKeys::OculusTouch_Right_Thumbstick_Click,
-		EKeys::Vive_Right_Trackpad_Click,
-		EKeys::MixedReality_Right_Thumbstick_Click,
-		EKeys::ValveIndex_Right_Thumbstick_Click,
-	};
-	for (const FKey& Key : RecenterKeys)
-	{
-		InputComponent->BindKey(Key, IE_Pressed, this, &AHapbeatVRConfigExampleActor::HandleRecenterKey);
-	}
+
+	// Started/Completed preserve a normal button click, including a release when
+	// OpenXR cancels focus while the trigger is held.
+	EnhancedInput->BindAction(Interact, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandlePointerPressed);
+	EnhancedInput->BindAction(Interact, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandlePointerReleased);
+	EnhancedInput->BindAction(Interact, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandlePointerReleased);
+	EnhancedInput->BindAction(Recenter, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleRecenterKey);
 }
 
 void AHapbeatVRConfigExampleActor::HandleToggleKey()

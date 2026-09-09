@@ -7,6 +7,7 @@
 #include "HapbeatVRConfigExampleActor.generated.h"
 
 class UHapbeatAddressOverridePanelComponent;
+class UInputAction;
 class UMotionControllerComponent;
 class UWidgetInteractionComponent;
 class UWidgetComponent;
@@ -27,10 +28,11 @@ class UWidgetComponent;
  * around -- it tried an XR composition layer first and ended up on a lazy-follow
  * head-lock -- so this starts there.
  *
- * Usage: open the shipped VRConfigExample map in VR Preview. The panel follows
- * the HMD, and a standard OpenXR right-hand controller ray can press its
- * buttons: pull the trigger to click. The right stick click recentres the
- * panel. P / R remain desktop fallbacks for showing and recentring it.
+	 * Usage: run Scripts/generate_vr_config_input_assets.py once for a project,
+	 * then open the shipped VRConfigExample map in VR Preview. The panel follows
+	 * the HMD, and a standard OpenXR right-hand controller ray can press its
+	 * buttons: pull the trigger to click. The right stick click recentres the
+	 * panel. P / R remain desktop fallbacks for showing and recentring it.
  *
  * The sample deliberately uses UMotionControllerComponent and
  * UWidgetInteractionComponent rather than a vendor SDK. OpenXR supplies the
@@ -65,7 +67,7 @@ public:
 
 	UPROPERTY(EditAnywhere, Category = "Hapbeat",
 		meta = (Tooltip = "How far in front of the camera the panel sits, in cm (1 uu = 1 cm)."))
-	float FollowDistance = 120.0f;
+	float FollowDistance = 190.0f;
 
 	UPROPERTY(EditAnywhere, Category = "Hapbeat",
 		meta = (Tooltip = "Interpolation speed for the follow. Higher = tighter to the head; 0 or less = snap instantly."))
@@ -78,6 +80,20 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
 		meta = (Tooltip = "Maximum distance in cm at which the right-hand ray can press the panel."))
 	float InteractionDistance = 300.0f;
+
+	/**
+	 * Enhanced Input action fired by the right controller trigger. The setup
+	 * script creates it under /Game because OpenXR only registers Mapping
+	 * Contexts from the host project's root content.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
+		meta = (Tooltip = "Enhanced Input action used to click the panel with the right controller trigger."))
+	TSoftObjectPtr<UInputAction> InteractAction;
+
+	/** Enhanced Input action fired by the right controller stick / trackpad click. */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
+		meta = (Tooltip = "Enhanced Input action used to recenter the panel with the right controller stick or trackpad click."))
+	TSoftObjectPtr<UInputAction> RecenterAction;
 
 	UPROPERTY(EditAnywhere, Category = "Hapbeat",
 		meta = (Tooltip = "Key that hides / shows the panel."))
@@ -92,7 +108,7 @@ protected:
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
-	/** EnableInput on the first PlayerController found, then BindKey ToggleKey. Warns (no-op) if none exists. */
+	/** Binds desktop fallback keys and the project's two OpenXR Enhanced Input actions. */
 	void BindInput();
 
 	void HandleToggleKey();

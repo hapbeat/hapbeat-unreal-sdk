@@ -12,6 +12,7 @@ public class HapbeatSDKSamples : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"EnhancedInput", // UInputAction / UInputMappingContext used by the VR Config sample
 			"InputCore", // EKeys::* for the samples' legacy InputComponent->BindKey wiring
 			"Projects",  // IPluginManager (resolve this plugin's Content dir for raw WAV loads)
 			"PhysicsCore", // UPhysicalMaterial for editor-adjustable Z5 projectile bounce

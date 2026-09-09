@@ -43,7 +43,15 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 2. `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Maps/BasicExample` を開きます。
 3. PIE を開始し、`Space` を押します。
 
-100 Hz の StreamClip が再生されれば、SDK の導入とネットワーク送信は完了です。この操作はデバイスへの Kit 配布を必要としません。`F` は Kit 配布済みデバイス向けの Command 再生です。
+100 Hz の StreamClip が再生されれば、SDK の導入とネットワーク送信は完了です。この操作はデバイスへの Kit 配布を必要としません。
+
+### Fire（Command）を試す
+
+1. Hapbeat Studio で `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Kit/basic-exam-kit/` の Kit を開きます。
+2. 接続済みの Hapbeat を選び、**Deploy** で `basic-exam-kit` を Hapbeat へデプロイします。Kit 内の `install-clips/sine_200hz_1s.wav` がデバイスに配置されます。
+3. BasicExample の PIE に戻り、`F` を押します。
+
+`F` は Fire（Command）として `basic-exam-kit.sine_200hz_1s` を再生します。`Space` のストリーミング再生を先に確認してから、Kit に含めた install-clip の再生を確認する順序です。
 
 反応しない場合は、Hapbeat の電源・同一ネットワーク・UDP port を確認してください。Editor の **Output Log** で `LogHapbeat` を検索すると、送信・PONG・エラーを確認できます。
 

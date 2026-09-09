@@ -14,9 +14,11 @@
 
 ## 収録ドキュメント
 
-- [getting-started.md](./getting-started.md) — インストール / 最短の疎通確認 / EventMap とトリガの使い方
+- [getting-started.md](./getting-started.md) — プラグイン導入と BasicExample の最小疎通確認
+- [event-map-and-playback.md](./event-map-and-playback.md) — Event Map の作成と Blueprint / C++ からの再生
 - [blueprint-nodes.md](./blueprint-nodes.md) — Blueprint に公開しているノード、component、接続・診断 API の用途
-- [advanced.md](./advanced.md) — address override、Target、Showcase の補足
+- [targeting-and-multi-hmd.md](./targeting-and-multi-hmd.md) — Target と Address Override による複数 HMD 運用
+- [vr-config-example.md](./vr-config-example.md) — VR コントローラーで Address Override を設定するサンプル
 - [showcase-unreal.md](./showcase-unreal.md) — Showcase Z1〜Z5 の Actor / Component と Hapbeat Event Map の触覚配線
 - [unity-to-unreal-codex.md](./unity-to-unreal-codex.md) — Unity 経験者向けの Unreal Editor、PIE、Actor / Component の補足
 

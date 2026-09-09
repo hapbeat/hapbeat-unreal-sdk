@@ -6,7 +6,7 @@ sidebar:
 
 # Unity 経験者のための Unreal Editor 補足
 
-このページは、Unity から Unreal Engine 5（UE5）へ移る開発者向けの補足です。Showcase の触覚配線そのものは、[Showcase の触覚配線ガイド](./showcase-unreal.md)を先に参照してください。
+このページは、Unity から Unreal Engine 5（UE5）へ移る開発者向けの補足です。Showcase の実装例は、[Showcase](./showcase-unreal.md)を先に参照してください。
 
 ## Editor 上の用語と保存場所
 

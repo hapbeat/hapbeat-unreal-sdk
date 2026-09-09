@@ -1,16 +1,12 @@
 ---
 sidebar:
   order: 3
-  label: Showcase 配線
+  label: Showcase
 ---
 
-# Showcase の触覚配線
+# Showcase
 
 Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルです。各 zone Actor の Details と `EM_Showcase` を開くと、再生する触覚とその設定を確認・変更できます。
-
-:::tip[PIE 中にイベントを切り替える]
-PIE を開始後、`Shift + F1` で editor 操作へ戻り、**Play World** の zone Actor を選びます。Details の Event Map / Event を変えると、次の衝突・入力・shot から反映されます。Blueprint の EventGraph を PIE 中に編集しても実行中 instance には反映されません。停止後は値が戻るため、残す変更は Editor World の同じ Actor に設定して保存します。
-:::
 
 :::note[音と触覚のタイミング]
 音声出力の遅延は環境ごとに異なるため、触覚が音より先に感じられることがあります。これは想定内です。`Tools → Hapbeat → Hapbeat Settings > Behavior > Haptic Delay Seconds` を少しずつ上げ、触覚に遅延を加えて合わせます。詳しくは[音と触覚のタイミングを合わせる](./getting-started.md#音と触覚のタイミングを合わせる)を参照してください。
@@ -184,7 +180,7 @@ Gain / Pan slider
 2. <span class="hb-bp-node">On Gain Slider Changed</span> / <span class="hb-bp-node">On Pan Slider Changed</span> から <span class="hb-bp-node">Set Binding Input (Hapbeat)</span> → <span class="hb-bp-node">Update Stream Parameter (Hapbeat)</span> をたどります。slider の float 値を `GainBinding` / `PanBinding` に入れ、両 binding が `LoopTrigger` の再生中 stream の Gain / Pan を更新します。
 3. 続く <span class="hb-bp-node">Fire Tick From Value (Hapbeat)</span> は、slider が <span class="hb-field">Tick Threshold</span> をまたいだときだけ <code class="hb-entry">z4_slider_tick</code> を再生します。
 
-Address Override は、Player / Group に対応する Hapbeat だけへ送るための実行時の送信先指定です。Event Map の entry や再生配線は変えません。詳しくは[複数の HMD に 1 台ずつ Hapbeat を割り当てる](./advanced.md#複数の-hmd-に-1-台ずつ-hapbeat-を割り当てる)を参照してください。
+Address Override は、Player / Group に対応する Hapbeat だけへ送るための実行時の送信先指定です。Event Map の entry や再生配線は変えません。詳しくは[宛先と複数 HMD](./targeting-and-multi-hmd.md)を参照してください。
 
 ## Z5 Target Range — charge / shot と target hit
 
@@ -239,7 +235,7 @@ Plugins
 | Z5 の charge / shot / target-hit entry | <code class="hb-asset">Z5_ChargeShot</code> の <span class="hb-field">Haptic Events</span> |
 | 実行時の送信先 | Address Override |
 
-`Target` は送信先を表す論理フィルタです。Address Override は Event Map や Actor の配線を変更しません。詳細は[応用](./advanced.md)を参照してください。
+`Target` は送信先を表す論理フィルタです。Address Override は Event Map や Actor の配線を変更しません。詳細は[宛先と複数 HMD](./targeting-and-multi-hmd.md)を参照してください。
 
 ## SDK の接続設定と確認
 
@@ -253,4 +249,4 @@ Event Map の **Test Play** は、同じ保存済み Address Override と build-
 ## 関連資料
 
 - [Blueprint ノード一覧](./blueprint-nodes.md)
-- [Advanced usage](./advanced.md)
+- [宛先と複数 HMD](./targeting-and-multi-hmd.md)

@@ -60,6 +60,7 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 | レベル | 確認できること |
 | --- | --- |
 | [BasicExample](./getting-started.md#3-basicexample-を再生する) | 最小構成の Event Map 再生 |
+| [Showcase](./showcase-unreal.md) | Z1〜Z5 のゲーム内イベントと触覚再生の接続例 |
 | [VR Config Example](./vr-config-example.md) | VR コントローラーでの Address Override 設定と Test 再生 |
 
 ## 次に読むもの

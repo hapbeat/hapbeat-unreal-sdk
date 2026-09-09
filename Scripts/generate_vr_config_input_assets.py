@@ -23,12 +23,7 @@ import unreal
 ROOT = '/Game/HapbeatVRConfig/Input'
 INTERACT_PATH = ROOT + '/IA_HapbeatVRInteract'
 RECENTER_PATH = ROOT + '/IA_HapbeatVRRecenter'
-NAVIGATE_ACTIONS = {
-    'Up': ROOT + '/IA_HapbeatVRNavigateUp',
-    'Down': ROOT + '/IA_HapbeatVRNavigateDown',
-    'Left': ROOT + '/IA_HapbeatVRNavigateLeft',
-    'Right': ROOT + '/IA_HapbeatVRNavigateRight',
-}
+NAVIGATE_PATH = ROOT + '/IA_HapbeatVRNavigate'
 CONTEXT_PATH = ROOT + '/IMC_HapbeatVRConfig'
 
 
@@ -85,12 +80,9 @@ def main():
     recenter = get_or_create('IA_HapbeatVRRecenter', ROOT, unreal.InputAction)
     recenter.set_editor_property('action_description', unreal.Text('Recenter Hapbeat VR Config panel'))
 
-    navigate = {}
-    for direction, path in NAVIGATE_ACTIONS.items():
-        asset_name = path.rsplit('/', 1)[-1]
-        navigate[direction] = get_or_create(asset_name, ROOT, unreal.InputAction)
-        navigate[direction].set_editor_property(
-            'action_description', unreal.Text('Move Hapbeat VR Config selection ' + direction.lower()))
+    navigate = get_or_create('IA_HapbeatVRNavigate', ROOT, unreal.InputAction)
+    navigate.set_editor_property('action_description', unreal.Text('Move Hapbeat VR Config selection'))
+    navigate.set_editor_property('value_type', unreal.InputActionValueType.AXIS2D)
 
     context = get_or_create('IMC_HapbeatVRConfig', ROOT, unreal.InputMappingContext)
     context.unmap_all()
@@ -127,20 +119,30 @@ def main():
     ):
         map_key(context, recenter, key)
 
-    for direction, action in navigate.items():
-        for hand in ('Left', 'Right'):
-            map_key(context, action, 'OculusTouch_%s_Thumbstick_%s' % (hand, direction))
-            map_key(context, action, 'Vive_%s_Trackpad_%s' % (hand, direction))
-            map_key(context, action, 'MixedReality_%s_Thumbstick_%s' % (hand, direction))
-            map_key(context, action, 'ValveIndex_%s_Thumbstick_%s' % (hand, direction))
-        map_key(context, action, 'Gamepad_LeftStick_%s' % direction)
-        map_key(context, action, 'Gamepad_RightStick_%s' % direction)
-        map_key(context, action, 'Gamepad_DPad_%s' % direction)
+    # Map actual 2D axes rather than the virtual Up / Down / Left / Right keys.
+    # OpenXR reliably exposes the paired axes, whereas several runtimes do not
+    # publish those virtual directional keys to Enhanced Input.
+    for key in (
+        'OculusTouch_Left_Thumbstick_2D',
+        'OculusTouch_Right_Thumbstick_2D',
+        'Vive_Left_Trackpad_2D',
+        'Vive_Right_Trackpad_2D',
+        'MixedReality_Left_Thumbstick_2D',
+        'MixedReality_Right_Thumbstick_2D',
+        'MixedReality_Left_Trackpad_2D',
+        'MixedReality_Right_Trackpad_2D',
+        'ValveIndex_Left_Thumbstick_2D',
+        'ValveIndex_Right_Thumbstick_2D',
+        'ValveIndex_Left_Trackpad_2D',
+        'ValveIndex_Right_Trackpad_2D',
+        'Gamepad_Left2D',
+        'Gamepad_Right2D',
+    ):
+        map_key(context, navigate, key)
 
     unreal.EditorAssetLibrary.save_loaded_asset(interact)
     unreal.EditorAssetLibrary.save_loaded_asset(recenter)
-    for action in navigate.values():
-        unreal.EditorAssetLibrary.save_loaded_asset(action)
+    unreal.EditorAssetLibrary.save_loaded_asset(navigate)
     unreal.EditorAssetLibrary.save_loaded_asset(context)
     configure_project_default(context)
     unreal.log('[Hapbeat] VRConfigExample input assets installed. Restart the editor before VR Preview.')

@@ -2,13 +2,11 @@
 #include "Misc/AutomationTest.h"
 
 #include "Components/WidgetComponent.h"
-#include "Components/WidgetInteractionComponent.h"
 #include "EngineUtils.h"
 #include "GameFramework/WorldSettings.h"
 #include "HapbeatAddressOverridePanelComponent.h"
 #include "HapbeatShowcaseGameMode.h"
 #include "HapbeatVRConfigExampleActor.h"
-#include "MotionControllerComponent.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatVRConfigExampleMapTest,
@@ -40,28 +38,14 @@ bool FHapbeatVRConfigExampleMapTest::RunTest(const FString& Parameters)
 	}
 
 	UWidgetComponent* PanelSurface = ConfigActor->FindComponentByClass<UWidgetComponent>();
-	UMotionControllerComponent* RightController = ConfigActor->FindComponentByClass<UMotionControllerComponent>();
-	UWidgetInteractionComponent* Interaction = ConfigActor->FindComponentByClass<UWidgetInteractionComponent>();
 	UHapbeatAddressOverridePanelComponent* Panel = ConfigActor->FindComponentByClass<UHapbeatAddressOverridePanelComponent>();
 
 	if (TestNotNull(TEXT("World-space panel surface"), PanelSurface))
 	{
 		TestEqual(TEXT("Panel uses world space"), PanelSurface->GetWidgetSpace(), EWidgetSpace::World);
-		TestEqual(TEXT("Panel accepts only query traces"), PanelSurface->GetCollisionEnabled(), ECollisionEnabled::QueryOnly);
-		TestEqual(TEXT("Panel accepts the UI Visibility trace"),
-			PanelSurface->GetCollisionResponseToChannel(ECC_Visibility), ECR_Block);
-	}
-	if (TestNotNull(TEXT("Right-hand motion controller"), RightController))
-	{
-		TestEqual(TEXT("Controller uses OpenXR standard Right source"),
-			RightController->GetTrackingMotionSource(), FName(TEXT("Right")));
-	}
-	if (TestNotNull(TEXT("Widget interaction ray"), Interaction))
-	{
-		TestEqual(TEXT("Interaction traces from the controller in world space"),
-			Interaction->InteractionSource, EWidgetInteractionSource::World);
-		TestEqual(TEXT("Interaction traces the panel's Visibility channel"),
-			Interaction->TraceChannel, TEnumAsByte<ECollisionChannel>(ECC_Visibility));
+		TestEqual(TEXT("Panel does not require controller ray collision"), PanelSurface->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+		ConfigActor->RerunConstructionScripts();
+		TestTrue(TEXT("Panel creates its GUI in the editor viewport before PIE"), PanelSurface->GetSlateWidget().IsValid());
 	}
 	if (TestNotNull(TEXT("Address Override panel"), Panel))
 	{

@@ -9,6 +9,7 @@
 class UHapbeatAddressOverridePanelComponent;
 class UInputAction;
 class UWidgetComponent;
+struct FInputActionValue;
 
 /**
  * VR config panel demo: pick which Hapbeat this build talks to from inside the
@@ -79,18 +80,13 @@ public:
 		meta = (Tooltip = "Enhanced Input action used to activate the selected panel control with either controller trigger."))
 	TSoftObjectPtr<UInputAction> InteractAction;
 
-	/** Enhanced Input actions fired by either controller stick / trackpad direction. */
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Moves the address-panel selection cursor up."))
-	TSoftObjectPtr<UInputAction> NavigateUpAction;
-
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Moves the address-panel selection cursor down."))
-	TSoftObjectPtr<UInputAction> NavigateDownAction;
-
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Moves the address-panel selection cursor left."))
-	TSoftObjectPtr<UInputAction> NavigateLeftAction;
-
-	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Moves the address-panel selection cursor right."))
-	TSoftObjectPtr<UInputAction> NavigateRightAction;
+	/**
+	 * Enhanced Input 2D action driven by either controller thumbstick / trackpad.
+	 * A single axis action avoids relying on directional virtual keys, which some
+	 * OpenXR runtimes do not publish to an Enhanced Input mapping context.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input", meta = (Tooltip = "Enhanced Input 2D action used to move the address-panel selection cursor with either controller stick or trackpad."))
+	TSoftObjectPtr<UInputAction> NavigateAction;
 
 	/** Enhanced Input action fired by either controller stick / trackpad click. */
 	UPROPERTY(EditAnywhere, Category = "Hapbeat|VR Input",
@@ -109,6 +105,7 @@ public:
 	FKey RecenterKey = EKeys::R;
 
 protected:
+	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -119,16 +116,10 @@ private:
 	void HandleToggleKey();
 	void HandleRecenterKey();
 	void HandleActivate();
-	void HandleMoveUpPressed();
-	void HandleMoveDownPressed();
-	void HandleMoveLeftPressed();
-	void HandleMoveRightPressed();
-	void HandleMoveUpReleased();
-	void HandleMoveDownReleased();
-	void HandleMoveLeftReleased();
-	void HandleMoveRightReleased();
+	void HandleNavigate(const FInputActionValue& Value);
+	void HandleNavigateReleased(const FInputActionValue& Value);
 	void BeginMove(FIntPoint Direction);
-	void EndMove(FIntPoint Direction);
+	void EndMove();
 	void RepeatMove(float DeltaSeconds);
 
 	/** Move/aim PanelSurface to sit in front of the camera this frame. No-op on frames with no camera. */

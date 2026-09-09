@@ -11,6 +11,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
+#include "InputActionValue.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatVRConfigExample, Log, All);
 
@@ -52,16 +53,26 @@ AHapbeatVRConfigExampleActor::AHapbeatVRConfigExampleActor()
 	// these actions there and records the context in DefaultInput.ini.
 	InteractAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRInteract.IA_HapbeatVRInteract")));
-	NavigateUpAction = TSoftObjectPtr<UInputAction>(
-		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigateUp.IA_HapbeatVRNavigateUp")));
-	NavigateDownAction = TSoftObjectPtr<UInputAction>(
-		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigateDown.IA_HapbeatVRNavigateDown")));
-	NavigateLeftAction = TSoftObjectPtr<UInputAction>(
-		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigateLeft.IA_HapbeatVRNavigateLeft")));
-	NavigateRightAction = TSoftObjectPtr<UInputAction>(
-		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigateRight.IA_HapbeatVRNavigateRight")));
+	NavigateAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRNavigate.IA_HapbeatVRNavigate")));
 	RecenterAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/HapbeatVRConfig/Input/IA_HapbeatVRRecenter.IA_HapbeatVRRecenter")));
+}
+
+void AHapbeatVRConfigExampleActor::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+
+	// The address panel normally attaches at BeginPlay. Attach an independent
+	// Slate instance in the editor world too, so its real GUI is visible and
+	// positionable in the level viewport before PIE. BeginPlay replaces this
+	// editor-preview instance with the runtime instance that has a subsystem.
+	if (bWorldSpacePanel && PanelComponent != nullptr && PanelSurface != nullptr &&
+		GetWorld() != nullptr && !GetWorld()->IsGameWorld())
+	{
+		PanelComponent->AttachToWidgetComponent(PanelSurface);
+		PanelComponent->ShowFocusHighlight();
+	}
 }
 
 void AHapbeatVRConfigExampleActor::BeginPlay()
@@ -107,13 +118,9 @@ void AHapbeatVRConfigExampleActor::BindInput()
 
 	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
 	UInputAction* Interact = InteractAction.LoadSynchronous();
-	UInputAction* NavigateUp = NavigateUpAction.LoadSynchronous();
-	UInputAction* NavigateDown = NavigateDownAction.LoadSynchronous();
-	UInputAction* NavigateLeft = NavigateLeftAction.LoadSynchronous();
-	UInputAction* NavigateRight = NavigateRightAction.LoadSynchronous();
+	UInputAction* Navigate = NavigateAction.LoadSynchronous();
 	UInputAction* Recenter = RecenterAction.LoadSynchronous();
-	if (EnhancedInput == nullptr || Interact == nullptr || NavigateUp == nullptr || NavigateDown == nullptr ||
-		NavigateLeft == nullptr || NavigateRight == nullptr || Recenter == nullptr)
+	if (EnhancedInput == nullptr || Interact == nullptr || Navigate == nullptr || Recenter == nullptr)
 	{
 		UE_LOG(LogHapbeatVRConfigExample, Warning,
 			TEXT("AHapbeatVRConfigExampleActor: OpenXR controller navigation is not configured. Run Scripts/generate_vr_config_input_assets.py, restart the editor, then start VR Preview."));
@@ -123,18 +130,9 @@ void AHapbeatVRConfigExampleActor::BindInput()
 	// A trigger confirms the already-visible selection cursor. This intentionally
 	// does not use WidgetInteraction or a controller pose/ray.
 	EnhancedInput->BindAction(Interact, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleActivate);
-	EnhancedInput->BindAction(NavigateUp, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleMoveUpPressed);
-	EnhancedInput->BindAction(NavigateDown, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleMoveDownPressed);
-	EnhancedInput->BindAction(NavigateLeft, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleMoveLeftPressed);
-	EnhancedInput->BindAction(NavigateRight, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleMoveRightPressed);
-	EnhancedInput->BindAction(NavigateUp, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleMoveUpReleased);
-	EnhancedInput->BindAction(NavigateDown, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleMoveDownReleased);
-	EnhancedInput->BindAction(NavigateLeft, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleMoveLeftReleased);
-	EnhancedInput->BindAction(NavigateRight, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleMoveRightReleased);
-	EnhancedInput->BindAction(NavigateUp, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleMoveUpReleased);
-	EnhancedInput->BindAction(NavigateDown, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleMoveDownReleased);
-	EnhancedInput->BindAction(NavigateLeft, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleMoveLeftReleased);
-	EnhancedInput->BindAction(NavigateRight, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleMoveRightReleased);
+	EnhancedInput->BindAction(Navigate, ETriggerEvent::Triggered, this, &AHapbeatVRConfigExampleActor::HandleNavigate);
+	EnhancedInput->BindAction(Navigate, ETriggerEvent::Completed, this, &AHapbeatVRConfigExampleActor::HandleNavigateReleased);
+	EnhancedInput->BindAction(Navigate, ETriggerEvent::Canceled, this, &AHapbeatVRConfigExampleActor::HandleNavigateReleased);
 	EnhancedInput->BindAction(Recenter, ETriggerEvent::Started, this, &AHapbeatVRConfigExampleActor::HandleRecenterKey);
 }
 
@@ -172,44 +170,36 @@ void AHapbeatVRConfigExampleActor::HandleActivate()
 	}
 }
 
-void AHapbeatVRConfigExampleActor::HandleMoveUpPressed()
+void AHapbeatVRConfigExampleActor::HandleNavigate(const FInputActionValue& Value)
 {
-	BeginMove(FIntPoint(0, -1));
+	if (PanelComponent == nullptr)
+	{
+		return;
+	}
+
+	const FVector2D Axis = Value.Get<FVector2D>();
+	constexpr float MoveDeadzone = 0.6f;
+	if (FMath::Max(FMath::Abs(Axis.X), FMath::Abs(Axis.Y)) < MoveDeadzone)
+	{
+		EndMove();
+		return;
+	}
+
+	// Use one dominant direction per input update. UE reports positive Y for
+	// pushing the stick upward; panel-grid rows grow downward, hence the sign
+	// flip for the vertical move.
+	const FIntPoint Direction = FMath::Abs(Axis.X) >= FMath::Abs(Axis.Y)
+		? FIntPoint(Axis.X >= 0.0f ? 1 : -1, 0)
+		: FIntPoint(0, Axis.Y >= 0.0f ? -1 : 1);
+	if (Direction != ActiveMoveDirection)
+	{
+		BeginMove(Direction);
+	}
 }
 
-void AHapbeatVRConfigExampleActor::HandleMoveDownPressed()
+void AHapbeatVRConfigExampleActor::HandleNavigateReleased(const FInputActionValue& Value)
 {
-	BeginMove(FIntPoint(0, 1));
-}
-
-void AHapbeatVRConfigExampleActor::HandleMoveLeftPressed()
-{
-	BeginMove(FIntPoint(-1, 0));
-}
-
-void AHapbeatVRConfigExampleActor::HandleMoveRightPressed()
-{
-	BeginMove(FIntPoint(1, 0));
-}
-
-void AHapbeatVRConfigExampleActor::HandleMoveUpReleased()
-{
-	EndMove(FIntPoint(0, -1));
-}
-
-void AHapbeatVRConfigExampleActor::HandleMoveDownReleased()
-{
-	EndMove(FIntPoint(0, 1));
-}
-
-void AHapbeatVRConfigExampleActor::HandleMoveLeftReleased()
-{
-	EndMove(FIntPoint(-1, 0));
-}
-
-void AHapbeatVRConfigExampleActor::HandleMoveRightReleased()
-{
-	EndMove(FIntPoint(1, 0));
+	EndMove();
 }
 
 void AHapbeatVRConfigExampleActor::BeginMove(FIntPoint Direction)
@@ -227,13 +217,10 @@ void AHapbeatVRConfigExampleActor::BeginMove(FIntPoint Direction)
 	PanelComponent->MoveFocus(Direction.X, Direction.Y);
 }
 
-void AHapbeatVRConfigExampleActor::EndMove(FIntPoint Direction)
+void AHapbeatVRConfigExampleActor::EndMove()
 {
-	if (ActiveMoveDirection == Direction)
-	{
-		ActiveMoveDirection = FIntPoint::ZeroValue;
-		MoveRepeatTimer = 0.0f;
-	}
+	ActiveMoveDirection = FIntPoint::ZeroValue;
+	MoveRepeatTimer = 0.0f;
 }
 
 void AHapbeatVRConfigExampleActor::RepeatMove(float DeltaSeconds)

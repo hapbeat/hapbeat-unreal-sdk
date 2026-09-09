@@ -22,12 +22,17 @@ public:
 		: _Subsystem(nullptr)
 		, _bPersistOnApply(true)
 		, _bShowCloseButton(true)
+		, _bUseVRConfigLayout(false)
 	{}
 		SLATE_ARGUMENT(UHapbeatSubsystem*, Subsystem)
 		SLATE_ARGUMENT(bool, bPersistOnApply)
 		/** Whether this host needs a button to dismiss the panel itself. */
 		SLATE_ARGUMENT(bool, bShowCloseButton)
+		/** Compact controller layout used by VRConfigExample. */
+		SLATE_ARGUMENT(bool, bUseVRConfigLayout)
 		SLATE_ARGUMENT(FString, TestEventId)
+		/** Optional sample-owned playback path. Falls back to TestEventId when unbound. */
+		SLATE_EVENT(FSimpleDelegate, OnTestRequested)
 		/** Invoked by the Close button so the owner can drop the widget. */
 		SLATE_EVENT(FSimpleDelegate, OnCloseRequested)
 	SLATE_END_ARGS()
@@ -89,6 +94,10 @@ private:
 		TAttribute<FText> GroupText,
 		TAttribute<FSlateColor> GroupColor);
 
+	/** Player/Group steppers and the action buttons, arranged for desktop or VR. */
+	TSharedRef<SWidget> MakeMainControls();
+	TSharedRef<SWidget> MakeActionButtons();
+
 	/** Builds a focusable control with a thin yellow cursor surround when selected. */
 	TSharedRef<SWidget> MakeFocusButton(
 		FIntPoint Coordinate,
@@ -105,7 +114,9 @@ private:
 	TWeakObjectPtr<UHapbeatSubsystem> WeakSubsystem;
 	bool bPersistOnApply = true;
 	bool bShowCloseButton = true;
+	bool bUseVRConfigLayout = false;
 	FString TestEventId;
+	FSimpleDelegate OnTestRequested;
 	FSimpleDelegate OnCloseRequested;
 
 	int32 EditingPlayer = -1;

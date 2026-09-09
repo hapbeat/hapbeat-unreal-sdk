@@ -43,7 +43,9 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 	WeakSubsystem = InArgs._Subsystem;
 	bPersistOnApply = InArgs._bPersistOnApply;
 	bShowCloseButton = InArgs._bShowCloseButton;
+	bUseVRConfigLayout = InArgs._bUseVRConfigLayout;
 	TestEventId = InArgs._TestEventId;
+	OnTestRequested = InArgs._OnTestRequested;
 	OnCloseRequested = InArgs._OnCloseRequested;
 
 	// Start from what is actually applied, so opening the panel and closing it
@@ -71,22 +73,9 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 					.ColorAndOpacity(FLinearColor::White)
 				]
 
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+			+ SVerticalBox::Slot().AutoHeight()
 				[
-					MakeStepperRow(0, LOCTEXT("Player", "Player"),
-						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetPlayerLabel),
-						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetPlayerEditColor),
-						TAttribute<bool>(this, &SHapbeatAddressOverridePanel::IsPlayerEditable),
-						[this](int32 Delta) { StepPlayer(Delta); })
-				]
-
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
-				[
-					MakeStepperRow(1, LOCTEXT("Group", "Group"),
-						TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetGroupLabel),
-						TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetGroupEditColor),
-						TAttribute<bool>(this, &SHapbeatAddressOverridePanel::IsGroupEditable),
-						[this](int32 Delta) { StepGroup(Delta); })
+					MakeMainControls()
 				]
 
 			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 8.0f, 0.0f, 2.0f)
@@ -130,36 +119,6 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 						]
 				]
 
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
-				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
-						[
-							MakeFocusButton(FIntPoint(2, 0), LOCTEXT("Apply", "Apply"),
-								LOCTEXT("ApplyTooltip", "Send every later command to this player / group."),
-								[this] { return OnApplyClicked(); })
-						]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
-						[
-							MakeFocusButton(FIntPoint(3, 0), LOCTEXT("Test", "Test"),
-								LOCTEXT("TestTooltip", "Fire one event so you can feel which device you are addressing."),
-								[this] { return OnTestClicked(); })
-						]
-					+ SHorizontalBox::Slot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
-						[
-							MakeFocusButton(FIntPoint(4, 0), LOCTEXT("Clear", "Clear"),
-								LOCTEXT("ClearTooltip", "Turn both axes off and forget the saved choice."),
-								[this] { return OnClearClicked(); })
-						]
-					+ SHorizontalBox::Slot().AutoWidth()
-						[
-							SNew(SButton)
-							.IsFocusable(false)
-							.Visibility(bShowCloseButton ? EVisibility::Visible : EVisibility::Collapsed)
-							.Text(LOCTEXT("Close", "Close"))
-							.OnClicked(this, &SHapbeatAddressOverridePanel::OnCloseClicked)
-						]
-				]
 		]
 	];
 
@@ -169,6 +128,100 @@ void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 	RegisterFocusAlias(FIntPoint(2, 1), FIntPoint(2, 0));
 	RegisterFocusAlias(FIntPoint(3, 1), FIntPoint(3, 0));
 	RegisterFocusAlias(FIntPoint(4, 1), FIntPoint(4, 0));
+}
+
+TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeMainControls()
+{
+	TSharedRef<SVerticalBox> Steppers = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeStepperRow(0, LOCTEXT("Player", "Player"),
+				TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetPlayerLabel),
+				TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetPlayerEditColor),
+				TAttribute<bool>(this, &SHapbeatAddressOverridePanel::IsPlayerEditable),
+				[this](int32 Delta) { StepPlayer(Delta); })
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
+		[
+			MakeStepperRow(1, LOCTEXT("Group", "Group"),
+				TAttribute<FText>(this, &SHapbeatAddressOverridePanel::GetGroupLabel),
+				TAttribute<FSlateColor>(this, &SHapbeatAddressOverridePanel::GetGroupEditColor),
+				TAttribute<bool>(this, &SHapbeatAddressOverridePanel::IsGroupEditable),
+				[this](int32 Delta) { StepGroup(Delta); })
+		];
+
+	if (bUseVRConfigLayout)
+	{
+		// Unity's VRConfigExample uses one compact focus grid: the two
+		// steppers on the left and Apply / Play / Exit on the right.
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				Steppers
+			]
+			+ SHorizontalBox::Slot().AutoWidth().Padding(8.0f, 2.0f, 0.0f, 2.0f)
+			.VAlign(VAlign_Fill)
+			[
+				MakeActionButtons()
+			];
+	}
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Steppers
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 4.0f, 0.0f, 0.0f)
+		[
+			MakeActionButtons()
+		];
+}
+
+TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeActionButtons()
+{
+	TSharedRef<SHorizontalBox> Actions = SNew(SHorizontalBox);
+	Actions->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
+	[
+		MakeFocusButton(FIntPoint(2, 0), LOCTEXT("Apply", "Apply"),
+			LOCTEXT("ApplyTooltip", "Send every later command to this player / group."),
+			[this] { return OnApplyClicked(); })
+	];
+	Actions->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
+	[
+		MakeFocusButton(FIntPoint(3, 0),
+			bUseVRConfigLayout ? LOCTEXT("Play", "Play") : LOCTEXT("Test", "Test"),
+			LOCTEXT("TestTooltip", "Play the 100 Hz sample on the applied target."),
+			[this] { return OnTestClicked(); })
+	];
+
+	if (bUseVRConfigLayout)
+	{
+		Actions->AddSlot().AutoWidth()
+		[
+			MakeFocusButton(FIntPoint(4, 0), LOCTEXT("Exit", "Exit"),
+				LOCTEXT("ExitTooltip", "Close the VR configuration panel."),
+				[this] { return OnCloseClicked(); })
+		];
+	}
+	else
+	{
+		Actions->AddSlot().AutoWidth().Padding(0.0f, 0.0f, 4.0f, 0.0f)
+		[
+			MakeFocusButton(FIntPoint(4, 0), LOCTEXT("Clear", "Clear"),
+				LOCTEXT("ClearTooltip", "Turn both axes off and forget the saved choice."),
+				[this] { return OnClearClicked(); })
+		];
+		Actions->AddSlot().AutoWidth()
+		[
+			SNew(SButton)
+			.IsFocusable(false)
+			.Visibility(bShowCloseButton ? EVisibility::Visible : EVisibility::Collapsed)
+			.Text(LOCTEXT("Close", "Close"))
+			.OnClicked(this, &SHapbeatAddressOverridePanel::OnCloseClicked)
+		];
+	}
+
+	return Actions;
 }
 
 TSharedRef<SWidget> SHapbeatAddressOverridePanel::MakeStepperRow(
@@ -560,6 +613,12 @@ FReply SHapbeatAddressOverridePanel::OnClearClicked()
 
 FReply SHapbeatAddressOverridePanel::OnTestClicked()
 {
+	if (OnTestRequested.IsBound())
+	{
+		OnTestRequested.Execute();
+		return FReply::Handled();
+	}
+
 	if (UHapbeatSubsystem* Subsystem = GetSubsystem())
 	{
 		// Deliberately fires through the applied override, not the staged edit:

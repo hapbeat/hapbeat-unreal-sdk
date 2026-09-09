@@ -7,6 +7,7 @@
 #include "HapbeatVRConfigExampleActor.generated.h"
 
 class UHapbeatAddressOverridePanelComponent;
+class UHapbeatTriggerComponent;
 class UInputAction;
 class UWidgetComponent;
 struct FInputActionValue;
@@ -116,6 +117,7 @@ private:
 	void HandleToggleKey();
 	void HandleRecenterKey();
 	void HandleActivate();
+	void HandlePlayTest();
 	void HandleNavigate(const FInputActionValue& Value);
 	void HandleNavigateReleased(const FInputActionValue& Value);
 	void BeginMove(FIntPoint Direction);
@@ -136,6 +138,10 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
 	TObjectPtr<UHapbeatAddressOverridePanelComponent> PanelComponent;
+
+	/** StreamClip trigger for the Unity-parity 100 Hz Play action; no device-side Kit is required. */
+	UPROPERTY(VisibleAnywhere, Category = "Hapbeat")
+	TObjectPtr<UHapbeatTriggerComponent> TestTrigger;
 
 	FIntPoint ActiveMoveDirection = FIntPoint::ZeroValue;
 	float MoveRepeatTimer = 0.0f;

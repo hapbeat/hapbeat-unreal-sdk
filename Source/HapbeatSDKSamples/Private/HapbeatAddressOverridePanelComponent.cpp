@@ -46,12 +46,27 @@ TSharedRef<SHapbeatAddressOverridePanel> UHapbeatAddressOverridePanelComponent::
 		.Subsystem(Subsystem)
 		.bPersistOnApply(bPersistOnApply)
 		.bShowCloseButton(bShowCloseButton)
+		.bUseVRConfigLayout(bUseVRConfigLayout)
 		.TestEventId(TestEventId)
+		.OnTestRequested(TestRequestedHandler)
 		.OnCloseRequested(FSimpleDelegate::CreateLambda([WeakThis]
 		{
 			if (UHapbeatAddressOverridePanelComponent* Self = WeakThis.Get())
 			{
-				Self->Hide();
+				// A world-space VR panel keeps its Slate widget alive so the
+				// actor's P shortcut can reveal the same staged state again.
+				// Viewport panels still remove themselves completely.
+				if (Self->bUseVRConfigLayout && Self->bAttachedToWidgetComponent)
+				{
+					if (UWidgetComponent* Surface = Self->AttachedWidgetComponent.Get())
+					{
+						Surface->SetVisibility(false);
+					}
+				}
+				else
+				{
+					Self->Hide();
+				}
 			}
 		}));
 }

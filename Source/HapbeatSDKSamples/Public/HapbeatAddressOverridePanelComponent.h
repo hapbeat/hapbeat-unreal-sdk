@@ -52,6 +52,10 @@ public:
 	bool bShowCloseButton = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat",
+		meta = (Tooltip = "Use the VR Config Example layout: Player and Group steppers on the left, with Apply, Play, and Exit on the right."))
+	bool bUseVRConfigLayout = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hapbeat",
 		meta = (Tooltip = "Event id fired by the panel's Test button. Leave empty to use the SDK's standard sample event."))
 	FString TestEventId;
 
@@ -129,6 +133,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Address", meta = (DisplayName = "Show Address Panel Focus (Hapbeat)"))
 	void ShowFocusHighlight();
 
+	/** Route the panel's Test/Play action through a sample-owned trigger. C++ samples only. */
+	void SetTestRequestedHandler(FSimpleDelegate Handler) { TestRequestedHandler = MoveTemp(Handler); }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -160,4 +167,7 @@ private:
 
 	/** The surface the panel was handed to; weak, since the actor owning it can go away first. */
 	TWeakObjectPtr<UWidgetComponent> AttachedWidgetComponent;
+
+	/** Optional test/playback callback supplied by the actor hosting this panel. */
+	FSimpleDelegate TestRequestedHandler;
 };

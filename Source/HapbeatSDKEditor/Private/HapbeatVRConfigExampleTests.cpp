@@ -5,7 +5,9 @@
 #include "EngineUtils.h"
 #include "GameFramework/WorldSettings.h"
 #include "HapbeatAddressOverridePanelComponent.h"
+#include "HapbeatEventMap.h"
 #include "HapbeatShowcaseGameMode.h"
+#include "HapbeatTriggerComponent.h"
 #include "HapbeatVRConfigExampleActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -39,6 +41,7 @@ bool FHapbeatVRConfigExampleMapTest::RunTest(const FString& Parameters)
 
 	UWidgetComponent* PanelSurface = ConfigActor->FindComponentByClass<UWidgetComponent>();
 	UHapbeatAddressOverridePanelComponent* Panel = ConfigActor->FindComponentByClass<UHapbeatAddressOverridePanelComponent>();
+	UHapbeatTriggerComponent* TestTrigger = ConfigActor->FindComponentByClass<UHapbeatTriggerComponent>();
 
 	if (TestNotNull(TEXT("World-space panel surface"), PanelSurface))
 	{
@@ -49,8 +52,29 @@ bool FHapbeatVRConfigExampleMapTest::RunTest(const FString& Parameters)
 	}
 	if (TestNotNull(TEXT("Address Override panel"), Panel))
 	{
+		TestTrue(TEXT("VR sample uses the compact controller layout"),
+			Panel->bUseVRConfigLayout);
 		TestFalse(TEXT("VR sample owns its panel visibility, so it does not expose Close"),
 			Panel->bShowCloseButton);
+	}
+	if (TestNotNull(TEXT("100 Hz test trigger"), TestTrigger))
+	{
+		UHapbeatEventMap* TestMap = TestTrigger->EventMap.Get();
+		TestNotNull(TEXT("100 Hz test trigger Event Map"), TestMap);
+		TestTrue(TEXT("100 Hz test trigger entry is assigned"), TestTrigger->EntryId.IsValid());
+		if (TestMap != nullptr)
+		{
+			FHapbeatEventEntry TestEntry;
+			if (TestTrue(TEXT("100 Hz test trigger entry resolves"),
+				TestMap->FindById(TestTrigger->EntryId, TestEntry)))
+			{
+				TestEqual(TEXT("100 Hz test uses Stream Clip mode"),
+					TestEntry.Mode, EHapticMode::StreamClip);
+				TestEqual(TEXT("100 Hz test uses the shipped one-shot entry"),
+					TestEntry.DisplayName, FString(TEXT("demo_stream_sine_100hz")));
+				TestFalse(TEXT("100 Hz test is one-shot"), TestEntry.bLoop);
+			}
+		}
 	}
 
 	return true;

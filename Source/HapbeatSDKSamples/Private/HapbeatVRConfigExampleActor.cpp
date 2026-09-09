@@ -2,6 +2,8 @@
 #include "HapbeatVRConfigExampleActor.h"
 
 #include "HapbeatAddressOverridePanelComponent.h"
+#include "HapbeatEventMap.h"
+#include "HapbeatTriggerComponent.h"
 
 #include "Camera/PlayerCameraManager.h"
 #include "Components/InputComponent.h"
@@ -12,6 +14,7 @@
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatVRConfigExample, Log, All);
 
@@ -44,9 +47,22 @@ AHapbeatVRConfigExampleActor::AHapbeatVRConfigExampleActor()
 	PanelSurface->SetMobility(EComponentMobility::Movable);
 
 	PanelComponent = CreateDefaultSubobject<UHapbeatAddressOverridePanelComponent>(TEXT("PanelComponent"));
-	// P toggles the whole surface. A Close button would tear its Slate widget
-	// down, leaving a visible but empty surface on the next toggle.
+	PanelComponent->bUseVRConfigLayout = true;
+	// The VR layout already includes Exit in its controller focus grid, so the
+	// separate pointer-oriented Close button would be redundant.
 	PanelComponent->bShowCloseButton = false;
+
+	// Unity's VRConfigExample routes Play through a trigger backed by a
+	// StreamClip entry. Reuse the shipped 100 Hz one-shot so this sample also
+	// works without installing a Kit on the addressed device.
+	TestTrigger = CreateDefaultSubobject<UHapbeatTriggerComponent>(TEXT("TestTrigger"));
+	static ConstructorHelpers::FObjectFinder<UHapbeatEventMap> DefaultEventMap(
+		TEXT("/HapbeatSDK/HapbeatSamples/BasicExample/EM_BasicExample.EM_BasicExample"));
+	if (DefaultEventMap.Succeeded() && DefaultEventMap.Object->Entries.Num() > 0)
+	{
+		TestTrigger->EventMap = DefaultEventMap.Object;
+		TestTrigger->EntryId = DefaultEventMap.Object->Entries[0].Id;
+	}
 
 	// Enhanced Input Mapping Contexts must be rooted in /Game for OpenXR to
 	// register them before its session attaches. The shipped setup script creates
@@ -81,6 +97,8 @@ void AHapbeatVRConfigExampleActor::BeginPlay()
 
 	if (PanelComponent != nullptr)
 	{
+		PanelComponent->SetTestRequestedHandler(
+			FSimpleDelegate::CreateUObject(this, &AHapbeatVRConfigExampleActor::HandlePlayTest));
 		if (bWorldSpacePanel)
 		{
 			PanelComponent->AttachToWidgetComponent(PanelSurface);
@@ -167,6 +185,14 @@ void AHapbeatVRConfigExampleActor::HandleActivate()
 	if (PanelComponent != nullptr)
 	{
 		PanelComponent->ActivateFocused();
+	}
+}
+
+void AHapbeatVRConfigExampleActor::HandlePlayTest()
+{
+	if (TestTrigger != nullptr)
+	{
+		TestTrigger->Fire();
 	}
 }
 

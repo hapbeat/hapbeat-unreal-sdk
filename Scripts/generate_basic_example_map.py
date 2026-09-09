@@ -63,7 +63,12 @@ def main():
     clear_old(editor_actors)
 
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
-    world.get_world_settings().set_editor_property('default_game_mode', load_class(GAME_MODE))
+    settings = world.get_world_settings()
+    settings.set_editor_property('default_game_mode', load_class(GAME_MODE))
+    # Keep the shipped sample fully dynamic: users can open it without running
+    # a Lightmass build, and this map-local setting does not alter the host
+    # project's rendering policy.
+    settings.set_editor_property('force_no_precomputed_lighting', True)
 
     # The actor renders its own HUD during play. The room only establishes a
     # clear spawn point and enough visual depth for a first run.
@@ -82,7 +87,7 @@ def main():
     sun = editor_actors.spawn_actor_from_class(
         unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 1000.0), unreal.Rotator(-50.0, 30.0, 0.0))
     sun.get_component_by_class(unreal.DirectionalLightComponent).set_editor_property(
-        'mobility', unreal.ComponentMobility.STATIONARY)
+        'mobility', unreal.ComponentMobility.MOVABLE)
     finish(sun, 'BasicExampleSun')
 
     sky = editor_actors.spawn_actor_from_class(

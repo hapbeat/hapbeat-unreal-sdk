@@ -32,6 +32,9 @@ close it once the log reports the map was written.
   floor, lighting, PlayerStart, one `Hapbeat Basic Example` actor, and the
   map's GameMode Override. It assigns the shipped `EM_BasicExample` Event Map
   to the actor so its Details panel is immediately editable.
+- `disable_precomputed_sample_lighting.py` — updates the three shipped sample
+  maps to force fully dynamic lighting and makes their directional lights
+  Movable. It does not respawn or reposition any sample actor.
 
 The first two touch disjoint assets, so either can be run alone. The third takes
 the floor's material from the art import and the zones' Event Map from the

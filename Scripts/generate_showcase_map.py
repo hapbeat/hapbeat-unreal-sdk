@@ -197,7 +197,12 @@ def set_game_mode(editor_actors):
     """
     settings = resolve_world_settings(editor_actors)
     settings.set_editor_property('default_game_mode', load_class(SHOWCASE_GAME_MODE_CLASS))
+    # Samples must open without a Lightmass build. This is map-local rather
+    # than a project-wide rendering change, so embedding the plugin never
+    # changes a host project's lighting policy.
+    settings.set_editor_property('force_no_precomputed_lighting', True)
     unreal.log('[Hapbeat] World Settings -> GameMode Override = HapbeatShowcaseGameMode.')
+    unreal.log('[Hapbeat] World Settings -> Force No Precomputed Lighting = True.')
 
 
 # --------------------------------------------------------------------- spawning
@@ -244,14 +249,11 @@ def spawn_lighting(editor_actors):
     sun = editor_actors.spawn_actor_from_class(
         unreal.DirectionalLight, unreal.Vector(0.0, 0.0, 1000.0),
         unreal.Rotator(*SUN_ROTATION))
-    # Stationary, not Movable: the sun never moves, and a movable directional
-    # light re-renders its whole cascaded shadow map every frame across five
-    # rooms. NOTE the map ships without built lighting (a headless generator
-    # cannot run a light build), so until someone builds it the editor shows the
-    # usual "lighting needs to be rebuilt" banner and the static half of the
-    # saving is not yet realised -- Build > Build Lighting Only claims it.
+    # The sample intentionally uses no baked lighting, so this is a Movable
+    # directional light. It keeps the map immediately playable after import
+    # without emitting a "lighting needs to be rebuilt" warning.
     sun_component = sun.get_editor_property('light_component')
-    sun_component.set_editor_property('mobility', unreal.ComponentMobility.STATIONARY)
+    sun_component.set_editor_property('mobility', unreal.ComponentMobility.MOVABLE)
     finish(sun, 'ShowcaseSun')
 
     sky_light = editor_actors.spawn_actor_from_class(

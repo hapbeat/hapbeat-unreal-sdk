@@ -64,6 +64,10 @@ def main():
     world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
     settings = world.get_world_settings()
     settings.set_editor_property('default_game_mode', load_class(GAME_MODE))
+    # Keep the shipped sample fully dynamic: users can open it without running
+    # a Lightmass build, and this map-local setting does not alter the host
+    # project's rendering policy.
+    settings.set_editor_property('force_no_precomputed_lighting', True)
 
     # A minimal neutral room: it provides a floor and visual depth without
     # competing with the panel, which is the thing this sample demonstrates.
@@ -81,7 +85,7 @@ def main():
     sun = editor_actors.spawn_actor_from_class(unreal.DirectionalLight,
         unreal.Vector(0.0, 0.0, 1000.0), unreal.Rotator(-50.0, 30.0, 0.0))
     sun.get_component_by_class(unreal.DirectionalLightComponent).set_editor_property(
-        'mobility', unreal.ComponentMobility.STATIONARY)
+        'mobility', unreal.ComponentMobility.MOVABLE)
     finish(sun, 'VRConfigSun')
 
     sky = editor_actors.spawn_actor_from_class(unreal.SkyLight,

@@ -25,10 +25,11 @@ UStaticMeshComponent* AHapbeatShowcaseRoomActor::MakeSlab(USceneComponent* Root,
 {
 	UStaticMeshComponent* Slab = CreateDefaultSubobject<UStaticMeshComponent>(Name);
 	Slab->SetupAttachment(Root);
-	// Static: the room never moves, so it can take baked lighting and the cheaper
-	// transform path. (The zones' own props are Movable because the switcher hides
-	// and shows them.) Mobility is set before the mesh assignment so SetStaticMesh
-	// never runs on a component whose mobility is about to change.
+	// The room never moves, so its geometry can retain the cheaper static
+	// transform path. Lighting remains fully dynamic at map level; the zones'
+	// own props are Movable because the switcher hides and shows them. Mobility
+	// is set before the mesh assignment so SetStaticMesh never runs on a
+	// component whose mobility is about to change.
 	Slab->SetMobility(EComponentMobility::Static);
 	if (UStaticMesh* Cube = LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")))
 	{

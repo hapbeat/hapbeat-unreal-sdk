@@ -10,8 +10,22 @@ sidebar:
 
 ## 1. プロジェクトへ追加する
 
-1. このリポジトリを C++ プロジェクトの `Plugins/HapbeatSDK/` に置きます。`Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在する配置にしてください。
-2. project files を再生成して、プロジェクトを build します。
+1. 次のいずれかで、このリポジトリの**内容**を C++ プロジェクトの `Plugins/HapbeatSDK/` に置きます。
+   - Git: `git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git <ProjectRoot>/Plugins/HapbeatSDK`
+   - ZIP: GitHub から ZIP をダウンロードして解凍し、展開されたフォルダの中身を `<ProjectRoot>/Plugins/HapbeatSDK/` へコピーします。
+2. `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。ZIP の親フォルダまで入れて、`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` となる配置は誤りです。
+3. project files を再生成して、プロジェクトを build します。
+
+### AI に初期セットアップを任せる
+
+ファイル操作と Unreal の build を実行できる AI には、次の依頼文を渡します。`<ProjectRoot>` は対象プロジェクトの絶対パスに置き換えます。
+
+```text
+Unreal Engine 5.4 の C++ プロジェクト <ProjectRoot> に Hapbeat Unreal SDK を導入してください。
+https://github.com/hapbeat/hapbeat-unreal-sdk.git を <ProjectRoot>/Plugins/HapbeatSDK に clone し、project files を再生成して Editor target を build してください。
+Hapbeat SDK を有効化し、Plugin Content の BasicExample マップを開いてください。
+PIE、Test Play、実機への触覚送信は実行しないでください。
+```
 
 ## 2. プラグインを有効にする
 
@@ -27,9 +41,9 @@ sidebar:
 
 1. Content Browser の Settings から **Show Plugin Content** を有効にします。
 2. `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Maps/BasicExample` を開きます。
-3. PIE を開始し、`F` を押します。
+3. PIE を開始し、`Space` を押します。
 
-`basic-example.pulse` が再生されれば、SDK の導入とネットワーク送信は完了です。
+100 Hz の StreamClip が再生されれば、SDK の導入とネットワーク送信は完了です。この操作はデバイスへの Kit 配布を必要としません。`F` は Kit 配布済みデバイス向けの Command 再生です。
 
 反応しない場合は、Hapbeat の電源・同一ネットワーク・UDP port を確認してください。Editor の **Output Log** で `LogHapbeat` を検索すると、送信・PONG・エラーを確認できます。
 

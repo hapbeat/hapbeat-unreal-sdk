@@ -26,7 +26,7 @@ VR Preview を開始すると、HMD 前方約 1.9 m に幅約 1 m の設定パ�
 | `Player` / `Group` | 送信先の player / group を選ぶ |
 | `Apply` | 選択値を Address Override として適用する |
 | `Play` | 適用済み Target に 100 Hz の StreamClip を再生する。端末への Kit インストールは不要。 |
-| `Exit` | パネルを閉じる。`P` で再表示できる。 |
+| `Exit` | Actor の `Return Level` が指定されていればそのレベルへ遷移する。未指定ならパネルを閉じ、`P` で再表示できる。 |
 | 左右どちらかのスティック押し込み | パネルを正面へ戻す |
 
 同じ build を複数の HMD へ配るときは、各 HMD で `Player` または `Group` を変えて `Apply` します。Address Override の仕組みは[宛先と複数 HMD](./targeting-and-multi-hmd.md)を参照してください。

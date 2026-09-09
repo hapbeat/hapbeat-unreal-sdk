@@ -14,6 +14,7 @@
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
+#include "Kismet/GameplayStatics.h"
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatVRConfigExample, Log, All);
@@ -99,6 +100,8 @@ void AHapbeatVRConfigExampleActor::BeginPlay()
 	{
 		PanelComponent->SetTestRequestedHandler(
 			FSimpleDelegate::CreateUObject(this, &AHapbeatVRConfigExampleActor::HandlePlayTest));
+		PanelComponent->SetExitRequestedHandler(
+			FSimpleDelegate::CreateUObject(this, &AHapbeatVRConfigExampleActor::HandleExit));
 		if (bWorldSpacePanel)
 		{
 			PanelComponent->AttachToWidgetComponent(PanelSurface);
@@ -193,6 +196,27 @@ void AHapbeatVRConfigExampleActor::HandlePlayTest()
 	if (TestTrigger != nullptr)
 	{
 		TestTrigger->Fire();
+	}
+}
+
+void AHapbeatVRConfigExampleActor::HandleExit()
+{
+	const FString ReturnLevelPackage = ReturnLevel.ToSoftObjectPath().GetLongPackageName();
+	if (!ReturnLevelPackage.IsEmpty())
+	{
+		UGameplayStatics::OpenLevel(this, FName(*ReturnLevelPackage));
+		return;
+	}
+
+	// No return destination is authored: retain the compact in-world behaviour
+	// so P can reveal the panel again without rebuilding its staged values.
+	if (bWorldSpacePanel && PanelSurface != nullptr)
+	{
+		PanelSurface->SetVisibility(false);
+	}
+	else if (PanelComponent != nullptr)
+	{
+		PanelComponent->Hide();
 	}
 }
 

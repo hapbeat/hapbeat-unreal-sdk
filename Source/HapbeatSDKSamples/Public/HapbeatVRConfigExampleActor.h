@@ -10,6 +10,7 @@ class UHapbeatAddressOverridePanelComponent;
 class UHapbeatTriggerComponent;
 class UInputAction;
 class UWidgetComponent;
+class UWorld;
 struct FInputActionValue;
 
 /**
@@ -105,6 +106,10 @@ public:
 		meta = (Tooltip = "Desktop fallback key that snaps the panel back in front of the camera."))
 	FKey RecenterKey = EKeys::R;
 
+	UPROPERTY(EditAnywhere, Category = "Hapbeat|Exit",
+		meta = (Tooltip = "Level opened by the Exit button. Leave empty to close the panel without changing level."))
+	TSoftObjectPtr<UWorld> ReturnLevel;
+
 protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
@@ -118,6 +123,7 @@ private:
 	void HandleRecenterKey();
 	void HandleActivate();
 	void HandlePlayTest();
+	void HandleExit();
 	void HandleNavigate(const FInputActionValue& Value);
 	void HandleNavigateReleased(const FInputActionValue& Value);
 	void BeginMove(FIntPoint Direction);

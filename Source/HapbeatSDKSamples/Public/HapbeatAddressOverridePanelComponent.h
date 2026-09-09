@@ -135,6 +135,8 @@ public:
 
 	/** Route the panel's Test/Play action through a sample-owned trigger. C++ samples only. */
 	void SetTestRequestedHandler(FSimpleDelegate Handler) { TestRequestedHandler = MoveTemp(Handler); }
+	/** Route the panel's Exit action through its owning sample. C++ samples only. */
+	void SetExitRequestedHandler(FSimpleDelegate Handler) { ExitRequestedHandler = MoveTemp(Handler); }
 
 protected:
 	virtual void BeginPlay() override;
@@ -170,4 +172,7 @@ private:
 
 	/** Optional test/playback callback supplied by the actor hosting this panel. */
 	FSimpleDelegate TestRequestedHandler;
+
+	/** Optional Exit callback supplied by the actor hosting this panel. */
+	FSimpleDelegate ExitRequestedHandler;
 };

@@ -30,6 +30,6 @@ public:
 	static void ExportEventMapToMarkdown(UHapbeatEventMap* Map);
 
 private:
-	/** The Event Map to act on: the Content Browser selection, else the only one in the project. */
-	static UHapbeatEventMap* ResolveTargetEventMap();
+	/** Opens a picker, then exports the Event Map the user explicitly chooses. */
+	static void PromptExportEventMapToMarkdown();
 };

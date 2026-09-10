@@ -2,6 +2,7 @@
 #include "HapbeatUpdateCheck.h"
 
 #include "HapbeatEditorTools.h"
+#include "HapbeatConfig.h"
 #include "SHapbeatRuntimeStatusWindow.h"
 #include "SHapbeatEventMapWindow.h"
 
@@ -214,7 +215,8 @@ void FHapbeatUpdateCheck::Register()
 		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ProjectSettings.TabIcon"),
 		FUIAction(FExecuteAction::CreateLambda([]
 		{
-			FModuleManager::LoadModuleChecked<ISettingsModule>("Settings").ShowViewer("Project", "Plugins", "HapbeatConfig");
+			FModuleManager::LoadModuleChecked<ISettingsModule>("Settings").ShowViewer(
+				"Project", "Plugins", GetDefault<UHapbeatConfig>()->GetSectionName());
 		})));
 
 	Section.AddMenuEntry("HapbeatRuntimeStatus",

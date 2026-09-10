@@ -1,7 +1,3 @@
-# Changelog
-
-## [0.1.0] - 2026-09-10
-
 - Replaced the single-stream runner with endpoint-scoped StreamHub sessions:
   each exact PONG endpoint receives one unicast STREAM session, while logical
   sources on that endpoint are mixed independently with gain/pan/loop/stop.

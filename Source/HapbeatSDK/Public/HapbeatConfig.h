@@ -24,6 +24,11 @@ public:
 	// Group the settings under "Plugins" in the Project Settings tree.
 	virtual FName GetCategoryName() const override { return FName(TEXT("Plugins")); }
 
+	// Keep the registered Settings section stable and give editor shortcuts one
+	// canonical name to target. Without this explicit name, a shortcut that
+	// hard-codes a display label can fall back to the Project Settings root.
+	virtual FName GetSectionName() const override { return FName(TEXT("Hapbeat")); }
+
 	// ---- Connection ----
 
 	UPROPERTY(EditAnywhere, config, Category = "Connection",

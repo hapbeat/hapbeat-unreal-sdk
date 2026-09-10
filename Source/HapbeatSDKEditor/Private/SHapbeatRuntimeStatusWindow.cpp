@@ -236,7 +236,8 @@ FReply SHapbeatRuntimeStatusWindow::OnClearClicked()
 
 FReply SHapbeatRuntimeStatusWindow::OnOpenProjectSettingsClicked()
 {
-	FModuleManager::LoadModuleChecked<ISettingsModule>("Settings").ShowViewer("Project", "Plugins", "HapbeatConfig");
+	FModuleManager::LoadModuleChecked<ISettingsModule>("Settings").ShowViewer(
+		"Project", "Plugins", GetDefault<UHapbeatConfig>()->GetSectionName());
 	return FReply::Handled();
 }
 

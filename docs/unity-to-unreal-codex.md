@@ -1,4 +1,5 @@
 ---
+kind: explanation
 sidebar:
   order: 4
   label: UE Editor 補足

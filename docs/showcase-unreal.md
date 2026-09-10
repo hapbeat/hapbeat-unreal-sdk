@@ -1,12 +1,13 @@
 ---
+kind: tutorial
 sidebar:
   order: 3
   label: Showcase
 ---
 
-# Showcase
+# Showcase（サンプルレベル）
 
-Showcase は、ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルです。各 zone Actor の Details と `EM_Showcase` を開くと、再生する触覚とその設定を確認・変更できます。
+プラグインに同梱する `Showcase` レベルです。ゲーム内の出来事を Hapbeat Event Map の entry へ接続する 5 つのサンプルを収録しています。各 zone Actor の Details と `EM_Showcase` を開くと、再生する触覚とその設定を確認・変更できます。
 
 :::note[音と触覚のタイミング]
 音声出力の遅延は環境ごとに異なるため、触覚が音より先に感じられることがあります。これは想定内です。Project Settings の `Plugins → Hapbeat → Behavior > Haptic Delay Seconds` を少しずつ上げ、触覚に遅延を加えて合わせます。詳しくは[Getting Started](./getting-started.md)を参照してください。
@@ -95,7 +96,7 @@ Pin->HitTrigger->EntryId = PinHitEntryId;
 
 ### SDK の接続を確認する（Blueprint）
 
-`F`、`G`、`L` の <span class="hb-bp-node">Input Key</span> から <span class="hb-bp-node">Switch on Door State</span>、対応する動作 lane、<span class="hb-bp-node">Play Event (Hapbeat)</span> をたどります。
+PIE を停止し、Content Browser の `HapbeatSamples/Showcase/BP_Z2_Door` を開いて **Event Graph** を選びます。`F`、`G`、`L` の <span class="hb-bp-node">Input Key</span> から <span class="hb-bp-node">Switch on Door State</span>、対応する動作 lane、<span class="hb-bp-node">Play Event (Hapbeat)</span> をたどります。
 
 ```text
 F / G / L Pressed
@@ -176,11 +177,13 @@ Gain / Pan slider
 
 ### SDK の接続を確認する（Blueprint）
 
+PIE を停止し、Content Browser の `HapbeatSamples/Showcase/BP_Z4_StreamConsole` を開いて **Event Graph** を選びます。
+
 1. `Space Bar` から <span class="hb-bp-node">Switch on Loop State</span> をたどります。Stopped の <span class="hb-bp-node">Fire Trigger (Hapbeat)</span> が <code class="hb-entry">z4_stream_loop</code> を開始し、Running の <span class="hb-bp-node">Stop Trigger (Hapbeat)</span> が同じ loop を停止します。
 2. <span class="hb-bp-node">On Gain Slider Changed</span> / <span class="hb-bp-node">On Pan Slider Changed</span> から <span class="hb-bp-node">Set Binding Input (Hapbeat)</span> → <span class="hb-bp-node">Update Stream Parameter (Hapbeat)</span> をたどります。slider の float 値を `GainBinding` / `PanBinding` に入れ、両 binding が `LoopTrigger` の再生中 stream の Gain / Pan を更新します。
 3. 続く <span class="hb-bp-node">Fire Tick From Value (Hapbeat)</span> は、slider が <span class="hb-field">Tick Threshold</span> をまたいだときだけ <code class="hb-entry">z4_slider_tick</code> を再生します。
 
-Address Override は、Player / Group に対応する Hapbeat だけへ送るための実行時の送信先指定です。Event Map の entry や再生配線は変えません。詳しくは[宛先と複数 HMD](./targeting-and-multi-hmd.md)を参照してください。
+Address Override は、Player / Group に対応する Hapbeat だけへ送るための実行時の送信先指定です。Event Map の entry や再生配線は変えません。詳しくは[ターゲティング](./targeting-and-multi-hmd.md)を参照してください。
 
 ## Z5 Target Range — charge / shot と target hit
 
@@ -235,7 +238,7 @@ Plugins
 | Z5 の charge / shot / target-hit entry | <code class="hb-asset">Z5_ChargeShot</code> の <span class="hb-field">Haptic Events</span> |
 | 実行時の送信先 | Address Override |
 
-`Target` は送信先を表す論理フィルタです。Address Override は Event Map や Actor の配線を変更しません。詳細は[宛先と複数 HMD](./targeting-and-multi-hmd.md)を参照してください。
+`Target` は送信先を表す論理フィルタです。Address Override は Event Map や Actor の配線を変更しません。詳細は[ターゲティング](./targeting-and-multi-hmd.md)を参照してください。
 
 ## SDK の接続設定と確認
 
@@ -249,4 +252,4 @@ Event Map の **Test Play** は、同じ保存済み Address Override と build-
 ## 関連資料
 
 - [Blueprint ノード一覧](./blueprint-nodes.md)
-- [宛先と複数 HMD](./targeting-and-multi-hmd.md)
+- [ターゲティング](./targeting-and-multi-hmd.md)

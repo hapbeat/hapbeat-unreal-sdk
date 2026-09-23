@@ -1,0 +1,801 @@
+// Copyright (c) 2026 Hapbeat. MIT License.
+//
+// Stream session v2 + per-endpoint legacy fallback (contracts
+// specs/stream-session-v2.md, DEC-074 / DEC-075). Every test here is
+// in-memory: no socket is opened and nothing is sent on the network.
+#include "HapbeatProtocol.h"
+#include "HapbeatStreamer.h"
+#include "HapbeatStreamLease.h"
+#include "HapbeatStreamPlayback.h"
+#include "HapbeatStreamRunnable.h"
+#include "HapbeatStreamSessionContract.h"
+#include "HapbeatSubsystem.h"
+#include "Engine/GameInstance.h"
+#include "HAL/CriticalSection.h"
+#include "HAL/PlatformProcess.h"
+#include "HAL/PlatformTime.h"
+#include "Misc/AutomationTest.h"
+#include "Misc/Parse.h"
+#include "Misc/ScopeLock.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+// Named (not anonymous) so a unity build that merges this file with
+// HapbeatStreamerTests.cpp cannot collide with that file's helpers; each test
+// opens it with a function-local using-directive.
+namespace HapbeatStreamSessionV2Test
+{
+	using HapbeatStreamSessionContract::EPongLeaseDecision;
+
+	TArray<uint8> FromHex(const TCHAR* Hex)
+	{
+		TArray<uint8> Bytes;
+		const FString Text(Hex);
+		for (int32 Index = 0; Index + 1 < Text.Len(); Index += 2)
+		{
+			Bytes.Add(static_cast<uint8>(FParse::HexDigit(Text[Index]) * 16 + FParse::HexDigit(Text[Index + 1])));
+		}
+		return Bytes;
+	}
+
+	void AppendLe(TArray<uint8>& Bytes, uint64 Value, int32 Width)
+	{
+		for (int32 Index = 0; Index < Width; ++Index)
+		{
+			Bytes.Add(static_cast<uint8>((Value >> (8 * Index)) & 0xFF));
+		}
+	}
+
+	void AppendCString(TArray<uint8>& Bytes, const char* Text)
+	{
+		while (*Text != '\0')
+		{
+			Bytes.Add(static_cast<uint8>(*Text++));
+		}
+		Bytes.Add(0);
+	}
+
+	uint64 ReadLe(const TArray<uint8>& Bytes, int32 Offset, int32 Width)
+	{
+		uint64 Value = 0;
+		for (int32 Index = 0; Index < Width; ++Index)
+		{
+			Value |= static_cast<uint64>(Bytes[Offset + Index]) << (8 * Index);
+		}
+		return Value;
+	}
+
+	/** Ordinary device PONG payload up to and including volume_level / volume_wiper. */
+	TArray<uint8> MakePongPayload(int64 TimestampUs, const char* Address, bool bVolumeBytes = true)
+	{
+		TArray<uint8> Payload;
+		AppendLe(Payload, static_cast<uint64>(TimestampUs), 8);
+		AppendLe(Payload, 0, 8); // server_time
+		AppendCString(Payload, "Hapbeat");
+		AppendCString(Payload, Address);
+		AppendCString(Payload, "1.2.3");
+		if (bVolumeBytes)
+		{
+			Payload.Add(5);  // volume_level
+			Payload.Add(7);  // volume_wiper
+		}
+		return Payload;
+	}
+
+	/** Append an HBS2 tail. Defaults produce a valid 32-byte tail. */
+	void AppendLeaseTail(TArray<uint8>& Payload, uint8 Flags, uint64 Incarnation, uint64 BootId, uint32 Ticket,
+		uint32 HighWater = 0, uint8 Version = 1, uint16 Reserved = 0)
+	{
+		Payload.Add('H');
+		Payload.Add('B');
+		Payload.Add('S');
+		Payload.Add('2');
+		Payload.Add(Version);
+		Payload.Add(Flags);
+		AppendLe(Payload, Reserved, 2);
+		AppendLe(Payload, Incarnation, 8);
+		AppendLe(Payload, BootId, 8);
+		AppendLe(Payload, Ticket, 4);
+		AppendLe(Payload, HighWater, 4);
+	}
+
+	FHapbeatProtocol::FPongInfo Parse(const TArray<uint8>& Payload)
+	{
+		FHapbeatProtocol::FPongInfo Info;
+		FHapbeatProtocol::ParsePong(Payload.GetData(), Payload.Num(), Info);
+		return Info;
+	}
+
+	FHapbeatProtocol::FPongInfo LegacyPong(int64 TimestampUs, const char* Address)
+	{
+		return Parse(MakePongPayload(TimestampUs, Address));
+	}
+
+	FHapbeatProtocol::FPongInfo V2Pong(int64 TimestampUs, const char* Address, uint64 Incarnation,
+		uint64 BootId, uint32 Ticket, uint8 Flags = 0x01)
+	{
+		TArray<uint8> Payload = MakePongPayload(TimestampUs, Address);
+		AppendLeaseTail(Payload, Flags, Incarnation, BootId, Ticket);
+		return Parse(Payload);
+	}
+
+	FHapbeatProtocol::FPongInfo MalformedPong(int64 TimestampUs, const char* Address, uint64 Incarnation)
+	{
+		TArray<uint8> Payload = MakePongPayload(TimestampUs, Address);
+		AppendLeaseTail(Payload, 0x01, Incarnation, 0x11, 3, 0, /*Version=*/2);
+		return Parse(Payload);
+	}
+
+	FHapbeatPendingPing Pending(int64 TimestampUs, uint64 Incarnation)
+	{
+		FHapbeatPendingPing Result;
+		Result.SentMonotonicUs = 1;
+		Result.TimestampUs = TimestampUs;
+		Result.ClientIncarnation = Incarnation;
+		return Result;
+	}
+
+	/** Thread-safe record of every packet any logging runner sent, tagged by endpoint address. */
+	struct FStreamPacketLog
+	{
+		struct FEntry
+		{
+			FString Endpoint;
+			TArray<uint8> Packet;
+		};
+
+		void Add(const FString& Endpoint, const TArray<uint8>& Packet)
+		{
+			FScopeLock Guard(&Lock);
+			FEntry& Entry = Entries.AddDefaulted_GetRef();
+			Entry.Endpoint = Endpoint;
+			Entry.Packet = Packet;
+		}
+
+		TArray<FEntry> Snapshot(const FString& Endpoint) const
+		{
+			FScopeLock Guard(&Lock);
+			TArray<FEntry> Result;
+			for (const FEntry& Entry : Entries)
+			{
+				if (Entry.Endpoint == Endpoint)
+				{
+					Result.Add(Entry);
+				}
+			}
+			return Result;
+		}
+
+		int32 Count(const FString& Endpoint, uint8 Cmd) const
+		{
+			int32 Result = 0;
+			for (const FEntry& Entry : Snapshot(Endpoint))
+			{
+				if (Entry.Packet.Num() >= FHapbeatProtocol::HeaderSize && Entry.Packet[3] == Cmd)
+				{
+					++Result;
+				}
+			}
+			return Result;
+		}
+
+		mutable FCriticalSection Lock;
+		TArray<FEntry> Entries;
+	};
+
+	TArray<FString> LoggingEndpoint()
+	{
+		TArray<FString> Result;
+		Result.Add(TEXT("192.0.2.99"));
+		return Result;
+	}
+
+	/** Real FHapbeatStreamRunnable whose packet boundary writes into a log instead of a socket. */
+	class FLoggingStreamRunnable final : public FHapbeatStreamRunnable
+	{
+	public:
+		FLoggingStreamRunnable(const FGuid& SourceId, TArray<uint8>&& Pcm16, const FString& Target,
+			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror, EHapbeatStreamWireFormat Format,
+			const FHapbeatStreamSessionIdentity& Identity, TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> InLog)
+			: FHapbeatStreamRunnable(SourceId, MoveTemp(Pcm16), 16000, 2, Target, Mirror,
+				[]() { return static_cast<uint16>(1); }, nullptr, 7700, LoggingEndpoint(), 0.05f, Format, Identity)
+			, Log(InLog)
+			, Endpoint(Target)
+		{
+		}
+
+	protected:
+		virtual void SendRaw(const TArray<uint8>& Packet) override
+		{
+			Log->Add(Endpoint, Packet);
+		}
+
+	private:
+		TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> Log;
+		FString Endpoint;
+	};
+
+	TArray<uint8> MakeSessionTestPcm(int16 Sample, int32 Frames)
+	{
+		TArray<uint8> Bytes;
+		Bytes.SetNumUninitialized(Frames * 4);
+		const uint16 Value = static_cast<uint16>(Sample);
+		for (int32 Index = 0; Index < Frames * 2; ++Index)
+		{
+			Bytes[Index * 2] = static_cast<uint8>(Value & 0xFF);
+			Bytes[Index * 2 + 1] = static_cast<uint8>((Value >> 8) & 0xFF);
+		}
+		return Bytes;
+	}
+
+	bool WaitForCount(const FStreamPacketLog& Log, const FString& Endpoint, uint8 Cmd, int32 AtLeast)
+	{
+		const double Deadline = FPlatformTime::Seconds() + 2.0;
+		while (Log.Count(Endpoint, Cmd) < AtLeast && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Yield();
+		}
+		return Log.Count(Endpoint, Cmd) >= AtLeast;
+	}
+
+	/** Envelope of a v2 packet (header version 2); invalid identity for anything else. */
+	FHapbeatStreamSessionIdentity EnvelopeOf(const TArray<uint8>& Packet)
+	{
+		if (Packet.Num() < FHapbeatProtocol::HeaderSize + FHapbeatProtocol::StreamSessionEnvelopeSize
+			|| Packet[2] != FHapbeatProtocol::StreamProtocolVersion)
+		{
+			return FHapbeatStreamSessionIdentity();
+		}
+		return FHapbeatStreamSessionIdentity(
+			FHapbeatStreamLeaseIdentity(ReadLe(Packet, 8, 8), static_cast<uint32>(ReadLe(Packet, 16, 4))),
+			static_cast<uint32>(ReadLe(Packet, 20, 4)));
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Wire bytes: legacy regression + v2 contract fixture
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamSessionV2WireTest,
+	"Hapbeat.Streaming.SessionV2.WireFormat",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamSessionV2WireTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	const uint16 Seq = 0x1234;
+	const uint8 Audio[4] = { 0x10, 0x00, 0xF0, 0xFF }; // PCM16 LE samples 16, -16 (contract fixture)
+
+	// Legacy (pre-v2) builders must stay byte-identical to message-format.md
+	// "v1 stream": header version 1, no envelope, END with an empty payload.
+	TestEqual(TEXT("legacy BEGIN bytes"),
+		FHapbeatProtocol::BuildStreamBegin(Seq, 16000, 2, FHapbeatProtocol::AudioFormatPcm16, 0, 1.0f, TEXT("*")),
+		FromHex(TEXT("424801303412" "0e00" "803e" "02" "00" "00000000" "0000803f" "2a00")));
+	TestEqual(TEXT("legacy BEGIN without target omits the field"),
+		FHapbeatProtocol::BuildStreamBegin(Seq, 16000, 2, FHapbeatProtocol::AudioFormatPcm16, 0, 1.0f),
+		FromHex(TEXT("424801303412" "0c00" "803e" "02" "00" "00000000" "0000803f")));
+	TestEqual(TEXT("legacy DATA bytes"),
+		FHapbeatProtocol::BuildStreamData(Seq, 0, Audio, 4),
+		FromHex(TEXT("424801313412" "0800" "00000000" "1000f0ff")));
+	TestEqual(TEXT("legacy END bytes"),
+		FHapbeatProtocol::BuildStreamEnd(Seq), FromHex(TEXT("4248013234120000")));
+
+	// v2: repos-core/hapbeat-contracts/fixtures/stream-session-v2.json
+	// (boot 0102030405060708, ticket 7, generation 42, seq 4660).
+	const FHapbeatStreamSessionIdentity Identity(FHapbeatStreamLeaseIdentity(0x0102030405060708ULL, 7), 42);
+	TestEqual(TEXT("v2 BEGIN matches the contract fixture"),
+		FHapbeatProtocol::BuildStreamBeginV2(Seq, Identity, 16000, 2, FHapbeatProtocol::AudioFormatPcm16, 0, 1.0f, TEXT("*")),
+		FromHex(TEXT("4248023034121e000807060504030201070000002a000000803e0200000000000000803f2a00")));
+	TestEqual(TEXT("v2 DATA matches the contract fixture"),
+		FHapbeatProtocol::BuildStreamDataV2(Seq, Identity, 0, Audio, 4),
+		FromHex(TEXT("42480231341218000807060504030201070000002a000000000000001000f0ff")));
+	TestEqual(TEXT("v2 END matches the contract fixture"),
+		FHapbeatProtocol::BuildStreamEndV2(Seq, Identity),
+		FromHex(TEXT("42480232341210000807060504030201070000002a000000")));
+
+	// Extended PING stays header version 1 with a 16-byte payload; the legacy
+	// 8-byte PING is unchanged (old firmware accepts both).
+	const TArray<uint8> ExtendedPing = FHapbeatProtocol::BuildPing(5, 0x0102030405060708LL, 0x1122334455667788ULL);
+	TestEqual(TEXT("extended PING bytes"), ExtendedPing,
+		FromHex(TEXT("424801100500" "1000" "0807060504030201" "8877665544332211")));
+	TestEqual(TEXT("plain PING stays 8 bytes"), FHapbeatProtocol::BuildPing(5, 1).Num(), FHapbeatProtocol::HeaderSize + 8);
+
+	// The streamer keeps one format for every packet of a session.
+	for (const EHapbeatStreamWireFormat Format : { EHapbeatStreamWireFormat::LegacyV1, EHapbeatStreamWireFormat::SessionV2 })
+	{
+		const bool bV2 = Format == EHapbeatStreamWireFormat::SessionV2;
+		TArray<TArray<uint8>> Packets;
+		auto Mirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+		FHapbeatStreamer Streamer(16000, 2, TEXT("player_1"), Mirror,
+			[]() { return static_cast<uint16>(9); },
+			[&Packets](const TArray<uint8>& Packet) { Packets.Add(Packet); },
+			0.05f, Format, bV2 ? Identity : FHapbeatStreamSessionIdentity());
+		Streamer.AddSource(FGuid::NewGuid(), MakeSessionTestPcm(1000, 400), Mirror);
+		Streamer.Start(0.0);
+		Streamer.Tick(0.0);
+		Streamer.SendEnd();
+		TestTrue(TEXT("streamer produced BEGIN, DATA and END"), Packets.Num() >= 3);
+		const uint8 ExpectedVersion = bV2 ? FHapbeatProtocol::StreamProtocolVersion : FHapbeatProtocol::Version;
+		bool bAllVersion = true;
+		bool bAllEnvelope = true;
+		for (const TArray<uint8>& Packet : Packets)
+		{
+			bAllVersion &= Packet[2] == ExpectedVersion;
+			bAllEnvelope &= !bV2 || EnvelopeOf(Packet) == Identity;
+		}
+		TestTrue(bV2 ? TEXT("v2 session: every packet is header version 2") : TEXT("legacy session: every packet is header version 1"), bAllVersion);
+		TestTrue(TEXT("v2 session: every packet carries the session envelope"), bAllEnvelope);
+		const TArray<uint8>& Begin = Packets[0];
+		const TArray<uint8>& End = Packets.Last();
+		TestEqual(TEXT("first packet is BEGIN"), Begin[3], FHapbeatProtocol::CmdStreamBegin);
+		TestEqual(TEXT("BEGIN payload length"), static_cast<int32>(ReadLe(Begin, 6, 2)),
+			(bV2 ? FHapbeatProtocol::StreamSessionEnvelopeSize : 0) + 12 + 9 /* "player_1\0" */);
+		TestEqual(TEXT("last packet is END"), End[3], FHapbeatProtocol::CmdStreamEnd);
+		TestEqual(TEXT("END payload is the envelope (v2) or empty (legacy)"), static_cast<int32>(ReadLe(End, 6, 2)),
+			bV2 ? FHapbeatProtocol::StreamSessionEnvelopeSize : 0);
+		TestEqual(TEXT("second packet is DATA"), Packets[1][3], FHapbeatProtocol::CmdStreamData);
+		TestEqual(TEXT("DATA byte offset starts at 0"),
+			static_cast<uint32>(ReadLe(Packets[1], FHapbeatProtocol::HeaderSize + (bV2 ? 16 : 0), 4)), 0u);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// PONG HBS2 tail: Absent / Valid / Malformed
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamSessionV2PongTailTest,
+	"Hapbeat.Streaming.SessionV2.PongLeaseTail",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamSessionV2PongTailTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	const FHapbeatProtocol::FPongInfo Plain = LegacyPong(1000, "player_1/pos_l_arm");
+	TestEqual(TEXT("ordinary PONG ending at volume_wiper has no tail"), Plain.LeaseTail, EHapbeatPongLeaseTail::Absent);
+	TestEqual(TEXT("address still parsed"), Plain.Address, FString(TEXT("player_1/pos_l_arm")));
+	TestEqual(TEXT("volume_level parsed"), Plain.VolumeLevel, 5);
+	TestEqual(TEXT("volume_wiper parsed"), Plain.VolumeWiper, 7);
+
+	TestEqual(TEXT("PONG ending before volume_wiper has no tail"),
+		Parse(MakePongPayload(1000, "player_1", /*bVolumeBytes=*/false)).LeaseTail, EHapbeatPongLeaseTail::Absent);
+	TArray<uint8> Base16;
+	AppendLe(Base16, 1000, 8);
+	AppendLe(Base16, 0, 8);
+	TestEqual(TEXT("bridge-form 16-byte PONG has no tail"), Parse(Base16).LeaseTail, EHapbeatPongLeaseTail::Absent);
+
+	TArray<uint8> OtherBytes = MakePongPayload(1000, "player_1");
+	OtherBytes.Append(FromHex(TEXT("0102030405060708")));
+	TestEqual(TEXT("non-HBS2 bytes after volume_wiper are not a marker"), Parse(OtherBytes).LeaseTail, EHapbeatPongLeaseTail::Absent);
+
+	TArray<uint8> ValidPayload = MakePongPayload(1000, "player_1");
+	AppendLeaseTail(ValidPayload, 0x01, 0xA1A2A3A4A5A6A7A8ULL, 0x0102030405060708ULL, 7, 6);
+	const FHapbeatProtocol::FPongInfo Valid = Parse(ValidPayload);
+	TestEqual(TEXT("32-byte HBS2 tail is valid"), Valid.LeaseTail, EHapbeatPongLeaseTail::Valid);
+	TestEqual(TEXT("echoed incarnation"), Valid.EchoedClientIncarnation, 0xA1A2A3A4A5A6A7A8ULL);
+	TestEqual(TEXT("boot id"), Valid.Lease.DeviceBootId, 0x0102030405060708ULL);
+	TestEqual(TEXT("ticket"), Valid.Lease.LeaseTicket, 7u);
+	TestEqual(TEXT("high water"), Valid.HighWaterTicket, 6u);
+	TestTrue(TEXT("lease_valid flag"), Valid.bLeaseValid);
+	TestFalse(TEXT("not superseded"), Valid.bLeaseSuperseded);
+
+	TArray<uint8> ZeroBoot = MakePongPayload(1000, "player_1");
+	AppendLeaseTail(ZeroBoot, 0x01, 1, 0, 7);
+	TestFalse(TEXT("lease_valid with a zero boot id is not a valid lease"), Parse(ZeroBoot).bLeaseValid);
+
+	struct FMalformedCase
+	{
+		const TCHAR* Name;
+		TArray<uint8> Payload;
+	};
+	TArray<FMalformedCase> Cases;
+	{
+		TArray<uint8> P = MakePongPayload(1000, "player_1");
+		AppendLeaseTail(P, 0x01, 1, 2, 3, 0, /*Version=*/2);
+		Cases.Add({ TEXT("wrong extension version"), P });
+	}
+	{
+		TArray<uint8> P = MakePongPayload(1000, "player_1");
+		AppendLeaseTail(P, 0x05, 1, 2, 3);
+		Cases.Add({ TEXT("unknown flag bit"), P });
+	}
+	{
+		TArray<uint8> P = MakePongPayload(1000, "player_1");
+		AppendLeaseTail(P, 0x01, 1, 2, 3, 0, 1, /*Reserved=*/1);
+		Cases.Add({ TEXT("nonzero reserved"), P });
+	}
+	{
+		TArray<uint8> P = MakePongPayload(1000, "player_1");
+		AppendLeaseTail(P, 0x01, 1, 2, 3);
+		P.Pop();
+		Cases.Add({ TEXT("31-byte tail"), P });
+	}
+	{
+		TArray<uint8> P = MakePongPayload(1000, "player_1");
+		AppendLeaseTail(P, 0x01, 1, 2, 3);
+		P.Add(0);
+		Cases.Add({ TEXT("33-byte tail"), P });
+	}
+	{
+		TArray<uint8> P = MakePongPayload(1000, "player_1");
+		P.Add('H');
+		P.Add('B');
+		Cases.Add({ TEXT("truncated marker prefix"), P });
+	}
+	for (const FMalformedCase& Case : Cases)
+	{
+		TestEqual(FString::Printf(TEXT("malformed HBS2: %s"), Case.Name),
+			Parse(Case.Payload).LeaseTail, EHapbeatPongLeaseTail::Malformed);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Pure classification (HapbeatStreamSessionContract::EvaluatePongLease)
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamSessionV2ClassificationTest,
+	"Hapbeat.Streaming.SessionV2.Classification",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamSessionV2ClassificationTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	using HapbeatStreamSessionContract::EvaluatePongLease;
+	const uint64 Inc = 0xAAAA0000BBBB1111ULL;
+	const char* Address = "player_1/pos_l_arm";
+	TMap<uint16, FHapbeatPendingPing> Pings;
+	Pings.Add(10, Pending(1000, Inc));
+	Pings.Add(11, Pending(2000, Inc));
+	Pings.Add(12, Pending(3000, 0x1234ULL)); // issued by a previous incarnation
+	FHapbeatStreamEndpointLeaseState Next;
+
+	TestEqual(TEXT("matched HBS2 reply is accepted"),
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Accept);
+	TestEqual(TEXT("... as v2"), Next.Class, EHapbeatStreamEndpointClass::V2);
+	TestTrue(TEXT("... with a usable lease"), Next.IsUsableV2Lease(Inc));
+	TestEqual(TEXT("... recording the accepted request"), Next.LastAcceptedTimestampUs, 1000LL);
+	const FHapbeatStreamEndpointLeaseState AcceptedV2 = Next;
+
+	TestEqual(TEXT("matched reply without a tail is accepted"),
+		EvaluatePongLease(LegacyPong(1000, Address), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Accept);
+	TestEqual(TEXT("... as legacy"), Next.Class, EHapbeatStreamEndpointClass::Legacy);
+	TestTrue(TEXT("legacy endpoints are streamable"), Next.IsStreamable(Inc));
+
+	FHapbeatStreamEndpointLeaseState Untouched;
+	TestEqual(TEXT("malformed HBS2 tail never classifies"),
+		EvaluatePongLease(MalformedPong(1000, Address, Inc), 10, Pings, Inc, nullptr, Untouched), EPongLeaseDecision::NoChange);
+	TestEqual(TEXT("malformed tail leaves the class unknown"), Untouched.Class, EHapbeatStreamEndpointClass::Unknown);
+	TestFalse(TEXT("unknown endpoints defer"), Untouched.IsStreamable(Inc));
+
+	TestEqual(TEXT("unsolicited (timestamp 0) PONG never selects legacy"),
+		EvaluatePongLease(LegacyPong(0, Address), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::NoChange);
+	TestEqual(TEXT("reply to an unknown seq never selects legacy"),
+		EvaluatePongLease(LegacyPong(1000, Address), 99, Pings, Inc, nullptr, Next), EPongLeaseDecision::NoChange);
+	TestEqual(TEXT("reply echoing another request's timestamp never selects legacy"),
+		EvaluatePongLease(LegacyPong(2000, Address), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::NoChange);
+	TestEqual(TEXT("reply to a previous incarnation's request never selects legacy"),
+		EvaluatePongLease(LegacyPong(3000, Address), 12, Pings, Inc, nullptr, Next), EPongLeaseDecision::NoChange);
+	TestEqual(TEXT("late tail-less reply cannot demote an accepted v2 endpoint"),
+		EvaluatePongLease(LegacyPong(1000, Address), 10, Pings, Inc, &AcceptedV2, Next), EPongLeaseDecision::NoChange);
+	TestEqual(TEXT("newer matched tail-less reply demotes v2 to legacy (firmware rollback)"),
+		EvaluatePongLease(LegacyPong(2000, Address), 11, Pings, Inc, &AcceptedV2, Next), EPongLeaseDecision::Accept);
+	TestEqual(TEXT("... to legacy"), Next.Class, EHapbeatStreamEndpointClass::Legacy);
+
+	TestEqual(TEXT("HBS2 echoing another incarnation is discarded"),
+		EvaluatePongLease(V2Pong(1000, Address, Inc + 1, 0x11, 3), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Discard);
+	TestEqual(TEXT("unsolicited HBS2 is discarded"),
+		EvaluatePongLease(V2Pong(0, Address, Inc, 0x11, 3), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Discard);
+	TestEqual(TEXT("unmatched HBS2 is discarded"),
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3), 99, Pings, Inc, nullptr, Next), EPongLeaseDecision::Discard);
+	FHapbeatStreamEndpointLeaseState NewerV2 = AcceptedV2;
+	NewerV2.LastAcceptedTimestampUs = 2000;
+	TestEqual(TEXT("late old-boot HBS2 cannot revert a newer lease"),
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x99, 1), 10, Pings, Inc, &NewerV2, Next), EPongLeaseDecision::Discard);
+
+	TestEqual(TEXT("lease_valid=0 is still v2"),
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 0, /*Flags=*/0x00), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Accept);
+	TestEqual(TEXT("... class v2, never legacy"), Next.Class, EHapbeatStreamEndpointClass::V2);
+	TestFalse(TEXT("... and defers"), Next.IsStreamable(Inc));
+
+	TestEqual(TEXT("superseded reply is accepted"),
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3, 0x03), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Accept);
+	TestFalse(TEXT("superseded v2 defers"), Next.IsStreamable(Inc));
+	const FHapbeatStreamEndpointLeaseState Superseded = Next;
+	TestEqual(TEXT("later discovery reply is accepted"),
+		EvaluatePongLease(V2Pong(2000, Address, Inc, 0x11, 4), 11, Pings, Inc, &Superseded, Next), EPongLeaseDecision::Accept);
+	TestTrue(TEXT("... but does not take the lease back automatically"), Next.bLeaseSuperseded);
+	TestFalse(TEXT("... and keeps deferring"), Next.IsStreamable(Inc));
+	TestEqual(TEXT("... and keeps the superseded lease"), Next.Lease.LeaseTicket, 3u);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Subsystem: per-endpoint classes, guard scope, class change, ignore rules
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamLegacyFallbackSubsystemTest,
+	"Hapbeat.Streaming.SessionV2.LegacyFallbackSubsystem",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	UHapbeatSubsystem* Sub = NewObject<UHapbeatSubsystem>(GameInstance);
+	Sub->bSuppressStreamDiscoveryForAutomationTest = true;
+	const uint64 Inc = 0x0123456789ABCDEFULL;
+	Sub->ClientIncarnation = Inc;
+	TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> Log = MakeShared<FStreamPacketLog, ESPMode::ThreadSafe>();
+	Sub->StreamRunnableFactoryForAutomationTest =
+		[Log](const FGuid& SourceId, TArray<uint8>&& Pcm16, const FString& Target,
+			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror, EHapbeatStreamWireFormat Format,
+			const FHapbeatStreamSessionIdentity& Identity) -> FHapbeatStreamRunnable*
+		{
+			return new FLoggingStreamRunnable(SourceId, MoveTemp(Pcm16), Target, Mirror, Format, Identity, Log);
+		};
+
+	const FString AddrA = TEXT("player_1/pos_l_arm"); // pre-v2 device
+	const FString AddrB = TEXT("player_1/pos_r_arm"); // v2 device
+	const FString KeyA = TEXT("192.0.2.80:7700|player_1/pos_l_arm");
+	const FString KeyB = TEXT("192.0.2.81:7700|player_1/pos_r_arm");
+	const uint64 BootB = 0x00000000000B0071ULL;
+	int64 NextTs = 5000;
+	uint16 NextSeq = 100;
+	// One broadcast PING, answered by both devices: the pending entry must
+	// survive the first reply so the second can correlate too.
+	auto IssuePing = [&]() -> TPair<uint16, int64>
+	{
+		const TPair<uint16, int64> Issued(NextSeq++, NextTs);
+		NextTs += 1000;
+		Sub->PendingPings.Add(Issued.Key, Pending(Issued.Value, Inc));
+		return Issued;
+	};
+	auto Deliver = [&](const TCHAR* Ip, uint16 Seq, const FHapbeatProtocol::FPongInfo& Pong)
+	{
+		Sub->HandlePongGameThread(Ip, 7700, Seq, static_cast<int64>(FPlatformTime::Seconds() * 1'000'000.0), Pong);
+	};
+	auto ClassOf = [&](const FString& Key)
+	{
+		const UHapbeatSubsystem::FStreamEndpoint* Endpoint = Sub->StreamEndpoints.Find(Key);
+		return Endpoint != nullptr ? Endpoint->LeaseState.Class : EHapbeatStreamEndpointClass::Unknown;
+	};
+
+	// A looping source for every endpoint (empty target matches all).
+	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(Sub);
+	Playback->Init(1.0f, 1.0f);
+	Playback->SetLoop(true);
+	UHapbeatSubsystem::FStreamSource& Source = Sub->StreamSources.Add(Playback->Id);
+	Source.CanonicalPcm16 = MakeSessionTestPcm(1000, 160);
+	Source.Playback = Playback;
+	Sub->ActivePlaybacks.Add(Playback);
+
+	// --- Unknown endpoints defer until a matched reply classifies them.
+	Deliver(TEXT("192.0.2.80"), 0, LegacyPong(0, "player_1/pos_l_arm"));
+	TestTrue(TEXT("unsolicited PONG registers the endpoint"), Sub->StreamEndpoints.Contains(KeyA));
+	TestEqual(TEXT("unsolicited PONG leaves it unknown"), ClassOf(KeyA), EHapbeatStreamEndpointClass::Unknown);
+	TestEqual(TEXT("no session for an unknown endpoint"), Sub->StreamSessions.Num(), 0);
+	TestEqual(TEXT("the source is deferred"), Playback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
+
+	const TPair<uint16, int64> First = IssuePing();
+	Deliver(TEXT("192.0.2.80"), First.Key, LegacyPong(First.Value, "player_1/pos_l_arm"));
+	Deliver(TEXT("192.0.2.81"), First.Key, V2Pong(First.Value, "player_1/pos_r_arm", Inc, BootB, 3));
+	TestEqual(TEXT("A is legacy"), ClassOf(KeyA), EHapbeatStreamEndpointClass::Legacy);
+	TestEqual(TEXT("B is v2 from the same broadcast PING"), ClassOf(KeyB), EHapbeatStreamEndpointClass::V2);
+	TestTrue(TEXT("legacy and v2 endpoints stream concurrently"),
+		Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions.Contains(KeyB));
+	if (!Sub->StreamSessions.Contains(KeyA) || !Sub->StreamSessions.Contains(KeyB))
+	{
+		Sub->StopStream();
+		return false;
+	}
+	TestEqual(TEXT("A session is legacy format"), Sub->StreamSessions[KeyA].Format, EHapbeatStreamWireFormat::LegacyV1);
+	TestEqual(TEXT("B session is v2 format"), Sub->StreamSessions[KeyB].Format, EHapbeatStreamWireFormat::SessionV2);
+	TestEqual(TEXT("B session starts at generation 1"), Sub->StreamSessions[KeyB].Identity.Generation, 1u);
+	TestTrue(TEXT("A BEGIN sent"), WaitForCount(*Log, AddrA, FHapbeatProtocol::CmdStreamBegin, 1));
+	TestTrue(TEXT("B BEGIN sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 1));
+
+	// --- END then restart: v2 immediately, legacy only after 300 ms, per endpoint.
+	Sub->StopStreamSession(KeyA);
+	Sub->StopStreamSession(KeyB);
+	Sub->ReconcileStreamSources();
+	TestTrue(TEXT("v2 endpoint restarts immediately after END"), Sub->StreamSessions.Contains(KeyB));
+	TestFalse(TEXT("legacy endpoint waits for its 300 ms guard"), Sub->StreamSessions.Contains(KeyA));
+	if (Sub->StreamSessions.Contains(KeyB))
+	{
+		TestEqual(TEXT("v2 restart uses the next generation"), Sub->StreamSessions[KeyB].Identity.Generation, 2u);
+	}
+	TestFalse(TEXT("a v2 END arms no guard"), Sub->StreamSessionEndedAt.Contains(KeyB));
+	TestTrue(TEXT("a legacy END arms the guard"), Sub->StreamSessionEndedAt.Contains(KeyA));
+	// Age the legacy END past 300 ms instead of sleeping.
+	Sub->StreamSessionEndedAt[KeyA] -= 0.31;
+	for (TPair<FString, double>& RouteEnd : Sub->StreamRouteEndedAt)
+	{
+		RouteEnd.Value -= 0.31;
+	}
+	Sub->ReconcileStreamSources();
+	TestTrue(TEXT("legacy endpoint restarts once 300 ms have passed"), Sub->StreamSessions.Contains(KeyA));
+	TestTrue(TEXT("A second BEGIN sent"), WaitForCount(*Log, AddrA, FHapbeatProtocol::CmdStreamBegin, 2));
+	TestTrue(TEXT("B second BEGIN sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 2));
+
+	{
+		bool bAllV1 = true;
+		for (const FStreamPacketLog::FEntry& Entry : Log->Snapshot(AddrA))
+		{
+			bAllV1 &= Entry.Packet[2] == FHapbeatProtocol::Version;
+			if (Entry.Packet[3] == FHapbeatProtocol::CmdStreamBegin)
+			{
+				TestEqual(TEXT("legacy BEGIN has no envelope"), static_cast<int32>(ReadLe(Entry.Packet, 6, 2)), 12 + AddrA.Len() + 1);
+			}
+			if (Entry.Packet[3] == FHapbeatProtocol::CmdStreamEnd)
+			{
+				TestEqual(TEXT("legacy END payload is empty"), static_cast<int32>(ReadLe(Entry.Packet, 6, 2)), 0);
+			}
+		}
+		TestTrue(TEXT("legacy endpoint only ever receives header version 1"), bAllV1);
+		bool bAllV2 = true;
+		TArray<uint32> BeginGenerations;
+		for (const FStreamPacketLog::FEntry& Entry : Log->Snapshot(AddrB))
+		{
+			bAllV2 &= Entry.Packet[2] == FHapbeatProtocol::StreamProtocolVersion
+				&& EnvelopeOf(Entry.Packet).GetLease() == FHapbeatStreamLeaseIdentity(BootB, 3);
+			if (Entry.Packet[3] == FHapbeatProtocol::CmdStreamBegin)
+			{
+				BeginGenerations.Add(EnvelopeOf(Entry.Packet).Generation);
+			}
+		}
+		TestTrue(TEXT("v2 endpoint only ever receives its lease envelope, header version 2"), bAllV2);
+		TestTrue(TEXT("v2 BEGIN generations are 1 then 2"),
+			BeginGenerations.Num() >= 2 && BeginGenerations[0] == 1u && BeginGenerations[1] == 2u);
+	}
+
+	// --- Ignore rules: nothing below may change B's class or restart its session.
+	FHapbeatStreamRunnable* RunningB = Sub->StreamSessions.Contains(KeyB) ? Sub->StreamSessions[KeyB].Runnable : nullptr;
+	const TPair<uint16, int64> Newer = IssuePing();
+	Deliver(TEXT("192.0.2.81"), Newer.Key, V2Pong(Newer.Value, "player_1/pos_r_arm", Inc, BootB, 3));
+	const int64 AcceptedTs = Sub->StreamEndpoints.FindChecked(KeyB).LeaseState.LastAcceptedTimestampUs;
+	TestEqual(TEXT("repeated lease reply is accepted"), AcceptedTs, Newer.Value);
+	Deliver(TEXT("192.0.2.81"), 0, LegacyPong(0, "player_1/pos_r_arm"));
+	Deliver(TEXT("192.0.2.81"), First.Key, LegacyPong(First.Value, "player_1/pos_r_arm")); // late
+	Deliver(TEXT("192.0.2.81"), 999, LegacyPong(Newer.Value, "player_1/pos_r_arm"));    // unmatched seq
+	const TPair<uint16, int64> ForMalformed = IssuePing();
+	Deliver(TEXT("192.0.2.81"), ForMalformed.Key, MalformedPong(ForMalformed.Value, "player_1/pos_r_arm", Inc));
+	TestEqual(TEXT("unsolicited / late / unmatched / malformed replies keep B v2"), ClassOf(KeyB), EHapbeatStreamEndpointClass::V2);
+	TestEqual(TEXT("... and do not advance its accepted request"),
+		Sub->StreamEndpoints.FindChecked(KeyB).LeaseState.LastAcceptedTimestampUs, AcceptedTs);
+	TestTrue(TEXT("... and leave its session running untouched"),
+		Sub->StreamSessions.Contains(KeyB) && Sub->StreamSessions[KeyB].Runnable == RunningB);
+
+	const FString KeyC = TEXT("192.0.2.82:7700|player_1/pos_chest");
+	const TPair<uint16, int64> ForC = IssuePing();
+	Deliver(TEXT("192.0.2.82"), ForC.Key, MalformedPong(ForC.Value, "player_1/pos_chest", Inc));
+	TestEqual(TEXT("a malformed tail leaves a new endpoint unknown"), ClassOf(KeyC), EHapbeatStreamEndpointClass::Unknown);
+	TestFalse(TEXT("... and deferred"), Sub->StreamSessions.Contains(KeyC));
+
+	const FString KeyE = TEXT("192.0.2.84:7700|player_1/pos_back");
+	const TPair<uint16, int64> ForE = IssuePing();
+	Deliver(TEXT("192.0.2.84"), ForE.Key, V2Pong(ForE.Value, "player_1/pos_back", Inc + 1, 0xE, 1));
+	TestFalse(TEXT("HBS2 for another incarnation is discarded entirely"),
+		Sub->StreamEndpoints.Contains(KeyE) || Sub->DevicePongTimes.Contains(TEXT("192.0.2.84")));
+
+	// --- Class change v2 -> legacy: END in v2 format first, then legacy BEGIN.
+	const int32 BPacketsBeforeRollback = Log->Snapshot(AddrB).Num();
+	const TPair<uint16, int64> Rollback = IssuePing();
+	Deliver(TEXT("192.0.2.81"), Rollback.Key, LegacyPong(Rollback.Value, "player_1/pos_r_arm"));
+	TestEqual(TEXT("matched tail-less reply turns B legacy"), ClassOf(KeyB), EHapbeatStreamEndpointClass::Legacy);
+	TestTrue(TEXT("B restarts at once in legacy format (the previous END was v2)"),
+		Sub->StreamSessions.Contains(KeyB) && Sub->StreamSessions[KeyB].Format == EHapbeatStreamWireFormat::LegacyV1);
+	TestTrue(TEXT("legacy BEGIN for B sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 3));
+	{
+		const TArray<FStreamPacketLog::FEntry> Entries = Log->Snapshot(AddrB);
+		int32 V2EndIndex = INDEX_NONE;
+		int32 V1BeginIndex = INDEX_NONE;
+		for (int32 Index = BPacketsBeforeRollback; Index < Entries.Num(); ++Index)
+		{
+			const TArray<uint8>& Packet = Entries[Index].Packet;
+			if (V2EndIndex == INDEX_NONE && Packet[3] == FHapbeatProtocol::CmdStreamEnd
+				&& Packet[2] == FHapbeatProtocol::StreamProtocolVersion)
+			{
+				V2EndIndex = Index;
+			}
+			if (V1BeginIndex == INDEX_NONE && Packet[3] == FHapbeatProtocol::CmdStreamBegin
+				&& Packet[2] == FHapbeatProtocol::Version)
+			{
+				V1BeginIndex = Index;
+			}
+		}
+		TestTrue(TEXT("class change: old v2 session ENDs (with its envelope) before the legacy BEGIN"),
+			V2EndIndex != INDEX_NONE && V1BeginIndex != INDEX_NONE && V2EndIndex < V1BeginIndex);
+		if (V2EndIndex != INDEX_NONE)
+		{
+			TestEqual(TEXT("the v2 END carries the retired session identity"),
+				EnvelopeOf(Entries[V2EndIndex].Packet).Generation, 2u);
+		}
+	}
+
+	// --- Class change legacy -> v2: legacy END first, v2 BEGIN immediately.
+	const int32 BPacketsBeforeUpdate = Log->Snapshot(AddrB).Num();
+	const TPair<uint16, int64> Update = IssuePing();
+	Deliver(TEXT("192.0.2.81"), Update.Key, V2Pong(Update.Value, "player_1/pos_r_arm", Inc, BootB, 3));
+	TestEqual(TEXT("matched HBS2 reply turns B back to v2"), ClassOf(KeyB), EHapbeatStreamEndpointClass::V2);
+	TestTrue(TEXT("v2 BEGIN is not held by the legacy guard"),
+		Sub->StreamSessions.Contains(KeyB) && Sub->StreamSessions[KeyB].Format == EHapbeatStreamWireFormat::SessionV2);
+	if (Sub->StreamSessions.Contains(KeyB))
+	{
+		TestEqual(TEXT("generation keeps increasing under the same lease"), Sub->StreamSessions[KeyB].Identity.Generation, 3u);
+	}
+	TestTrue(TEXT("v2 BEGIN for B sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 4));
+	{
+		const TArray<FStreamPacketLog::FEntry> Entries = Log->Snapshot(AddrB);
+		int32 V1EndIndex = INDEX_NONE;
+		int32 V2BeginIndex = INDEX_NONE;
+		for (int32 Index = BPacketsBeforeUpdate; Index < Entries.Num(); ++Index)
+		{
+			const TArray<uint8>& Packet = Entries[Index].Packet;
+			if (V1EndIndex == INDEX_NONE && Packet[3] == FHapbeatProtocol::CmdStreamEnd && Packet[2] == FHapbeatProtocol::Version)
+			{
+				V1EndIndex = Index;
+			}
+			if (V2BeginIndex == INDEX_NONE && Packet[3] == FHapbeatProtocol::CmdStreamBegin
+				&& Packet[2] == FHapbeatProtocol::StreamProtocolVersion)
+			{
+				V2BeginIndex = Index;
+			}
+		}
+		TestTrue(TEXT("class change: legacy END (empty payload) precedes the v2 BEGIN"),
+			V1EndIndex != INDEX_NONE && V2BeginIndex != INDEX_NONE && V1EndIndex < V2BeginIndex);
+	}
+
+	// --- Device reboot: END under the old identity, BEGIN under the new boot.
+	const uint64 RebootedB = 0x00000000000B0072ULL;
+	const int32 BPacketsBeforeReboot = Log->Snapshot(AddrB).Num();
+	const TPair<uint16, int64> AfterReboot = IssuePing();
+	Deliver(TEXT("192.0.2.81"), AfterReboot.Key, V2Pong(AfterReboot.Value, "player_1/pos_r_arm", Inc, RebootedB, 1));
+	TestTrue(TEXT("reboot starts a session under the new lease"),
+		Sub->StreamSessions.Contains(KeyB)
+		&& Sub->StreamSessions[KeyB].Identity == FHapbeatStreamSessionIdentity(FHapbeatStreamLeaseIdentity(RebootedB, 1), 1));
+	TestTrue(TEXT("new-boot BEGIN sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 5));
+	{
+		const TArray<FStreamPacketLog::FEntry> Entries = Log->Snapshot(AddrB);
+		bool bOldEndBeforeNewBegin = false;
+		bool bSawOldEnd = false;
+		bool bOldBootDataAfterNewBegin = false;
+		bool bSawNewBegin = false;
+		for (int32 Index = BPacketsBeforeReboot; Index < Entries.Num(); ++Index)
+		{
+			const TArray<uint8>& Packet = Entries[Index].Packet;
+			const FHapbeatStreamSessionIdentity Envelope = EnvelopeOf(Packet);
+			if (Packet[3] == FHapbeatProtocol::CmdStreamEnd && Envelope.DeviceBootId == BootB)
+			{
+				bSawOldEnd = true;
+			}
+			if (Packet[3] == FHapbeatProtocol::CmdStreamBegin && Envelope.DeviceBootId == RebootedB)
+			{
+				bOldEndBeforeNewBegin = bSawOldEnd;
+				bSawNewBegin = true;
+			}
+			if (bSawNewBegin && Envelope.DeviceBootId == BootB)
+			{
+				bOldBootDataAfterNewBegin = true;
+			}
+		}
+		TestTrue(TEXT("reboot: retired identity ENDs before the new-boot BEGIN"), bOldEndBeforeNewBegin);
+		TestFalse(TEXT("reboot: nothing is sent under the retired identity afterwards"), bOldBootDataAfterNewBegin);
+	}
+
+	// --- Superseded: stop and defer that endpoint, no automatic takeover.
+	const TPair<uint16, int64> Takeover = IssuePing();
+	Deliver(TEXT("192.0.2.81"), Takeover.Key, V2Pong(Takeover.Value, "player_1/pos_r_arm", Inc, RebootedB, 1, 0x03));
+	TestFalse(TEXT("superseded lease stops the endpoint session"), Sub->StreamSessions.Contains(KeyB));
+	TestEqual(TEXT("superseded stays v2 (never legacy)"), ClassOf(KeyB), EHapbeatStreamEndpointClass::V2);
+	const TPair<uint16, int64> Periodic = IssuePing();
+	Deliver(TEXT("192.0.2.81"), Periodic.Key, V2Pong(Periodic.Value, "player_1/pos_r_arm", Inc, RebootedB, 2));
+	TestFalse(TEXT("periodic discovery does not take the stream back"), Sub->StreamSessions.Contains(KeyB));
+	TestTrue(TEXT("the legacy endpoint is unaffected"), Sub->StreamSessions.Contains(KeyA));
+
+	Sub->StopStream();
+	TestEqual(TEXT("StopStream ends every session"), Sub->StreamSessions.Num(), 0);
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS

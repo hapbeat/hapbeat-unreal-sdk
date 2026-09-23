@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HapbeatProtocol.h"
 #include "HapbeatStreamGainMirror.h"
 
 /**
@@ -12,8 +13,11 @@
  *
  * Every source has its own atomic Gain/Pan/Stopped mirror. Samples are scaled,
  * summed locally, clamped once to PCM16, then sent as one STREAM_DATA sequence.
- * This is wire-compatible with existing firmware and matches Unity's
- * HapbeatManager multi-source mixer.
+ * Matches Unity's HapbeatManager multi-source mixer.
+ *
+ * The wire format (legacy v1 vs stream session v2) and, for v2, the session
+ * identity are fixed at construction: every BEGIN/DATA/END of one session uses
+ * the same format and envelope (stream-session-v2.md).
  */
 class FHapbeatStreamer
 {
@@ -25,7 +29,12 @@ public:
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InInitialMirror,
 		TFunction<uint16()> InNextSeq,
 		TFunction<void(const TArray<uint8>&)> InSend,
-		float InSendAheadSeconds);
+		float InSendAheadSeconds,
+		EHapbeatStreamWireFormat InWireFormat = EHapbeatStreamWireFormat::LegacyV1,
+		const FHapbeatStreamSessionIdentity& InIdentity = FHapbeatStreamSessionIdentity());
+
+	EHapbeatStreamWireFormat GetWireFormat() const { return WireFormat; }
+	const FHapbeatStreamSessionIdentity& GetIdentity() const { return Identity; }
 
 	/** Worker-thread only: add one source already validated against the session format/target. */
 	void AddSource(
@@ -75,6 +84,8 @@ private:
 	int32 WireBytesPerFrame = 2;
 	bool bUpmixMonoToStereo = false;
 	float SendAheadSeconds = 0.05f;
+	EHapbeatStreamWireFormat WireFormat = EHapbeatStreamWireFormat::LegacyV1;
+	FHapbeatStreamSessionIdentity Identity;
 
 	TFunction<uint16()> NextSeqFn;
 	TFunction<void(const TArray<uint8>&)> SendFn;

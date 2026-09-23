@@ -21,14 +21,20 @@ FHapbeatStreamer::FHapbeatStreamer(
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InInitialMirror,
 	TFunction<uint16()> InNextSeq,
 	TFunction<void(const TArray<uint8>&)> InSend,
-	float InSendAheadSeconds)
+	float InSendAheadSeconds,
+	EHapbeatStreamWireFormat InWireFormat,
+	const FHapbeatStreamSessionIdentity& InIdentity)
 	: SampleRate(16000)
 	, Channels(2)
 	, Target(InTarget)
 	, SendAheadSeconds(InSendAheadSeconds > 0.01f ? InSendAheadSeconds : 0.05f)
+	, WireFormat(InWireFormat)
+	, Identity(InIdentity)
 	, NextSeqFn(MoveTemp(InNextSeq))
 	, SendFn(MoveTemp(InSend))
 {
+	checkf(WireFormat != EHapbeatStreamWireFormat::SessionV2 || Identity.IsValid(),
+		TEXT("Hapbeat: a v2 stream session needs a valid boot id / lease ticket / generation"));
 	// The hub normalizes every source before it reaches a session. Keeping the
 	// wire profile fixed is what lets arbitrary sources join one endpoint mixer.
 	SrcBytesPerFrame = 4;
@@ -65,6 +71,19 @@ void FHapbeatStreamer::RemoveSource(const FGuid& SourceId)
 void FHapbeatStreamer::Start(double NowSeconds)
 {
 	StartTimeSeconds = NowSeconds;
+	if (WireFormat == EHapbeatStreamWireFormat::SessionV2)
+	{
+		SendFn(FHapbeatProtocol::BuildStreamBeginV2(
+			NextSeqFn(),
+			Identity,
+			static_cast<uint16>(SampleRate),
+			static_cast<uint8>(WireChannels),
+			FHapbeatProtocol::AudioFormatPcm16,
+			/*TotalSamples=*/0,
+			/*Gain=*/1.0f,
+			Target));
+		return;
+	}
 	SendFn(FHapbeatProtocol::BuildStreamBegin(
 		NextSeqFn(),
 		static_cast<uint16>(SampleRate),
@@ -190,8 +209,11 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 			PcmScratch[SampleIndex * 2 + 1] = static_cast<uint8>((Pcm >> 8) & 0xFF);
 		}
 
-		SendFn(FHapbeatProtocol::BuildStreamData(
-			NextSeqFn(), WireOffset, PcmScratch.GetData(), PcmScratch.Num()));
+		SendFn(WireFormat == EHapbeatStreamWireFormat::SessionV2
+			? FHapbeatProtocol::BuildStreamDataV2(
+				NextSeqFn(), Identity, WireOffset, PcmScratch.GetData(), PcmScratch.Num())
+			: FHapbeatProtocol::BuildStreamData(
+				NextSeqFn(), WireOffset, PcmScratch.GetData(), PcmScratch.Num()));
 		WireOffset += static_cast<uint32>(PcmScratch.Num());
 		TotalFramesSent += FramesPerChunk;
 
@@ -214,5 +236,7 @@ void FHapbeatStreamer::SendEnd()
 	}
 	Sources.Empty();
 	bDone = true;
-	SendFn(FHapbeatProtocol::BuildStreamEnd(NextSeqFn()));
+	SendFn(WireFormat == EHapbeatStreamWireFormat::SessionV2
+		? FHapbeatProtocol::BuildStreamEndV2(NextSeqFn(), Identity)
+		: FHapbeatProtocol::BuildStreamEnd(NextSeqFn()));
 }

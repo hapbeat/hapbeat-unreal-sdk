@@ -64,7 +64,9 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	FSocket* InSocket,
 	int32 InPort,
 	TArray<FString> InUnicastTargetIps,
-	float InSendAheadSeconds)
+	float InSendAheadSeconds,
+	EHapbeatStreamWireFormat InWireFormat,
+	const FHapbeatStreamSessionIdentity& InIdentity)
 	// Initializer order matches declaration order in the header (Socket ..
 	// Mirror) to avoid -Wreorder; see the header for the full member list.
 	: Socket(InSocket)
@@ -76,6 +78,8 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	, SessionChannels(InChannels)
 	, SessionTarget(InTarget)
 	, InitialMirror(InMirror)
+	, WireFormat(InWireFormat)
+	, SessionIdentity(InIdentity)
 {
 	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), InMirror);
 }
@@ -127,7 +131,9 @@ bool FHapbeatStreamRunnable::Init()
 		InitialMirror,
 		NextSeqFn,
 		[this](const TArray<uint8>& Packet) { SendRaw(Packet); },
-		SendAheadSeconds);
+		SendAheadSeconds,
+		WireFormat,
+		SessionIdentity);
 	{
 		// Keep SourceMutex -> StreamerMutex everywhere structural source state and
 		// the mixer meet. A detach can arrive before Init() has made Streamer;

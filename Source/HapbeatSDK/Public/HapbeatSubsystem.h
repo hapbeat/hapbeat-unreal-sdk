@@ -7,6 +7,7 @@
 #include "Engine/TimerHandle.h"               // FTimerHandle (held by the pending-send record below)
 #include "HAL/CriticalSection.h"              // FCriticalSection (SeqLock — shared with the stream thread)
 #include "HapbeatNetInterfaces.h"             // FHapbeatBroadcastRoute (held by value in a TArray below)
+#include "HapbeatStreamLease.h"               // per-endpoint stream class / lease state (stream session v2)
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "HapbeatSubsystem.generated.h"
@@ -20,6 +21,8 @@ class UHapbeatEventMap;
 class UHapbeatStreamPlayback;
 class FHapbeatStreamSubsystemRoutingTest;
 struct FHapbeatEventEntry;
+class FHapbeatStreamLegacyFallbackSubsystemTest;
+struct FHapbeatStreamGainMirror;
 
 /** What a deferred (haptic-delay) send does once its timer fires. See FHapbeatPendingSend. */
 enum class EHapbeatPendingKind : uint8
@@ -398,6 +401,7 @@ public:
 
 private:
 	friend class FHapbeatStreamSubsystemRoutingTest;
+	friend class FHapbeatStreamLegacyFallbackSubsystemTest;
 	void SendPacket(const TArray<uint8>& Packet);
 
 	// ---- Haptic delay (PlayEntry / StopEntry only) ----
@@ -445,7 +449,12 @@ private:
 	 * (the playback is not retained in ActivePlaybacks in that case).
 	 */
 	bool StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPlayback* Playback, const FString& Target, bool bLoop);
-	void RegisterStreamEndpoint(const FString& Ip, int32 InPort, const FString& Address, double NowSeconds);
+	/**
+	 * Record a PONG-confirmed exact endpoint (migrating one unambiguous expired
+	 * route/address, together with its END time and stream class/lease state).
+	 * Returns the endpoint key the PONG now lives under.
+	 */
+	FString RegisterStreamEndpoint(const FString& Ip, int32 InPort, const FString& Address, double NowSeconds);
 	/** Recompute each active source's effective target from its authored target and the live override. */
 	void RefreshStreamSourceTargets();
 	/** Request immediate discovery only while an active source has no matching exact endpoint. */
@@ -515,10 +524,24 @@ private:
 	/**
 	 * Resolve PONG RTT on the game thread. An unsolicited PONG with timestamp 0
 	 * has no clock sample, so it intentionally reports 0 rather than treating
-	 * the Unix epoch as a multi-decade round trip.
+	 * the Unix epoch as a multi-decade round trip. The pending entry is NOT
+	 * consumed: a broadcast PING is answered by every device, and each reply has
+	 * to be able to correlate its stream class / lease (stream-session-v2.md).
+	 * Entries age out in Ping().
 	 */
-	static int64 ResolvePongRttUs(TMap<uint16, int64>& InOutPendingPings,
+	static int64 ResolvePongRttUs(const TMap<uint16, FHapbeatPendingPing>& InPendingPings,
 		uint16 PongSeq, int64 NowMonotonicUs, int64 EchoedTimestampUs, int64 NowUnixUs);
+
+	/**
+	 * Game-thread half of PONG handling (marshalled from HandleReceivedData):
+	 * stream class / lease classification (HapbeatStreamSessionContract::
+	 * EvaluatePongLease), liveness, endpoint registration and reconciliation.
+	 */
+	void HandlePongGameThread(const FString& SenderIp, int32 SenderPort, uint16 PongSeq, int64 NowMonotonicUs,
+		const FHapbeatProtocol::FPongInfo& Pong);
+
+	/** Fresh nonzero random client incarnation (stream-session-v2.md "Discovery lease"). */
+	static uint64 CreateClientIncarnation();
 
 	/** Apply a parsed PONG/ERROR result on the game thread (marshalled from the worker thread). */
 	void OnPongGameThread(const FString& Endpoint, int64 RttUs, const FString& DeviceName, const FString& Address, const FString& Firmware);
@@ -612,8 +635,15 @@ private:
 
 	/** Last PONG time (FPlatformTime::Seconds) keyed by sender IP string. */
 	TMap<FString, double> DevicePongTimes;
-	/** seq -> local send micros for outstanding PINGs (RTT = now - sent). */
-	TMap<uint16, int64> PendingPings;
+	/** seq -> outstanding PING (send time for RTT, wire timestamp + incarnation for lease correlation). */
+	TMap<uint16, FHapbeatPendingPing> PendingPings;
+	/**
+	 * Client incarnation written into every extended PING. Regenerated (nonzero)
+	 * in Connect() only; periodic discovery keeps it unchanged. Game thread only.
+	 */
+	uint64 ClientIncarnation = 0;
+	/** Last PING wire timestamp; PING timestamps are made strictly increasing so reply order is total. */
+	int64 LastPingTimestampUs = 0;
 	/** Previous alive count, for edge detection. -1 = "never evaluated". */
 	int32 PrevAliveCount = -1;
 	/** Set once Deinitialize starts so SendPacket cannot lazily re-open the socket during teardown. */
@@ -671,6 +701,8 @@ private:
 		int32 Port = 0;
 		FString Address;
 		double LastPongSeconds = 0.0;
+		/** Unknown until a matched reply to this SDK's extended PING classifies it (v2 or legacy). */
+		FHapbeatStreamEndpointLeaseState LeaseState;
 	};
 
 	struct FStreamSession
@@ -678,7 +710,31 @@ private:
 		FHapbeatStreamRunnable* Runnable = nullptr;
 		FRunnableThread* Thread = nullptr;
 		TSet<FGuid> SourceIds;
+		/** Immutable for the session: the END goes out in this format even after a class change. */
+		EHapbeatStreamWireFormat Format = EHapbeatStreamWireFormat::LegacyV1;
+		/** SessionV2 only. */
+		FHapbeatStreamSessionIdentity Identity;
 	};
+
+	/**
+	 * The endpoint state a PONG from (Ip, Port, Address) will be registered into:
+	 * the exact endpoint, or the one unambiguous migration candidate that
+	 * RegisterStreamEndpoint would move. nullptr for a brand-new endpoint.
+	 */
+	const FStreamEndpoint* FindEndpointForRegistration(
+		const FString& Ip, int32 InPort, const FString& Address, double NowSeconds) const;
+
+	/** Sources may be assigned to this endpoint: Legacy, or a usable v2 lease for the current incarnation. */
+	bool IsEndpointStreamable(const FStreamEndpoint& Endpoint) const;
+
+	/** The running session still matches its endpoint's class (and, for v2, its lease). */
+	bool IsSessionCurrentForEndpoint(const FStreamSession& Session, const FStreamEndpoint& Endpoint) const;
+
+	/**
+	 * Next generation per lease (Unity HapbeatEndpointStreamMixer._nextGenerationByLease).
+	 * Never reset while the subsystem lives, so a generation is never reused under a lease.
+	 */
+	TMap<FHapbeatStreamLeaseIdentity, uint32> NextGenerationByLease;
 
 	/** PONG-confirmed exact endpoints; STREAM packets are never broadcast. */
 	TMap<FString, FStreamEndpoint> StreamEndpoints;
@@ -686,7 +742,11 @@ private:
 	TMap<FGuid, FStreamSource> StreamSources;
 	/** One runnable/thread per exact PONG endpoint. */
 	TMap<FString, FStreamSession> StreamSessions;
-	/** Last END time per route/address; enforces the 300 ms same-route BEGIN gap. */
+	/**
+	 * Last LEGACY END time per endpoint / route+address; enforces the 300 ms
+	 * END->BEGIN guard for pre-v2 receivers only. v2 sessions never record here
+	 * and never wait (stream-session-v2.md "Legacy receiver fallback (SDK)").
+	 */
 	TMap<FString, double> StreamSessionEndedAt;
 	TMap<FString, double> StreamRouteEndedAt;
 
@@ -714,5 +774,14 @@ private:
 	/** Test-only discovery seam: records a request without opening or sending on a UDP socket. */
 	bool bSuppressStreamDiscoveryForAutomationTest = false;
 	int32 StreamDiscoveryRequestCount = 0;
+	/**
+	 * Test-only session seam: when bound, StartEndpointSession builds its runnable
+	 * here (a recording runner whose SendRaw never touches a socket) and no socket
+	 * is required. Arguments: first source id, its PCM, BEGIN target, mirror,
+	 * wire format and session identity.
+	 */
+	TFunction<FHapbeatStreamRunnable*(const FGuid&, TArray<uint8>&&, const FString&,
+		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>, EHapbeatStreamWireFormat,
+		const FHapbeatStreamSessionIdentity&)> StreamRunnableFactoryForAutomationTest;
 #endif
 };

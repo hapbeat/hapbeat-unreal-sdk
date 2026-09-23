@@ -4,6 +4,7 @@
 #include "CoreMinimal.h"
 #include "HAL/CriticalSection.h"
 #include "HAL/Runnable.h"
+#include "HapbeatProtocol.h"
 #include "HapbeatStreamGainMirror.h"
 #include <atomic>
 
@@ -65,6 +66,8 @@ public:
 	 * @param InPort               UDP port for the exact endpoint.
 	 * @param InUnicastTargetIps   Exact PONG endpoint IP (plain string), captured for this session.
 	 * @param InSendAheadSeconds   FHapbeatStreamer pacing lead (UHapbeatConfig::StreamSendAheadSeconds).
+	 * @param InWireFormat         Immutable per session: LegacyV1 for pre-v2 firmware, SessionV2 otherwise.
+	 * @param InIdentity           SessionV2 only: the envelope stamped on every BEGIN/DATA/END of this session.
 	 */
 	FHapbeatStreamRunnable(
 		const FGuid& InSourceId,
@@ -77,8 +80,13 @@ public:
 		FSocket* InSocket,
 		int32 InPort,
 		TArray<FString> InUnicastTargetIps,
-		float InSendAheadSeconds);
+		float InSendAheadSeconds,
+		EHapbeatStreamWireFormat InWireFormat = EHapbeatStreamWireFormat::LegacyV1,
+		const FHapbeatStreamSessionIdentity& InIdentity = FHapbeatStreamSessionIdentity());
 	virtual ~FHapbeatStreamRunnable() override;
+
+	EHapbeatStreamWireFormat GetWireFormat() const { return WireFormat; }
+	const FHapbeatStreamSessionIdentity& GetSessionIdentity() const { return SessionIdentity; }
 
 	// FRunnable
 	virtual bool Init() override;
@@ -158,6 +166,8 @@ private:
 	int32 SessionChannels = 0;
 	FString SessionTarget;
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InitialMirror;
+	EHapbeatStreamWireFormat WireFormat = EHapbeatStreamWireFormat::LegacyV1;
+	FHapbeatStreamSessionIdentity SessionIdentity;
 
 	/**
 	 * The only cross-thread structural state. AddSource and the worker's final

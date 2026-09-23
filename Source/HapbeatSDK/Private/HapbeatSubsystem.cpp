@@ -209,6 +209,12 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 	DevicePongTimes.Empty();
 	DeviceAddresses.Empty();
 	StreamEndpoints.Empty();
+	// Stream session v2: every Connect/reconnect is a fresh writer. A new nonzero
+	// client incarnation asks each device for a new lease; replies to requests
+	// of the previous incarnation must never classify or lease anything, so the
+	// outstanding requests go with it (stream-session-v2.md "Discovery lease").
+	ClientIncarnation = CreateClientIncarnation();
+	PendingPings.Empty();
 	// Outage state belongs to the connection we just replaced.
 	bLoggedSendError = false;
 
@@ -532,27 +538,63 @@ void UHapbeatSubsystem::CancelPendingSends()
 
 void UHapbeatSubsystem::Ping()
 {
+	if (Socket == nullptr)
+	{
+		// Connect() owns the incarnation and sends its own first PING, so a PING
+		// before the socket exists simply becomes that connect.
+		if (!bShuttingDown)
+		{
+			Connect(Port, AppName);
+		}
+		return;
+	}
+	if (ClientIncarnation == 0)
+	{
+		ClientIncarnation = CreateClientIncarnation();
+	}
+
 	const uint16 PingSeq = NextSeq();
 	// PING wire field is Unix-epoch microseconds (parity with Python/Web/Unity).
-	const int64 TimestampUs = UnixMicros();
-	// Track local monotonic send time for RTT (now - sent). Prune any stale
-	// outstanding PINGs (device offline) so the map doesn't grow unbounded.
-	if (PendingPings.Num() > 256)
+	// Made strictly increasing: lease/class adoption is ordered by the echoed
+	// timestamp, and two immediate PINGs may otherwise read the same clock value
+	// (Unity HapbeatClient.SendPing does the same).
+	int64 TimestampUs = UnixMicros();
+	if (TimestampUs <= LastPingTimestampUs)
 	{
-		const int64 Cutoff = NowMicros() - 10'000'000; // 10 s
-		for (auto It = PendingPings.CreateIterator(); It; ++It)
+		TimestampUs = LastPingTimestampUs + 1;
+	}
+	LastPingTimestampUs = TimestampUs;
+
+	// A broadcast PING is answered by every device, so a pending request is not
+	// consumed by its first reply; it ages out instead (Unity prunes at 15 s).
+	const int64 NowUs = NowMicros();
+	constexpr int64 MaxPendingAgeUs = 15'000'000;
+	for (auto It = PendingPings.CreateIterator(); It; ++It)
+	{
+		if (NowUs - It.Value().SentMonotonicUs > MaxPendingAgeUs)
 		{
-			if (It.Value() < Cutoff)
-			{
-				It.RemoveCurrent();
-			}
+			It.RemoveCurrent();
 		}
 	}
-	PendingPings.Add(PingSeq, NowMicros());
-	SendDiscoveryPacket(FHapbeatProtocol::BuildPing(PingSeq, TimestampUs));
+	FHapbeatPendingPing Pending;
+	Pending.SentMonotonicUs = NowUs;
+	Pending.TimestampUs = TimestampUs;
+	Pending.ClientIncarnation = ClientIncarnation;
+	PendingPings.Add(PingSeq, Pending);
+	// Extended (16-byte) PING: v2 receivers answer with an HBS2 lease tail,
+	// pre-v2 firmware ignores the extra bytes and answers an ordinary PONG.
+	SendDiscoveryPacket(FHapbeatProtocol::BuildPing(PingSeq, TimestampUs, ClientIncarnation));
 }
 
-int64 UHapbeatSubsystem::ResolvePongRttUs(TMap<uint16, int64>& InOutPendingPings,
+uint64 UHapbeatSubsystem::CreateClientIncarnation()
+{
+	const FGuid Guid = FGuid::NewGuid();
+	const uint64 Incarnation = (static_cast<uint64>(Guid.A) << 32) ^ static_cast<uint64>(Guid.B)
+		^ (static_cast<uint64>(Guid.C) << 16) ^ (static_cast<uint64>(Guid.D) << 40);
+	return Incarnation == 0 ? 1ULL : Incarnation;
+}
+
+int64 UHapbeatSubsystem::ResolvePongRttUs(const TMap<uint16, FHapbeatPendingPing>& InPendingPings,
 	uint16 PongSeq, int64 NowMonotonicUs, int64 EchoedTimestampUs, int64 NowUnixUs)
 {
 	// Timestamp 0 is the protocol sentinel for an unsolicited PONG. It takes
@@ -564,10 +606,10 @@ int64 UHapbeatSubsystem::ResolvePongRttUs(TMap<uint16, int64>& InOutPendingPings
 		return 0;
 	}
 
-	int64 SentMonotonicUs = 0;
-	if (InOutPendingPings.RemoveAndCopyValue(PongSeq, SentMonotonicUs))
+	const FHapbeatPendingPing* Pending = InPendingPings.Find(PongSeq);
+	if (Pending != nullptr && Pending->TimestampUs == EchoedTimestampUs)
 	{
-		return FMath::Max<int64>(0, NowMonotonicUs - SentMonotonicUs);
+		return FMath::Max<int64>(0, NowMonotonicUs - Pending->SentMonotonicUs);
 	}
 
 	return FMath::Max<int64>(0, NowUnixUs - EchoedTimestampUs);
@@ -726,7 +768,51 @@ bool UHapbeatSubsystem::NormalizeClipToCanonical(const UHapbeatClip* Clip, TArra
 	return true;
 }
 
-void UHapbeatSubsystem::RegisterStreamEndpoint(
+const UHapbeatSubsystem::FStreamEndpoint* UHapbeatSubsystem::FindEndpointForRegistration(
+	const FString& Ip, int32 InPort, const FString& Address, double NowSeconds) const
+{
+	const FString EndpointKey = FString::Printf(TEXT("%s:%d|%s"), *Ip, InPort, *Address);
+	if (const FStreamEndpoint* Exact = StreamEndpoints.Find(EndpointKey))
+	{
+		return Exact;
+	}
+	// Same candidate rule as RegisterStreamEndpoint: exactly one expired route /
+	// address match migrates (with its class and lease) into the new key.
+	const FStreamEndpoint* Candidate = nullptr;
+	int32 CandidateCount = 0;
+	for (const TPair<FString, FStreamEndpoint>& Existing : StreamEndpoints)
+	{
+		if (HapbeatStreamSessionContract::IsMigrationCandidate(
+				Existing.Value.Ip, Existing.Value.Port, Existing.Value.Address,
+				Ip, InPort, Address,
+				NowSeconds - Existing.Value.LastPongSeconds <= AliveTimeoutSeconds()))
+		{
+			Candidate = &Existing.Value;
+			++CandidateCount;
+		}
+	}
+	return (CandidateCount == 1 && !StreamSessions.Contains(EndpointKey)) ? Candidate : nullptr;
+}
+
+bool UHapbeatSubsystem::IsEndpointStreamable(const FStreamEndpoint& Endpoint) const
+{
+	return Endpoint.LeaseState.IsStreamable(ClientIncarnation);
+}
+
+bool UHapbeatSubsystem::IsSessionCurrentForEndpoint(const FStreamSession& Session, const FStreamEndpoint& Endpoint) const
+{
+	if (Session.Format == EHapbeatStreamWireFormat::LegacyV1)
+	{
+		return Endpoint.LeaseState.Class == EHapbeatStreamEndpointClass::Legacy;
+	}
+	// v2: the lease the session began under must still be the endpoint's usable
+	// lease. A reboot (new boot id), lease renewal, invalid or superseded lease,
+	// or a class change all retire it.
+	return Endpoint.LeaseState.IsUsableV2Lease(ClientIncarnation)
+		&& Endpoint.LeaseState.Lease == Session.Identity.GetLease();
+}
+
+FString UHapbeatSubsystem::RegisterStreamEndpoint(
 	const FString& Ip, int32 InPort, const FString& Address, double NowSeconds)
 {
 	const FString EndpointKey = FString::Printf(TEXT("%s:%d|%s"), *Ip, InPort, *Address);
@@ -763,6 +849,18 @@ void UHapbeatSubsystem::RegisterStreamEndpoint(
 		{
 			StreamSessionEndedAt.Add(EndpointKey, *EndedAt);
 		}
+		// The stream class / lease belongs to the device, not to the route it
+		// answered from: carry it like the END time so a migrated session keeps
+		// matching its endpoint (an existing exact endpoint keeps its own state).
+		if (!StreamEndpoints.Contains(EndpointKey))
+		{
+			if (const FStreamEndpoint* OldEndpoint = StreamEndpoints.Find(OldKey))
+			{
+				// Copy before Add: growing the map may relocate OldEndpoint.
+				const FHapbeatStreamEndpointLeaseState CarriedState = OldEndpoint->LeaseState;
+				StreamEndpoints.Add(EndpointKey).LeaseState = CarriedState;
+			}
+		}
 		for (TPair<FGuid, FStreamSource>& SourcePair : StreamSources)
 		{
 			if (SourcePair.Value.EndpointKeys.Remove(OldKey) > 0)
@@ -783,6 +881,7 @@ void UHapbeatSubsystem::RegisterStreamEndpoint(
 	Endpoint.Port = InPort;
 	Endpoint.Address = Address;
 	Endpoint.LastPongSeconds = NowSeconds;
+	return EndpointKey;
 }
 
 void UHapbeatSubsystem::ReconcileStreamSources()
@@ -801,6 +900,23 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 		AbandonStreamSession(EndpointKey);
 		StreamEndpoints.Remove(EndpointKey);
 	}
+	// A matched PONG may have changed an endpoint's class (legacy <-> v2), its
+	// lease (device reboot / renewal) or made the lease unusable (invalid /
+	// superseded). The running session is ended NOW in the format and identity it
+	// began with -- no linger -- before any session in the new format can start.
+	TArray<FString> RetiredSessionKeys;
+	for (const TPair<FString, FStreamSession>& SessionPair : StreamSessions)
+	{
+		const FStreamEndpoint* Endpoint = StreamEndpoints.Find(SessionPair.Key);
+		if (Endpoint != nullptr && !IsSessionCurrentForEndpoint(SessionPair.Value, *Endpoint))
+		{
+			RetiredSessionKeys.Add(SessionPair.Key);
+		}
+	}
+	for (const FString& EndpointKey : RetiredSessionKeys)
+	{
+		StopStreamSession(EndpointKey);
+	}
 	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
 	{
 		FStreamSource& Source = Pair.Value;
@@ -813,8 +929,11 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 		for (const TPair<FString, FStreamEndpoint>& EndpointPair : StreamEndpoints)
 		{
 			const FStreamEndpoint& Endpoint = EndpointPair.Value;
+			// Unknown (no matched reply yet), invalid-lease and superseded
+			// endpoints defer: the source waits rather than guessing a format.
 			if (Now - Endpoint.LastPongSeconds <= AliveTimeoutSeconds()
 				&& !Endpoint.Address.IsEmpty()
+				&& IsEndpointStreamable(Endpoint)
 				&& UHapbeatTargetLibrary::AddressMatches(Source.ResolvedTarget, Endpoint.Address))
 			{
 				NewEndpointKeys.Add(EndpointPair.Key);
@@ -862,6 +981,16 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 				continue;
 			}
 			const FStreamEndpoint* Endpoint = StreamEndpoints.Find(EndpointKey);
+			if (Endpoint != nullptr && Endpoint->LeaseState.Class == EHapbeatStreamEndpointClass::V2)
+			{
+				// v2 receivers order sessions by (lease, generation): an old END
+				// cannot stop the new session, so there is no END->BEGIN cooldown.
+				StartEndpointSession(EndpointKey);
+				continue;
+			}
+			// Legacy (pre-v2) receivers cannot tell an old END from a new one, so
+			// this endpoint alone keeps the 300 ms END->BEGIN guard; the source
+			// stays deferred for it meanwhile and other endpoints are unaffected.
 			const FString RouteKey = Endpoint != nullptr ? Endpoint->Ip + TEXT("|") + Endpoint->Address : FString();
 			const double* EndedAt = StreamSessionEndedAt.Find(EndpointKey);
 			const double* RouteEndedAt = StreamRouteEndedAt.Find(RouteKey);
@@ -877,7 +1006,15 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 {
 	const FStreamEndpoint* Endpoint = StreamEndpoints.Find(EndpointKey);
-	if (Endpoint == nullptr || Socket == nullptr || StreamSessions.Contains(EndpointKey))
+	if (Endpoint == nullptr || StreamSessions.Contains(EndpointKey))
+	{
+		return;
+	}
+	bool bHasTransport = Socket != nullptr;
+#if WITH_DEV_AUTOMATION_TESTS
+	bHasTransport = bHasTransport || static_cast<bool>(StreamRunnableFactoryForAutomationTest);
+#endif
+	if (!bHasTransport || !IsEndpointStreamable(*Endpoint))
 	{
 		return;
 	}
@@ -898,13 +1035,52 @@ void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 	{
 		return;
 	}
-	TArray<FString> EndpointIps;
-	EndpointIps.Add(Endpoint->Ip);
+
+	// The session's wire format and identity are fixed here for its whole life.
 	FStreamSession Session;
-	Session.Runnable = new FHapbeatStreamRunnable(
-		FirstSourceId, TArray<uint8>(FirstSource->CanonicalPcm16), 16000, 2, Endpoint->Address,
-		FirstPlayback->GetMirror(), [this]() { return NextSeq(); }, Socket,
-		Endpoint->Port, MoveTemp(EndpointIps), StreamSendAheadSeconds);
+	if (Endpoint->LeaseState.Class == EHapbeatStreamEndpointClass::Legacy)
+	{
+		Session.Format = EHapbeatStreamWireFormat::LegacyV1;
+	}
+	else
+	{
+		// Per-lease monotonic generation, never reused (Unity AllocateSessionIdentity).
+		// Exhaustion fails closed until the lease is renewed.
+		const FHapbeatStreamLeaseIdentity Lease = Endpoint->LeaseState.Lease;
+		uint32& LastGeneration = NextGenerationByLease.FindOrAdd(Lease);
+		if (LastGeneration == MAX_uint32)
+		{
+			UE_LOG(LogHapbeat, Warning, TEXT("Stream generation exhausted for %s; waiting for a new lease."), *EndpointKey);
+			return;
+		}
+		++LastGeneration;
+		Session.Format = EHapbeatStreamWireFormat::SessionV2;
+		Session.Identity = FHapbeatStreamSessionIdentity(Lease, LastGeneration);
+	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	if (StreamRunnableFactoryForAutomationTest)
+	{
+		Session.Runnable = StreamRunnableFactoryForAutomationTest(FirstSourceId,
+			TArray<uint8>(FirstSource->CanonicalPcm16), Endpoint->Address, FirstPlayback->GetMirror(),
+			Session.Format, Session.Identity);
+	}
+	else
+#endif
+	{
+		TArray<FString> EndpointIps;
+		EndpointIps.Add(Endpoint->Ip);
+		Session.Runnable = new FHapbeatStreamRunnable(
+			FirstSourceId, TArray<uint8>(FirstSource->CanonicalPcm16), 16000, 2, Endpoint->Address,
+			FirstPlayback->GetMirror(), [this]() { return NextSeq(); }, Socket,
+			Endpoint->Port, MoveTemp(EndpointIps), StreamSendAheadSeconds,
+			Session.Format, Session.Identity);
+	}
+	if (Session.Runnable == nullptr)
+	{
+		FirstPlayback->SetDeferredNoEndpoint();
+		return;
+	}
 	Session.Thread = FRunnableThread::Create(Session.Runnable, TEXT("HapbeatStreamEndpointThread"), 0, TPri_AboveNormal);
 	if (Session.Thread == nullptr)
 	{
@@ -943,11 +1119,16 @@ void UHapbeatSubsystem::StopStreamSession(const FString& EndpointKey)
 		delete Session.Thread;
 	}
 	delete Session.Runnable;
-	const double EndedAt = FPlatformTime::Seconds();
-	StreamSessionEndedAt.Add(EndpointKey, EndedAt);
-	if (Endpoint != nullptr)
+	// Only a LEGACY END arms the 300 ms guard (pre-v2 firmware cannot reject a
+	// stale END). A v2 END is identity-stamped, so the next v2 BEGIN is immediate.
+	if (Session.Format == EHapbeatStreamWireFormat::LegacyV1)
 	{
-		StreamRouteEndedAt.Add(Endpoint->Ip + TEXT("|") + Endpoint->Address, EndedAt);
+		const double EndedAt = FPlatformTime::Seconds();
+		StreamSessionEndedAt.Add(EndpointKey, EndedAt);
+		if (Endpoint != nullptr)
+		{
+			StreamRouteEndedAt.Add(Endpoint->Ip + TEXT("|") + Endpoint->Address, EndedAt);
+		}
 	}
 }
 
@@ -1058,11 +1239,14 @@ bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 				delete Session.Thread;
 			}
 			delete Session.Runnable;
-			const double EndedAt = FPlatformTime::Seconds();
-			StreamSessionEndedAt.Add(It.Key(), EndedAt);
-			if (const FStreamEndpoint* Endpoint = StreamEndpoints.Find(It.Key()))
+			if (Session.Format == EHapbeatStreamWireFormat::LegacyV1)
 			{
-				StreamRouteEndedAt.Add(Endpoint->Ip + TEXT("|") + Endpoint->Address, EndedAt);
+				const double EndedAt = FPlatformTime::Seconds();
+				StreamSessionEndedAt.Add(It.Key(), EndedAt);
+				if (const FStreamEndpoint* Endpoint = StreamEndpoints.Find(It.Key()))
+				{
+					StreamRouteEndedAt.Add(Endpoint->Ip + TEXT("|") + Endpoint->Address, EndedAt);
+				}
 			}
 			It.RemoveCurrent();
 		}
@@ -1280,52 +1464,30 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 		{
 			return;
 		}
+		if (Pkt.PayloadLength > Pkt.PayloadAvail)
+		{
+			// Truncated datagram: whatever tail it had is unknowable. It still
+			// counts for liveness, but it must never classify the endpoint (a cut
+			// HBS2 tail would otherwise read as "no marker" = legacy).
+			Pong.LeaseTail = EHapbeatPongLeaseTail::Malformed;
+		}
 
-		// RTT: prefer now - sentTime[seq]; fall back to now - echoed timestamp.
-		// PendingPings is game-thread-owned, so we compute the fallback here and
-		// resolve the precise value on the game thread (where the map lives).
+		// Parsing stays on this worker thread; correlation, classification and
+		// every piece of endpoint / session state run on the game thread, which
+		// owns PendingPings and the stream maps.
 		const uint16 PongSeq = Pkt.Seq;
 		const int64 NowMono = NowMicros();
-		const int64 EchoedTs = Pong.Timestamp;
-		const FString DeviceName = Pong.DeviceName;
-		const FString Address = Pong.Address;
-		const FString Firmware = Pong.Firmware;
 
 		// Weak self-guard: a queued game-thread task may run after the subsystem
 		// is torn down. Bail if 'this' is gone (use-after-free guard).
 		TWeakObjectPtr<UHapbeatSubsystem> WeakThis(this);
 		AsyncTask(ENamedThreads::GameThread,
-			[WeakThis, SenderIp, SenderPort, PongSeq, NowMono, EchoedTs, DeviceName, Address, Firmware]()
+			[WeakThis, SenderIp, SenderPort, PongSeq, NowMono, Pong]()
 			{
-				UHapbeatSubsystem* Self = WeakThis.Get();
-				if (Self == nullptr)
+				if (UHapbeatSubsystem* Self = WeakThis.Get())
 				{
-					return;
+					Self->HandlePongGameThread(SenderIp, SenderPort, PongSeq, NowMono, Pong);
 				}
-				const int64 RttUs = ResolvePongRttUs(
-					Self->PendingPings, PongSeq, NowMono, EchoedTs, Self->UnixMicros());
-
-				Self->DevicePongTimes.Add(SenderIp, FPlatformTime::Seconds());
-
-				// A reply proves which subnet the device is really on, so pin
-				// broadcasts there. Until this happens a broadcast still goes out
-				// limited, which on a multi-homed host may be leaving through an
-				// interface with no Hapbeat behind it (see HapbeatNetInterfaces.h).
-				Self->LockRouteFor(SenderIp);
-				if (!Address.IsEmpty())
-				{
-					// Only recorded when the PONG actually carried the address
-					// extension. A device with NO entry stays "unknown" and is
-					// kept by both unicast filters (fail-open) — older firmware
-					// must not silently lose its haptics.
-					Self->DeviceAddresses.Add(SenderIp, Address);
-					Self->RegisterStreamEndpoint(
-						SenderIp, SenderPort, Address, FPlatformTime::Seconds());
-				}
-				Self->ReconcileStreamSources();
-
-				Self->OnPongGameThread(SenderIp, RttUs, DeviceName, Address, Firmware);
-				Self->EvaluateLivenessTransition();
 			});
 	}
 	else if (Pkt.Cmd == FHapbeatProtocol::CmdError)
@@ -1347,6 +1509,65 @@ void UHapbeatSubsystem::HandleReceivedData(const FArrayReaderPtr& Reader, const 
 		});
 	}
 	// Other command ids (PLAY/STOP/...) are SDK->device only; ignore inbound.
+}
+
+void UHapbeatSubsystem::HandlePongGameThread(const FString& SenderIp, int32 SenderPort, uint16 PongSeq,
+	int64 NowMonotonicUs, const FHapbeatProtocol::FPongInfo& Pong)
+{
+	const double NowSeconds = FPlatformTime::Seconds();
+
+	// Classify against the endpoint this PONG will register into (exact key, or
+	// the single expired route it would migrate), BEFORE anything is updated: a
+	// discarded HBS2 reply must not roll address / liveness back either.
+	const FStreamEndpoint* Existing = Pong.Address.IsEmpty()
+		? nullptr
+		: FindEndpointForRegistration(SenderIp, SenderPort, Pong.Address, NowSeconds);
+	FHapbeatStreamEndpointLeaseState NextLeaseState;
+	const HapbeatStreamSessionContract::EPongLeaseDecision Decision =
+		HapbeatStreamSessionContract::EvaluatePongLease(Pong, PongSeq, PendingPings, ClientIncarnation,
+			Existing != nullptr ? &Existing->LeaseState : nullptr, NextLeaseState);
+	if (Decision == HapbeatStreamSessionContract::EPongLeaseDecision::Discard)
+	{
+		return;
+	}
+
+	const int64 RttUs = ResolvePongRttUs(PendingPings, PongSeq, NowMonotonicUs, Pong.Timestamp, UnixMicros());
+
+	DevicePongTimes.Add(SenderIp, NowSeconds);
+
+	// A reply proves which subnet the device is really on, so pin
+	// broadcasts there. Until this happens a broadcast still goes out
+	// limited, which on a multi-homed host may be leaving through an
+	// interface with no Hapbeat behind it (see HapbeatNetInterfaces.h).
+	LockRouteFor(SenderIp);
+	if (!Pong.Address.IsEmpty())
+	{
+		// Only recorded when the PONG actually carried the address
+		// extension. A device with NO entry stays "unknown" and is
+		// kept by both unicast filters (fail-open) — older firmware
+		// must not silently lose its haptics.
+		DeviceAddresses.Add(SenderIp, Pong.Address);
+		const FString EndpointKey = RegisterStreamEndpoint(SenderIp, SenderPort, Pong.Address, NowSeconds);
+		if (Decision == HapbeatStreamSessionContract::EPongLeaseDecision::Accept)
+		{
+			if (FStreamEndpoint* Endpoint = StreamEndpoints.Find(EndpointKey))
+			{
+				if (Endpoint->LeaseState.Class != NextLeaseState.Class)
+				{
+					UE_LOG(LogHapbeat, Log, TEXT("Stream receiver %s classified as %s."), *EndpointKey,
+						NextLeaseState.Class == EHapbeatStreamEndpointClass::V2 ? TEXT("stream session v2")
+						: TEXT("legacy (pre-v2 firmware)"));
+				}
+				Endpoint->LeaseState = NextLeaseState;
+			}
+		}
+	}
+	// Retires sessions whose class / lease changed (END in their old format)
+	// and starts / defers sources under the new state.
+	ReconcileStreamSources();
+
+	OnPongGameThread(SenderIp, RttUs, Pong.DeviceName, Pong.Address, Pong.Firmware);
+	EvaluateLivenessTransition();
 }
 
 void UHapbeatSubsystem::OnPongGameThread(const FString& Endpoint, int64 RttUs, const FString& DeviceName, const FString& Address, const FString& Firmware)

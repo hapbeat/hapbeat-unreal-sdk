@@ -26,6 +26,14 @@ namespace
 		}
 	}
 
+	void AppendU64(TArray<uint8>& B, uint64 V)
+	{
+		for (int32 i = 0; i < 8; ++i)
+		{
+			B.Add(static_cast<uint8>((V >> (8 * i)) & 0xFF));
+		}
+	}
+
 	void AppendF32(TArray<uint8>& B, float V)
 	{
 		uint32 Bits = 0;
@@ -40,10 +48,11 @@ namespace
 		B.Add(0); // null terminator
 	}
 
-	void WriteHeader(TArray<uint8>& P, uint8 Cmd, uint16 Seq, uint16 PayloadLen)
+	void WriteHeader(TArray<uint8>& P, uint8 Cmd, uint16 Seq, uint16 PayloadLen,
+		uint8 HeaderVersion = FHapbeatProtocol::Version)
 	{
 		AppendU16(P, FHapbeatProtocol::Magic);
-		P.Add(FHapbeatProtocol::Version);
+		P.Add(HeaderVersion);
 		P.Add(Cmd);
 		AppendU16(P, Seq);
 		AppendU16(P, PayloadLen);
@@ -60,6 +69,27 @@ namespace
 		return P;
 	}
 
+	/** v2 stream packet: header version 2, MTU-safe stream cap (not the 512-byte command cap). */
+	TArray<uint8> MakeStreamV2Packet(uint8 Cmd, uint16 Seq, const TArray<uint8>& Payload)
+	{
+		checkf(FHapbeatProtocol::HeaderSize + Payload.Num() <= FHapbeatProtocol::MaxStreamPacketSize,
+			TEXT("Hapbeat: v2 stream packet exceeds %d bytes"), FHapbeatProtocol::MaxStreamPacketSize);
+		TArray<uint8> P;
+		P.Reserve(FHapbeatProtocol::HeaderSize + Payload.Num());
+		WriteHeader(P, Cmd, Seq, static_cast<uint16>(Payload.Num()), FHapbeatProtocol::StreamProtocolVersion);
+		P.Append(Payload);
+		return P;
+	}
+
+	void AppendStreamIdentity(TArray<uint8>& B, const FHapbeatStreamSessionIdentity& Identity)
+	{
+		checkf(Identity.IsValid(),
+			TEXT("Hapbeat: a v2 stream packet requires a valid boot id, lease ticket and generation"));
+		AppendU64(B, Identity.DeviceBootId);
+		AppendU32(B, Identity.LeaseTicket);
+		AppendU32(B, Identity.Generation);
+	}
+
 	// ---- little-endian read helpers (parsing) ----
 
 	uint16 ReadU16(const uint8* B)
@@ -67,14 +97,66 @@ namespace
 		return static_cast<uint16>(B[0]) | (static_cast<uint16>(B[1]) << 8);
 	}
 
-	int64 ReadI64(const uint8* B)
+	uint32 ReadU32(const uint8* B)
+	{
+		return static_cast<uint32>(B[0]) | (static_cast<uint32>(B[1]) << 8)
+			| (static_cast<uint32>(B[2]) << 16) | (static_cast<uint32>(B[3]) << 24);
+	}
+
+	uint64 ReadU64(const uint8* B)
 	{
 		uint64 U = 0;
 		for (int32 i = 0; i < 8; ++i)
 		{
 			U |= static_cast<uint64>(B[i]) << (8 * i);
 		}
-		return static_cast<int64>(U);
+		return U;
+	}
+
+	int64 ReadI64(const uint8* B)
+	{
+		return static_cast<int64>(ReadU64(B));
+	}
+
+	/**
+	 * Classify the bytes after volume_wiper (stream-session-v2.md "Legacy receiver
+	 * fallback"). Mirrors Unity ParseStreamLeasePongTail for the Valid case; the
+	 * Absent / Malformed split is the SDK legacy-fallback rule.
+	 */
+	void ParseStreamLeaseTail(const uint8* Payload, int32 AvailLen, int32 Off, FHapbeatProtocol::FPongInfo& Out)
+	{
+		static const uint8 Marker[4] = { 'H', 'B', 'S', '2' };
+		const int32 Remaining = AvailLen - Off;
+		Out.LeaseTail = EHapbeatPongLeaseTail::Absent;
+		if (Remaining <= 0)
+		{
+			return; // PONG ends at/before volume_wiper: no marker
+		}
+		const int32 MarkerBytes = FMath::Min(Remaining, 4);
+		if (FMemory::Memcmp(Payload + Off, Marker, MarkerBytes) != 0)
+		{
+			return; // other (non-HBS2) bytes follow: no marker
+		}
+		if (Remaining < 4
+			|| Remaining != FHapbeatProtocol::StreamLeasePongTailSize
+			|| Payload[Off + 4] != 1
+			|| (Payload[Off + 5] & ~0x03) != 0
+			|| ReadU16(Payload + Off + 6) != 0)
+		{
+			// A marker (or a truncated prefix of one) with a wrong length, version,
+			// reserved field or unknown flag: not a lease reply, and not proof of
+			// a pre-v2 device either.
+			Out.LeaseTail = EHapbeatPongLeaseTail::Malformed;
+			return;
+		}
+
+		const uint8 Flags = Payload[Off + 5];
+		Out.LeaseTail = EHapbeatPongLeaseTail::Valid;
+		Out.EchoedClientIncarnation = ReadU64(Payload + Off + 8);
+		Out.Lease = FHapbeatStreamLeaseIdentity(ReadU64(Payload + Off + 16), ReadU32(Payload + Off + 24));
+		Out.HighWaterTicket = ReadU32(Payload + Off + 28);
+		Out.bLeaseValid = (Flags & 0x01) != 0 && Out.Lease.IsValid();
+		Out.bLeaseSuperseded = (Flags & 0x02) != 0;
 	}
 
 	/**
@@ -147,6 +229,15 @@ TArray<uint8> FHapbeatProtocol::BuildPing(uint16 Seq, int64 TimestampUs)
 	return MakePacket(CmdPing, Seq, Payload);
 }
 
+TArray<uint8> FHapbeatProtocol::BuildPing(uint16 Seq, int64 TimestampUs, uint64 ClientIncarnation)
+{
+	checkf(ClientIncarnation != 0, TEXT("Hapbeat: a stream lease PING requires a nonzero client incarnation"));
+	TArray<uint8> Payload;
+	AppendI64(Payload, TimestampUs);
+	AppendU64(Payload, ClientIncarnation);
+	return MakePacket(CmdPing, Seq, Payload);
+}
+
 TArray<uint8> FHapbeatProtocol::BuildConnectStatus(uint16 Seq, bool bConnected, uint8 Group, const FString& AppName, const FString& DeviceName)
 {
 	TArray<uint8> Payload;
@@ -203,6 +294,45 @@ TArray<uint8> FHapbeatProtocol::BuildStreamEnd(uint16 Seq)
 	return MakePacket(CmdStreamEnd, Seq, TArray<uint8>());
 }
 
+TArray<uint8> FHapbeatProtocol::BuildStreamBeginV2(uint16 Seq, const FHapbeatStreamSessionIdentity& Identity,
+	uint16 SampleRate, uint8 Channels, uint8 Format, uint32 TotalSamples, float Gain, const FString& Target)
+{
+	TArray<uint8> Payload;
+	AppendStreamIdentity(Payload, Identity);
+	AppendU16(Payload, SampleRate);
+	Payload.Add(Channels);
+	Payload.Add(Format);
+	AppendU32(Payload, TotalSamples);
+	AppendF32(Payload, Gain);
+	if (!Target.IsEmpty())
+	{
+		AppendCStr(Payload, Target);
+	}
+	return MakeStreamV2Packet(CmdStreamBegin, Seq, Payload);
+}
+
+TArray<uint8> FHapbeatProtocol::BuildStreamDataV2(uint16 Seq, const FHapbeatStreamSessionIdentity& Identity,
+	uint32 Offset, const uint8* Data, int32 NumBytes)
+{
+	const int32 SafeBytes = (Data != nullptr && NumBytes > 0) ? NumBytes : 0;
+	TArray<uint8> Payload;
+	Payload.Reserve(StreamSessionEnvelopeSize + 4 + SafeBytes);
+	AppendStreamIdentity(Payload, Identity);
+	AppendU32(Payload, Offset);
+	if (SafeBytes > 0)
+	{
+		Payload.Append(Data, SafeBytes);
+	}
+	return MakeStreamV2Packet(CmdStreamData, Seq, Payload);
+}
+
+TArray<uint8> FHapbeatProtocol::BuildStreamEndV2(uint16 Seq, const FHapbeatStreamSessionIdentity& Identity)
+{
+	TArray<uint8> Payload;
+	AppendStreamIdentity(Payload, Identity);
+	return MakeStreamV2Packet(CmdStreamEnd, Seq, Payload);
+}
+
 bool FHapbeatProtocol::ParsePacket(const uint8* Buf, int32 Len, FParsedPacket& Out)
 {
 	if (Buf == nullptr || Len < HeaderSize)
@@ -251,10 +381,16 @@ bool FHapbeatProtocol::ParsePong(const uint8* Payload, int32 AvailLen, FPongInfo
 		Out.DeviceName = ReadCStr(Payload, AvailLen, Off);
 		Out.Address = ReadCStr(Payload, AvailLen, Off);
 		Out.Firmware = ReadCStr(Payload, AvailLen, Off);
+		Out.VolumeLevel = Off < AvailLen ? static_cast<int32>(Payload[Off++]) : -1;
+		Out.VolumeWiper = Off < AvailLen ? static_cast<int32>(Payload[Off++]) : -1;
+		ParseStreamLeaseTail(Payload, AvailLen, Off, Out);
 	}
 	else
 	{
 		Out.bExtended = false;
+		Out.VolumeLevel = -1;
+		Out.VolumeWiper = -1;
+		Out.LeaseTail = EHapbeatPongLeaseTail::Absent;
 	}
 	return true;
 }

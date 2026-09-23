@@ -258,6 +258,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamSubsystemRoutingTest,
 
 bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 {
+	// Streams only go to endpoints a matched PONG has classified. These routing
+	// cases are about target/route handling, so their endpoints are marked as
+	// pre-v2 (legacy) receivers, whose sessions carry no identity.
+	auto MarkLegacy = [](UHapbeatSubsystem* Subsystem, const FString& Key)
+	{
+		Subsystem->StreamEndpoints.FindChecked(Key).LeaseState.Class = EHapbeatStreamEndpointClass::Legacy;
+	};
+
 	UHapbeatSubsystem* Live = NewTestSubsystem();
 	Live->RegisterStreamEndpoint(TEXT("192.0.2.10"), 7700, TEXT("player_1/pos_l_arm"), 100.0);
 	Live->RegisterStreamEndpoint(TEXT("192.0.2.10"), 7701, TEXT("player_2/pos_l_arm"), 101.0);
@@ -301,6 +309,7 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	const FString NewKey = TEXT("192.0.2.40:7700|player_5/pos_l_arm");
 	Migrating->RegisterStreamEndpoint(TEXT("192.0.2.40"), 7700, TEXT("player_4/pos_l_arm"),
 		Now - Migrating->AliveTimeoutSeconds() - 1.0);
+	MarkLegacy(Migrating, OldKey);
 	UHapbeatSubsystem::FStreamSource& Source = Migrating->StreamSources.Add(SourceId);
 	Source.CanonicalPcm16 = MakeStereoPcm(1000, 160);
 	Source.ResolvedTarget = TEXT("player_4/pos_l_arm");
@@ -315,6 +324,8 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	Migrating->ReconcileStreamSources();
 	TestTrue(TEXT("runner migrated without duplicate session"),
 		Migrating->StreamSessions.Contains(NewKey) && Migrating->StreamSessions.Num() == 1);
+	TestEqual(TEXT("route migration carries the endpoint stream class"),
+		Migrating->StreamEndpoints.FindChecked(NewKey).LeaseState.Class, EHapbeatStreamEndpointClass::Legacy);
 	TestEqual(TEXT("mismatched migrated source detached from session"),
 		Migrating->StreamSessions[NewKey].SourceIds.Num(), 0);
 	TestEqual(TEXT("mismatched Playback becomes Deferred"),
@@ -339,6 +350,8 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	const FString P3Key = TEXT("192.0.2.62:7700|player_3/pos_l_arm");
 	OverrideRouting->RegisterStreamEndpoint(TEXT("192.0.2.60"), 7700, P1, OverrideNow);
 	OverrideRouting->RegisterStreamEndpoint(TEXT("192.0.2.61"), 7700, P2, OverrideNow);
+	MarkLegacy(OverrideRouting, P1Key);
+	MarkLegacy(OverrideRouting, P2Key);
 
 	UHapbeatStreamPlayback* OverridePlayback = NewObject<UHapbeatStreamPlayback>(OverrideRouting);
 	OverridePlayback->Init(1.0f, 1.0f);
@@ -385,6 +398,7 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("unknown P3 requests one fake PING"), OverrideRouting->StreamDiscoveryRequestCount, 1);
 
 	OverrideRouting->RegisterStreamEndpoint(TEXT("192.0.2.62"), 7700, P3, OverrideNow + 0.01);
+	MarkLegacy(OverrideRouting, P3Key);
 	OverrideRouting->ReconcileStreamSources();
 	TestTrue(TEXT("PONG-equivalent P3 registration joins without replay"),
 		OverrideSource.EndpointKeys.Contains(P3Key));
@@ -418,6 +432,7 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	const FString DeferredP1 = TEXT("player_1/pos_l_arm");
 	const FString DeferredP1Key = TEXT("192.0.2.70:7700|player_1/pos_l_arm");
 	DeferredStop->RegisterStreamEndpoint(TEXT("192.0.2.70"), 7700, DeferredP1, DeferredNow);
+	MarkLegacy(DeferredStop, DeferredP1Key);
 	UHapbeatStreamPlayback* DeferredPlayback = NewObject<UHapbeatStreamPlayback>(DeferredStop);
 	DeferredPlayback->Init(1.0f, 1.0f);
 	DeferredPlayback->SetActive();
@@ -440,8 +455,12 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 		DeferredPlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Stopped);
 	TestEqual(TEXT("stopped deferred stream has no rejoined endpoint"), DeferredSource.EndpointKeys.Num(), 0);
 
-	TMap<uint16, int64> UnsolicitedPings;
-	UnsolicitedPings.Add(0, 500);
+	TMap<uint16, FHapbeatPendingPing> UnsolicitedPings;
+	FHapbeatPendingPing WrappedPing;
+	WrappedPing.SentMonotonicUs = 500;
+	WrappedPing.TimestampUs = 1'234;
+	WrappedPing.ClientIncarnation = 1;
+	UnsolicitedPings.Add(0, WrappedPing);
 	TestEqual(TEXT("timestamp-zero unsolicited PONG has no RTT estimate"),
 		UHapbeatSubsystem::ResolvePongRttUs(UnsolicitedPings, 0, 1'000, 0, 2'000'000), 0LL);
 	TestTrue(TEXT("timestamp-zero unsolicited PONG preserves wrapped pending PING"),

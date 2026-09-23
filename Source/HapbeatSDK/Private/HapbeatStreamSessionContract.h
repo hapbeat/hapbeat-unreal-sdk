@@ -93,8 +93,8 @@ namespace HapbeatStreamSessionContract
 			}
 
 			// A superseded writer must not turn a later periodic discovery reply
-			// into an implicit takeover. Only a fresh incarnation (Connect) clears
-			// the latch.
+			// into an implicit takeover. Only a fresh incarnation (Connect or
+			// ReacquireStreamOwnership, incl. foreground resume) clears the latch.
 			const bool bKeepSuperseded = Existing != nullptr
 				&& Existing->Class == EHapbeatStreamEndpointClass::V2
 				&& Existing->bLeaseSuperseded

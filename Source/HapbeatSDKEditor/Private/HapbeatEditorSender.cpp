@@ -392,6 +392,20 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 	const int32 Port = Config != nullptr ? Config->Port : 7700;
 	const float SendAhead = Config != nullptr ? Config->StreamSendAheadSeconds : 0.05f;
 
+	// TODO(stream-session-v2): editor Test Play has no PING correlation /
+	// per-endpoint classification yet, so it can only speak the legacy (pre-v2)
+	// stream format. v2 firmware rejects that silently; say so once per editor
+	// session instead of leaving the user with unexplained silence. Runtime
+	// streaming (UHapbeatSubsystem) implements v2 + the legacy fallback.
+	static bool bWarnedLegacyOnly = false;
+	if (!bWarnedLegacyOnly)
+	{
+		bWarnedLegacyOnly = true;
+		UE_LOG(LogHapbeatEditorSender, Warning,
+			TEXT("[Hapbeat] Editor stream Test Play sends the legacy (pre-v2) stream format only: devices on ")
+			TEXT("stream-session-v2 firmware stay silent here. Use PIE / a packaged build to preview streams on them."));
+	}
+
 	StreamRunnable = new FHapbeatStreamRunnable(
 		FGuid::NewGuid(),
 		TArray<uint8>(Clip->Pcm16),
@@ -403,7 +417,8 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 		Socket,
 		Port,
 		MoveTemp(UnicastIps),
-		SendAhead);
+		SendAhead,
+		EHapbeatStreamWireFormat::LegacyV1);
 
 	StreamThread = FRunnableThread::Create(StreamRunnable, TEXT("HapbeatEditorStream"), 0, TPri_AboveNormal);
 

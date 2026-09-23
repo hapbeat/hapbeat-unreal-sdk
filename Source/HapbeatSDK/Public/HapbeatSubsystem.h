@@ -22,6 +22,8 @@ class UHapbeatStreamPlayback;
 class FHapbeatStreamSubsystemRoutingTest;
 struct FHapbeatEventEntry;
 class FHapbeatStreamLegacyFallbackSubsystemTest;
+class FHapbeatStreamReacquireOwnershipTest;
+class FHapbeatStreamIdentityUpdateDiscoveryTest;
 struct FHapbeatStreamGainMirror;
 
 /** What a deferred (haptic-delay) send does once its timer fires. See FHapbeatPendingSend. */
@@ -237,6 +239,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Ping (Hapbeat)"))
 	void Ping();
 
+	/**
+	 * Explicitly request fresh stream-lease ownership (stream-session-v2.md
+	 * "Discovery lease"). Required after another writer superseded this SDK on a
+	 * v2 device: periodic discovery never takes the stream back on its own.
+	 * Issues a new client incarnation, forgets every v2 / unknown lease (running
+	 * v2 sessions END under their old identity immediately) and PINGs; legacy
+	 * endpoints keep their class and their streams. Also runs automatically when
+	 * the application returns to the foreground / is reactivated. Unlike
+	 * Connect() it keeps device knowledge, so legacy streams are not interrupted.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Reacquire Stream Ownership (Hapbeat)"))
+	void ReacquireStreamOwnership();
+
 	// ---- Real-time clip streaming (Phase 3) ----
 
 	/**
@@ -402,6 +417,8 @@ public:
 private:
 	friend class FHapbeatStreamSubsystemRoutingTest;
 	friend class FHapbeatStreamLegacyFallbackSubsystemTest;
+	friend class FHapbeatStreamReacquireOwnershipTest;
+	friend class FHapbeatStreamIdentityUpdateDiscoveryTest;
 	void SendPacket(const TArray<uint8>& Packet);
 
 	// ---- Haptic delay (PlayEntry / StopEntry only) ----
@@ -564,11 +581,52 @@ private:
 	 */
 	static constexpr float DiscoveryTickSeconds = 0.25f;
 
-	/** How often to actually send PING + CONNECT_STATUS: fast until a device answers, then PingInterval. */
+	/**
+	 * Upper bound on the extended-PING cadence while any endpoint is v2. A v2
+	 * receiver expires a non-active lease slot 15 s after the last PING
+	 * (stream-session-v2.md "Discovery lease"); a longer PingInterval would let
+	 * the next BEGIN go out under a ticket the device has already dropped.
+	 */
+	static constexpr float V2LeaseRefreshSeconds = 5.0f;
+
+	/**
+	 * How often to actually send PING + CONNECT_STATUS: fast until a device
+	 * answers, then PingInterval (capped at V2LeaseRefreshSeconds while a v2
+	 * endpoint is known).
+	 */
 	float KeepAliveIntervalSeconds() const
 	{
-		return GetAliveDeviceCount() > 0 ? PingInterval : DiscoveryTickSeconds;
+		return ComputeKeepAliveIntervalSeconds(GetAliveDeviceCount(), HasV2StreamEndpoint(), PingInterval);
 	}
+	static float ComputeKeepAliveIntervalSeconds(int32 AliveDeviceCount, bool bHasV2Endpoint, float InPingInterval)
+	{
+		if (AliveDeviceCount <= 0)
+		{
+			return DiscoveryTickSeconds;
+		}
+		return bHasV2Endpoint ? FMath::Min(InPingInterval, V2LeaseRefreshSeconds) : InPingInterval;
+	}
+
+	/** Any known endpoint classified v2 (usable or not). */
+	bool HasV2StreamEndpoint() const;
+
+	/**
+	 * Send one discovery PING if a socket is open (never opens one). The
+	 * automation seam records the request instead of sending.
+	 */
+	void RequestDiscoveryPing();
+
+	/** Foreground / reactivation hook: ReacquireStreamOwnership, debounced, on the game thread. */
+	void HandleApplicationForeground();
+	void BindApplicationLifecycle();
+	void UnbindApplicationLifecycle();
+	FDelegateHandle EnteredForegroundHandle;
+	FDelegateHandle ReactivatedHandle;
+	FDelegateHandle SlateActivationHandle;
+	/** FPlatformTime::Seconds() of the last ReacquireStreamOwnership (debounces duplicate lifecycle events). */
+	double LastReacquireSeconds = -1.0e9;
+	/** Rate limit for the PING sent when an identity update leaves a known device's new key unclassified. */
+	double LastIdentityDiscoveryPingSeconds = -1.0e9;
 
 	/** FPlatformTime::Seconds() of the last keep-alive send (gates the tick above). */
 	double LastKeepAliveSendTime = 0.0;
@@ -639,7 +697,8 @@ private:
 	TMap<uint16, FHapbeatPendingPing> PendingPings;
 	/**
 	 * Client incarnation written into every extended PING. Regenerated (nonzero)
-	 * in Connect() only; periodic discovery keeps it unchanged. Game thread only.
+	 * in Connect() and ReacquireStreamOwnership() (explicit, or on foreground
+	 * resume); periodic discovery keeps it unchanged. Game thread only.
 	 */
 	uint64 ClientIncarnation = 0;
 	/** Last PING wire timestamp; PING timestamps are made strictly increasing so reply order is total. */

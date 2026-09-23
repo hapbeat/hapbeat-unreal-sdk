@@ -15,6 +15,7 @@
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/CoreDelegates.h"
 #include "Misc/Parse.h"
 #include "Misc/ScopeLock.h"
 
@@ -784,6 +785,8 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 	}
 
 	// --- Superseded: stop and defer that endpoint, no automatic takeover.
+	AddExpectedMessage(TEXT("was superseded by another writer"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 1, /*IsRegex=*/false);
 	const TPair<uint16, int64> Takeover = IssuePing();
 	Deliver(TEXT("192.0.2.81"), Takeover.Key, V2Pong(Takeover.Value, "player_1/pos_r_arm", Inc, RebootedB, 1, 0x03));
 	TestFalse(TEXT("superseded lease stops the endpoint session"), Sub->StreamSessions.Contains(KeyB));
@@ -795,6 +798,254 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 
 	Sub->StopStream();
 	TestEqual(TEXT("StopStream ends every session"), Sub->StreamSessions.Num(), 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Subsystem: reacquisition after supersede, foreground hook, identity-update
+// discovery, v2 lease-refresh cadence
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamReacquireOwnershipTest,
+	"Hapbeat.Streaming.SessionV2.ReacquireOwnership",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamReacquireOwnershipTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	UHapbeatSubsystem* Sub = NewObject<UHapbeatSubsystem>(GameInstance);
+	Sub->bSuppressStreamDiscoveryForAutomationTest = true;
+	const uint64 Inc = 0x0F0E0D0C0B0A0908ULL;
+	Sub->ClientIncarnation = Inc;
+	TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> Log = MakeShared<FStreamPacketLog, ESPMode::ThreadSafe>();
+	Sub->StreamRunnableFactoryForAutomationTest =
+		[Log](const FGuid& SourceId, TArray<uint8>&& Pcm16, const FString& Target,
+			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror, EHapbeatStreamWireFormat Format,
+			const FHapbeatStreamSessionIdentity& Identity) -> FHapbeatStreamRunnable*
+		{
+			return new FLoggingStreamRunnable(SourceId, MoveTemp(Pcm16), Target, Mirror, Format, Identity, Log);
+		};
+
+	const FString AddrA = TEXT("player_1/pos_l_arm"); // pre-v2 device
+	const FString AddrB = TEXT("player_1/pos_r_arm"); // v2 device
+	const FString KeyA = TEXT("192.0.2.90:7700|player_1/pos_l_arm");
+	const FString KeyB = TEXT("192.0.2.91:7700|player_1/pos_r_arm");
+	const uint64 BootB = 0x00000000000B0091ULL;
+	int64 NextTs = 9000;
+	uint16 NextSeq = 300;
+	auto IssuePing = [&]() -> TPair<uint16, int64>
+	{
+		const TPair<uint16, int64> Issued(NextSeq++, NextTs);
+		NextTs += 1000;
+		Sub->PendingPings.Add(Issued.Key, Pending(Issued.Value, Sub->ClientIncarnation));
+		return Issued;
+	};
+	auto Deliver = [&](const TCHAR* Ip, uint16 Seq, const FHapbeatProtocol::FPongInfo& Pong)
+	{
+		Sub->HandlePongGameThread(Ip, 7700, Seq, static_cast<int64>(FPlatformTime::Seconds() * 1'000'000.0), Pong);
+	};
+	auto ClassOf = [&](const FString& Key)
+	{
+		const UHapbeatSubsystem::FStreamEndpoint* Endpoint = Sub->StreamEndpoints.Find(Key);
+		return Endpoint != nullptr ? Endpoint->LeaseState.Class : EHapbeatStreamEndpointClass::Unknown;
+	};
+
+	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(Sub);
+	Playback->Init(1.0f, 1.0f);
+	Playback->SetLoop(true);
+	UHapbeatSubsystem::FStreamSource& Source = Sub->StreamSources.Add(Playback->Id);
+	Source.CanonicalPcm16 = MakeSessionTestPcm(1000, 160);
+	Source.Playback = Playback;
+	Sub->ActivePlaybacks.Add(Playback);
+
+	const TPair<uint16, int64> First = IssuePing();
+	Deliver(TEXT("192.0.2.90"), First.Key, LegacyPong(First.Value, "player_1/pos_l_arm"));
+	Deliver(TEXT("192.0.2.91"), First.Key, V2Pong(First.Value, "player_1/pos_r_arm", Inc, BootB, 3));
+	if (!TestTrue(TEXT("legacy + v2 sessions running"),
+			Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions.Contains(KeyB)))
+	{
+		Sub->StopStream();
+		return false;
+	}
+	TestTrue(TEXT("B BEGIN sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 1));
+
+	// --- v2 lease-refresh cadence: PingInterval above the device's 15 s lease
+	// TTL is capped while a v2 endpoint is known, and only then.
+	TestTrue(TEXT("a v2 endpoint is known"), Sub->HasV2StreamEndpoint());
+	TestTrue(TEXT("a v2 endpoint caps the PING cadence below the 15 s lease TTL"),
+		UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(2, true, 30.0f) <= UHapbeatSubsystem::V2LeaseRefreshSeconds
+		&& UHapbeatSubsystem::V2LeaseRefreshSeconds < 15.0f);
+	TestEqual(TEXT("a shorter PingInterval is kept"), UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(2, true, 2.0f), 2.0f);
+	TestEqual(TEXT("without v2 endpoints PingInterval is used as is"),
+		UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(2, false, 30.0f), 30.0f);
+	TestEqual(TEXT("nothing alive keeps the fast discovery cadence"),
+		UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(0, true, 30.0f), UHapbeatSubsystem::DiscoveryTickSeconds);
+
+	// --- Superseded: logged once, deferred, and periodic discovery keeps it so.
+	AddExpectedMessage(TEXT("was superseded by another writer"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 1, /*IsRegex=*/false);
+	const TPair<uint16, int64> Takeover = IssuePing();
+	Deliver(TEXT("192.0.2.91"), Takeover.Key, V2Pong(Takeover.Value, "player_1/pos_r_arm", Inc, BootB, 3, 0x03));
+	TestFalse(TEXT("superseded lease stops B"), Sub->StreamSessions.Contains(KeyB));
+	const TPair<uint16, int64> Periodic = IssuePing();
+	Deliver(TEXT("192.0.2.91"), Periodic.Key, V2Pong(Periodic.Value, "player_1/pos_r_arm", Inc, BootB, 3, 0x03));
+	TestFalse(TEXT("B stays deferred under the same incarnation"), Sub->StreamSessions.Contains(KeyB));
+	FHapbeatStreamRunnable* const RunningA = Sub->StreamSessions[KeyA].Runnable;
+	const int32 APacketsBefore = Log->Snapshot(AddrA).Num();
+
+	// --- The foreground hook is bound to the application lifecycle and reacquires.
+	Sub->BindApplicationLifecycle();
+	TestTrue(TEXT("foreground delegate bound"), FCoreDelegates::ApplicationHasEnteredForegroundDelegate.IsBoundToObject(Sub));
+	TestTrue(TEXT("reactivation delegate bound"), FCoreDelegates::ApplicationHasReactivatedDelegate.IsBoundToObject(Sub));
+	const int32 DiscoveryBefore = Sub->StreamDiscoveryRequestCount;
+	Sub->HandleApplicationForeground();
+	const uint64 NewInc = Sub->ClientIncarnation;
+	TestTrue(TEXT("foreground resume issues a fresh nonzero incarnation"), NewInc != 0 && NewInc != Inc);
+	TestEqual(TEXT("... sends one discovery PING"), Sub->StreamDiscoveryRequestCount, DiscoveryBefore + 1);
+	TestEqual(TEXT("... drops the old incarnation's outstanding requests"), Sub->PendingPings.Num(), 0);
+	Sub->HandleApplicationForeground();
+	TestEqual(TEXT("a duplicate lifecycle event within 1 s does not reacquire again"), Sub->ClientIncarnation, NewInc);
+	Sub->UnbindApplicationLifecycle();
+	TestFalse(TEXT("lifecycle delegates unbound"),
+		FCoreDelegates::ApplicationHasEnteredForegroundDelegate.IsBoundToObject(Sub)
+		|| FCoreDelegates::ApplicationHasReactivatedDelegate.IsBoundToObject(Sub));
+
+	TestEqual(TEXT("reacquire keeps the legacy class"), ClassOf(KeyA), EHapbeatStreamEndpointClass::Legacy);
+	TestTrue(TEXT("... and leaves the legacy session running untouched"),
+		Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions[KeyA].Runnable == RunningA);
+	TestEqual(TEXT("... without sending it an END"),
+		Log->Count(AddrA, FHapbeatProtocol::CmdStreamEnd), 0);
+	TestEqual(TEXT("reacquire forgets the superseded v2 lease"), ClassOf(KeyB), EHapbeatStreamEndpointClass::Unknown);
+
+	// A late reply to the old incarnation's request cannot restore anything.
+	Sub->PendingPings.Add(Periodic.Key, Pending(Periodic.Value, Inc));
+	Deliver(TEXT("192.0.2.91"), Periodic.Key, V2Pong(Periodic.Value, "player_1/pos_r_arm", Inc, BootB, 3));
+	TestEqual(TEXT("an old-incarnation reply is discarded after reacquire"), ClassOf(KeyB), EHapbeatStreamEndpointClass::Unknown);
+	Sub->PendingPings.Empty();
+
+	// The fresh lease reply resumes B at once under the new ticket.
+	const TPair<uint16, int64> Fresh = IssuePing();
+	Deliver(TEXT("192.0.2.90"), Fresh.Key, LegacyPong(Fresh.Value, "player_1/pos_l_arm"));
+	Deliver(TEXT("192.0.2.91"), Fresh.Key, V2Pong(Fresh.Value, "player_1/pos_r_arm", NewInc, BootB, 4));
+	TestTrue(TEXT("superseded endpoint resumes after reacquisition"),
+		Sub->StreamSessions.Contains(KeyB)
+		&& Sub->StreamSessions[KeyB].Identity == FHapbeatStreamSessionIdentity(FHapbeatStreamLeaseIdentity(BootB, 4), 1));
+	TestTrue(TEXT("B BEGIN under the new lease sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 2));
+	TestTrue(TEXT("legacy session still the same runner"),
+		Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions[KeyA].Runnable == RunningA);
+
+	// --- Reacquire while a v2 session is running: END under the relinquished
+	// identity first, nothing more under it afterwards.
+	const int32 BPacketsBefore = Log->Snapshot(AddrB).Num();
+	Sub->ReacquireStreamOwnership();
+	TestFalse(TEXT("reacquire ends the running v2 session"), Sub->StreamSessions.Contains(KeyB));
+	const uint64 ThirdInc = Sub->ClientIncarnation;
+	const TPair<uint16, int64> Renewed = IssuePing();
+	Deliver(TEXT("192.0.2.91"), Renewed.Key, V2Pong(Renewed.Value, "player_1/pos_r_arm", ThirdInc, BootB, 5));
+	TestTrue(TEXT("renewed-lease BEGIN sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 3));
+	{
+		const TArray<FStreamPacketLog::FEntry> Entries = Log->Snapshot(AddrB);
+		bool bSawOldEnd = false;
+		bool bOldEndBeforeNewBegin = false;
+		bool bOldAfterNewBegin = false;
+		bool bSawNewBegin = false;
+		for (int32 Index = BPacketsBefore; Index < Entries.Num(); ++Index)
+		{
+			const TArray<uint8>& Packet = Entries[Index].Packet;
+			const uint32 Ticket = EnvelopeOf(Packet).LeaseTicket;
+			if (Packet[3] == FHapbeatProtocol::CmdStreamEnd && Ticket == 4u)
+			{
+				bSawOldEnd = true;
+			}
+			if (Packet[3] == FHapbeatProtocol::CmdStreamBegin && Ticket == 5u)
+			{
+				bOldEndBeforeNewBegin = bSawOldEnd;
+				bSawNewBegin = true;
+			}
+			if (bSawNewBegin && Ticket == 4u)
+			{
+				bOldAfterNewBegin = true;
+			}
+		}
+		TestTrue(TEXT("reacquire: relinquished lease ENDs before the renewed BEGIN"), bOldEndBeforeNewBegin);
+		TestFalse(TEXT("reacquire: nothing goes out under the relinquished lease afterwards"), bOldAfterNewBegin);
+	}
+	TestEqual(TEXT("the legacy endpoint never saw an END through all of it"),
+		Log->Count(AddrA, FHapbeatProtocol::CmdStreamEnd), 0);
+	TestTrue(TEXT("... and never a second BEGIN"), Log->Count(AddrA, FHapbeatProtocol::CmdStreamBegin) == 1
+		&& Log->Snapshot(AddrA).Num() >= APacketsBefore);
+
+	Sub->StopStream();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamIdentityUpdateDiscoveryTest,
+	"Hapbeat.Streaming.SessionV2.IdentityUpdateDiscovery",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamIdentityUpdateDiscoveryTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	UHapbeatSubsystem* Sub = NewObject<UHapbeatSubsystem>(GameInstance);
+	Sub->bSuppressStreamDiscoveryForAutomationTest = true;
+	const uint64 Inc = 0x1111222233334444ULL;
+	Sub->ClientIncarnation = Inc;
+	TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> Log = MakeShared<FStreamPacketLog, ESPMode::ThreadSafe>();
+	Sub->StreamRunnableFactoryForAutomationTest =
+		[Log](const FGuid& SourceId, TArray<uint8>&& Pcm16, const FString& Target,
+			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror, EHapbeatStreamWireFormat Format,
+			const FHapbeatStreamSessionIdentity& Identity) -> FHapbeatStreamRunnable*
+		{
+			return new FLoggingStreamRunnable(SourceId, MoveTemp(Pcm16), Target, Mirror, Format, Identity, Log);
+		};
+	auto Deliver = [&](const TCHAR* Ip, uint16 Seq, const FHapbeatProtocol::FPongInfo& Pong)
+	{
+		Sub->HandlePongGameThread(Ip, 7700, Seq, static_cast<int64>(FPlatformTime::Seconds() * 1'000'000.0), Pong);
+	};
+
+	const FString OldKey = TEXT("192.0.2.95:7700|player_1/pos_chest");
+	const FString NewKey = TEXT("192.0.2.95:7700|player_2/pos_chest");
+
+	// A source that targets only the device's NEW address.
+	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(Sub);
+	Playback->Init(1.0f, 1.0f);
+	Playback->SetLoop(true);
+	UHapbeatSubsystem::FStreamSource& Source = Sub->StreamSources.Add(Playback->Id);
+	Source.CanonicalPcm16 = MakeSessionTestPcm(1000, 160);
+	Source.Playback = Playback;
+	Source.ResolvedTarget = TEXT("player_2");
+	Sub->ActivePlaybacks.Add(Playback);
+
+	// A device that was never classified: its unsolicited PONG asks for nothing.
+	Deliver(TEXT("192.0.2.96"), 0, LegacyPong(0, "player_3/pos_chest"));
+	TestEqual(TEXT("an unknown device's identity PONG sends no extra PING"), Sub->StreamDiscoveryRequestCount, 0);
+
+	// Classify the device under its old address.
+	Sub->PendingPings.Add(400, Pending(20000, Inc));
+	Deliver(TEXT("192.0.2.95"), 400, LegacyPong(20000, "player_1/pos_chest"));
+	TestEqual(TEXT("old key legacy"), Sub->StreamEndpoints.FindChecked(OldKey).LeaseState.Class,
+		EHapbeatStreamEndpointClass::Legacy);
+	TestEqual(TEXT("source does not match the old address"), Playback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
+
+	// Address change: the device's unsolicited identity PONG (seq 0, timestamp 0).
+	Deliver(TEXT("192.0.2.95"), 0, LegacyPong(0, "player_2/pos_chest"));
+	TestEqual(TEXT("identity update registers the new key unclassified"),
+		Sub->StreamEndpoints.FindChecked(NewKey).LeaseState.Class, EHapbeatStreamEndpointClass::Unknown);
+	TestEqual(TEXT("... and requests one matched reply immediately"), Sub->StreamDiscoveryRequestCount, 1);
+	Deliver(TEXT("192.0.2.95"), 0, LegacyPong(0, "player_2/pos_chest"));
+	TestEqual(TEXT("a repeated identity PONG within 1 s is rate limited"), Sub->StreamDiscoveryRequestCount, 1);
+
+	// The matched reply to that PING classifies the new key; the source starts.
+	Sub->PendingPings.Add(401, Pending(21000, Inc));
+	Deliver(TEXT("192.0.2.95"), 401, LegacyPong(21000, "player_2/pos_chest"));
+	TestEqual(TEXT("matched reply classifies the new key"),
+		Sub->StreamEndpoints.FindChecked(NewKey).LeaseState.Class, EHapbeatStreamEndpointClass::Legacy);
+	TestTrue(TEXT("the source streams to the new address"), Sub->StreamSessions.Contains(NewKey));
+	TestEqual(TEXT("... and is active"), Playback->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
+
+	Sub->StopStream();
 	return true;
 }
 

@@ -19,7 +19,9 @@
 #include "TimerManager.h"
 #include "HAL/RunnableThread.h"   // FRunnableThread::Create/Kill for the dedicated stream thread
 #include "Interfaces/IPv4/IPv4Address.h"
+#include "Framework/Application/SlateApplication.h" // desktop app activation -> ReacquireStreamOwnership
 #include "Misc/App.h"
+#include "Misc/CoreDelegates.h" // mobile foreground / reactivation -> ReacquireStreamOwnership
 #include "Misc/ConfigCacheIni.h" // GConfig / GGameUserSettingsIni — address-override persistence
 #include "Misc/ScopeLock.h"      // FScopeLock (SeqLock)
 #include "Sockets.h"
@@ -102,12 +104,17 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// GameInstanceSubsystems exist only in PIE / packaged game (not the editor
 	// itself), so this never opens a socket in edit mode.
 	Connect(Port, AppName);
+
+	// stream-session-v2.md: foreground resume issues a fresh client incarnation
+	// (Unity HapbeatManager.OnApplicationFocus -> ReacquireStreamOwnership).
+	BindApplicationLifecycle();
 }
 
 void UHapbeatSubsystem::Deinitialize()
 {
 	// Block any late SendPacket from lazily re-opening the socket during teardown.
 	bShuttingDown = true;
+	UnbindApplicationLifecycle();
 
 	// Drop anything the haptic delay was still holding. The GameInstance timer
 	// manager dies with the game instance anyway (PIE stop), but clearing here
@@ -584,6 +591,133 @@ void UHapbeatSubsystem::Ping()
 	// Extended (16-byte) PING: v2 receivers answer with an HBS2 lease tail,
 	// pre-v2 firmware ignores the extra bytes and answers an ordinary PONG.
 	SendDiscoveryPacket(FHapbeatProtocol::BuildPing(PingSeq, TimestampUs, ClientIncarnation));
+}
+
+void UHapbeatSubsystem::RequestDiscoveryPing()
+{
+#if WITH_DEV_AUTOMATION_TESTS
+	if (bSuppressStreamDiscoveryForAutomationTest)
+	{
+		++StreamDiscoveryRequestCount;
+		return;
+	}
+#endif
+	if (Socket != nullptr)
+	{
+		Ping();
+	}
+}
+
+void UHapbeatSubsystem::ReacquireStreamOwnership()
+{
+	if (bShuttingDown)
+	{
+		return;
+	}
+	LastReacquireSeconds = FPlatformTime::Seconds();
+	// Mirror Unity HapbeatClient.RenewStreamLeaseIncarnation: a new incarnation,
+	// no outstanding requests of the old one, and no v2 lease of the old one.
+	// Legacy endpoints keep their class (pre-v2 firmware has no lease to renew),
+	// so their streams continue untouched. LastAcceptedTimestampUs is kept:
+	// PING timestamps are strictly increasing across incarnations, so a late
+	// reply to an old request still cannot roll anything back.
+	ClientIncarnation = CreateClientIncarnation();
+	PendingPings.Empty();
+	for (TPair<FString, FStreamEndpoint>& Pair : StreamEndpoints)
+	{
+		FHapbeatStreamEndpointLeaseState& State = Pair.Value.LeaseState;
+		if (State.Class != EHapbeatStreamEndpointClass::Legacy)
+		{
+			const int64 LastAccepted = State.LastAcceptedTimestampUs;
+			State = FHapbeatStreamEndpointLeaseState();
+			State.LastAcceptedTimestampUs = LastAccepted;
+		}
+	}
+	// Reconcile BEFORE the fresh PING: every v2 session ENDs now under the
+	// identity just relinquished, so no further DATA goes out under it.
+	ReconcileStreamSources();
+	RequestDiscoveryPing();
+	LastKeepAliveSendTime = FPlatformTime::Seconds();
+	UE_LOG(LogHapbeat, Log, TEXT("Stream lease reacquisition requested."));
+}
+
+void UHapbeatSubsystem::HandleApplicationForeground()
+{
+	if (!IsInGameThread())
+	{
+		TWeakObjectPtr<UHapbeatSubsystem> WeakThis(this);
+		AsyncTask(ENamedThreads::GameThread, [WeakThis]()
+		{
+			if (UHapbeatSubsystem* Self = WeakThis.Get())
+			{
+				Self->HandleApplicationForeground();
+			}
+		});
+		return;
+	}
+	// Several lifecycle events can report the same resume (Slate activation and
+	// the core reactivation delegate); one reacquisition is enough.
+	if (bShuttingDown || FPlatformTime::Seconds() - LastReacquireSeconds < 1.0)
+	{
+		return;
+	}
+	ReacquireStreamOwnership();
+}
+
+void UHapbeatSubsystem::BindApplicationLifecycle()
+{
+	UnbindApplicationLifecycle();
+	EnteredForegroundHandle = FCoreDelegates::ApplicationHasEnteredForegroundDelegate.AddUObject(
+		this, &UHapbeatSubsystem::HandleApplicationForeground);
+	ReactivatedHandle = FCoreDelegates::ApplicationHasReactivatedDelegate.AddUObject(
+		this, &UHapbeatSubsystem::HandleApplicationForeground);
+	if (FSlateApplication::IsInitialized())
+	{
+		TWeakObjectPtr<UHapbeatSubsystem> WeakThis(this);
+		SlateActivationHandle = FSlateApplication::Get().OnApplicationActivationStateChanged().AddLambda(
+			[WeakThis](const bool bIsActive)
+			{
+				UHapbeatSubsystem* Self = WeakThis.Get();
+				if (bIsActive && Self != nullptr)
+				{
+					Self->HandleApplicationForeground();
+				}
+			});
+	}
+}
+
+void UHapbeatSubsystem::UnbindApplicationLifecycle()
+{
+	if (EnteredForegroundHandle.IsValid())
+	{
+		FCoreDelegates::ApplicationHasEnteredForegroundDelegate.Remove(EnteredForegroundHandle);
+		EnteredForegroundHandle.Reset();
+	}
+	if (ReactivatedHandle.IsValid())
+	{
+		FCoreDelegates::ApplicationHasReactivatedDelegate.Remove(ReactivatedHandle);
+		ReactivatedHandle.Reset();
+	}
+	if (SlateActivationHandle.IsValid())
+	{
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().OnApplicationActivationStateChanged().Remove(SlateActivationHandle);
+		}
+		SlateActivationHandle.Reset();
+	}
+}
+
+bool UHapbeatSubsystem::HasV2StreamEndpoint() const
+{
+	for (const TPair<FString, FStreamEndpoint>& Pair : StreamEndpoints)
+	{
+		if (Pair.Value.LeaseState.Class == EHapbeatStreamEndpointClass::V2)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 uint64 UHapbeatSubsystem::CreateClientIncarnation()
@@ -1558,7 +1692,38 @@ void UHapbeatSubsystem::HandlePongGameThread(const FString& SenderIp, int32 Send
 						NextLeaseState.Class == EHapbeatStreamEndpointClass::V2 ? TEXT("stream session v2")
 						: TEXT("legacy (pre-v2 firmware)"));
 				}
+				if (NextLeaseState.bLeaseSuperseded && !Endpoint->LeaseState.bLeaseSuperseded)
+				{
+					UE_LOG(LogHapbeat, Warning,
+						TEXT("Stream lease at %s was superseded by another writer; streams to it are deferred. ")
+						TEXT("Call ReacquireStreamOwnership (or bring the app back to the foreground) after the other writer has stopped."),
+						*EndpointKey);
+				}
 				Endpoint->LeaseState = NextLeaseState;
+			}
+		}
+		else if (const FStreamEndpoint* Registered = StreamEndpoints.Find(EndpointKey);
+			Registered != nullptr && Registered->LeaseState.Class == EHapbeatStreamEndpointClass::Unknown)
+		{
+			// An identity update (address change) registers the device under a new
+			// key that has no class yet, although the same ip:port is already
+			// classified under its old key. The class may only come from a matched
+			// reply, so ask for one now instead of deferring until the next
+			// periodic PING (message-format.md: re-resolve immediately).
+			bool bKnownDevice = false;
+			for (const TPair<FString, FStreamEndpoint>& Other : StreamEndpoints)
+			{
+				if (Other.Key != EndpointKey && Other.Value.Ip == SenderIp && Other.Value.Port == SenderPort
+					&& Other.Value.LeaseState.Class != EHapbeatStreamEndpointClass::Unknown)
+				{
+					bKnownDevice = true;
+					break;
+				}
+			}
+			if (bKnownDevice && NowSeconds - LastIdentityDiscoveryPingSeconds >= 1.0)
+			{
+				LastIdentityDiscoveryPingSeconds = NowSeconds;
+				RequestDiscoveryPing();
 			}
 		}
 	}

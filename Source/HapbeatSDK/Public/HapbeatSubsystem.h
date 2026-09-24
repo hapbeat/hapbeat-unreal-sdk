@@ -35,7 +35,7 @@ enum class EHapbeatPendingKind : uint8
 	StopCommand,
 	/** Stream Clip entry: start the session on the handle already handed to the caller. */
 	StartStream,
-	/** Stream Clip entry: StopStream() (the whole session — v1 streams one at a time). */
+	/** Stream Clip entry: StopStream() (every source on every endpoint session). */
 	StopStream,
 };
 
@@ -260,12 +260,13 @@ public:
 	 * sample by the handle's Gain x Pan before sending, so STREAM_BEGIN carries
 	 * gain = 1.0 (the device must not re-apply gain).
 	 *
-	 * Compatible calls (same sample rate, wire channel count and resolved target)
-	 * join one local mixer and therefore share a single STREAM_BEGIN/END session.
-	 * Each returned handle still has independent gain, pan, loop and stop state.
-	 * An incompatible call is rejected rather than interrupting sources already
-	 * playing. The mixer is paced by a DEDICATED background thread, so frame
-	 * hitches (GC / render / physics) cannot starve the device's ring buffer.
+	 * The clip is normalized to 16 kHz stereo and mixed per endpoint: every
+	 * alive device whose address matches the resolved target gets the source in
+	 * its own STREAM_BEGIN/END session. Sources with different targets therefore
+	 * play concurrently on their devices, and sources sharing a device are mixed.
+	 * Each returned handle has independent gain, pan, loop and stop state. The
+	 * mixers are paced by DEDICATED background threads, so frame hitches
+	 * (GC / render / physics) cannot starve the device's ring buffer.
 	 *
 	 * @param Clip         The PCM16 clip (mono or stereo). Null / empty => warn + nullptr.
 	 * @param BaselineGain Frozen author gain (entry.gain x manifest.intensity). 0..2.
@@ -285,7 +286,7 @@ public:
 		const FString& Target = TEXT(""), bool bLoop = false, float InitialPan = 0.0f);
 
 	/**
-	 * Stop every source in the active stream session: signal the stream thread to send STREAM_END, JOIN
+	 * Stop every source on every endpoint session: signal each stream thread to send STREAM_END, JOIN
 	 * it (blocks briefly — the thread notices within one ~10ms pacing tick),
 	 * then mark the handle stopped and unregister the watchdog ticker. No-op if
 	 * nothing is streaming.

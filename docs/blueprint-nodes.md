@@ -96,6 +96,7 @@ Collision / Sequence / Tick Emitter は `Hapbeat Trigger Component` を基底に
 | --- | --- | --- |
 | `Apply Stream Gain Modulation (Hapbeat)` | `Modulator` | authored baseline Gain に倍率を掛ける。`0` は無音、`1` は authored Gain、最大 `2`。 |
 | `Set Stream Pan (Hapbeat)` | `New Pan` | `-1` 左、`0` 中央、`+1` 右へ設定する。mono Clip も送信前に stereo 化されるため、再生中に変更できる。 |
+| `Set Stream Playback Rate (Hapbeat)` | `New Rate` | 再生速度を `0.25`〜`4` で設定する。`1` は authored のまま、`0.8` なら 100 Hz の Clip が 80 Hz になる（周波数も長さも速度に比例）。PC 側で再サンプリングするため、デバイス・通信仕様の対応は不要。 |
 | `Set Stream Loop (Hapbeat)` | `Loop` | 再生中 stream の loop を切り替える。 |
 | `Get Stream Loop (Hapbeat)` | なし | 現在の loop 設定を返す。 |
 | `Stop Stream Playback (Hapbeat)` | なし | この handle の stream だけを停止する。 |
@@ -396,6 +397,14 @@ void ApplyGainModulation(float Modulator);
 
 ```cpp
 void SetPan(float NewPan);
+```
+
+### Set Stream Playback Rate (Hapbeat) — UHapbeatStreamPlayback.SetPlaybackRate
+
+所有: `HapbeatSDK / HapbeatStreamPlayback.h`。Callable（実行ピンあり）。`Get Stream Playback Rate (Hapbeat)` で現在値を取得できる。
+
+```cpp
+void SetPlaybackRate(float NewRate);
 ```
 
 ### Set Stream Loop (Hapbeat) — UHapbeatStreamPlayback.SetLoop

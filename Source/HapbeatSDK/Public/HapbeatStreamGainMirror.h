@@ -31,4 +31,6 @@ struct FHapbeatStreamGainMirror
 	std::atomic<float> Pan{0.0f};
 	std::atomic<bool> bLoop{false};
 	std::atomic<bool> bStopped{false};
+	/** Playback rate: 1 = as authored, 2 = double speed (+1 octave), 0.5 = half. */
+	std::atomic<float> PlaybackRate{1.0f};
 };

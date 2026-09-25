@@ -139,58 +139,58 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 			const float GainL = Pan <= 0.0f ? 1.0f : 1.0f - Pan;
 			const float GainR = Pan >= 0.0f ? 1.0f : 1.0f + Pan;
 
-			int32 OutputFrame = 0;
-			bool bFinished = false;
-			while (OutputFrame < FramesPerChunk)
+			// Resampling read: the fractional position advances by the playback rate
+			// and samples are linearly interpolated. At rate 1 the position stays on
+			// whole frames, so the output is bit-identical to a plain copy.
+			const double Rate = FMath::Clamp(
+				static_cast<double>(Source.Mirror->PlaybackRate.load(std::memory_order_relaxed)), 0.25, 4.0);
+			const bool bLoopNow = Source.Mirror->bLoop.load(std::memory_order_relaxed);
+			const int32 NumFrames = Source.Pcm16.Num() / SrcBytesPerFrame;
+			const uint8* Base = Source.Pcm16.GetData();
+			auto Read = [&](int32 Frame, int32 Channel)
 			{
-				const int32 FramesAvailable =
-					(Source.Pcm16.Num() - Source.ByteOffset) / SrcBytesPerFrame;
-				if (FramesAvailable <= 0)
+				return static_cast<float>(ReadPcm16Le(Base + (Frame * Channels + Channel) * 2));
+			};
+			bool bFinished = false;
+			for (int32 OutFrame = 0; OutFrame < FramesPerChunk; ++OutFrame)
+			{
+				if (Source.ReadFrame >= NumFrames)
 				{
-					if (Source.Mirror->bLoop.load(std::memory_order_relaxed))
+					if (!bLoopNow)
 					{
-						Source.ByteOffset = 0;
-						continue;
+						bFinished = true;
+						break;
 					}
-					bFinished = true;
-					break;
+					Source.ReadFrame = FMath::Fmod(Source.ReadFrame, static_cast<double>(NumFrames));
 				}
-
-				const int32 FramesToMix = FMath::Min(FramesPerChunk - OutputFrame, FramesAvailable);
-				const uint8* Src = Source.Pcm16.GetData() + Source.ByteOffset;
-				for (int32 Frame = 0; Frame < FramesToMix; ++Frame)
+				const int32 I0 = static_cast<int32>(Source.ReadFrame);
+				const float Frac = static_cast<float>(Source.ReadFrame - I0);
+				const int32 I1 = I0 + 1 < NumFrames ? I0 + 1 : (bLoopNow ? 0 : I0);
+				if (Channels == 1)
 				{
-					const int32 OutFrame = OutputFrame + Frame;
-					if (Channels == 1)
+					const float Sample = FMath::Lerp(Read(I0, 0), Read(I1, 0), Frac);
+					if (WireChannels == 2)
 					{
-						const float Sample = static_cast<float>(ReadPcm16Le(Src + Frame * 2));
-						if (WireChannels == 2)
-						{
-							MixScratch[OutFrame * 2] += Sample * Gain * GainL;
-							MixScratch[OutFrame * 2 + 1] += Sample * Gain * GainR;
-						}
-						else
-						{
-							MixScratch[OutFrame] += Sample * Gain;
-						}
+						MixScratch[OutFrame * 2] += Sample * Gain * GainL;
+						MixScratch[OutFrame * 2 + 1] += Sample * Gain * GainR;
 					}
 					else
 					{
-						for (int32 Channel = 0; Channel < Channels; ++Channel)
-						{
-							const float Balance = Channel == 0 ? GainL : (Channel == 1 ? GainR : 1.0f);
-							const int32 SampleIndex = Frame * Channels + Channel;
-							MixScratch[OutFrame * WireChannels + Channel] +=
-								static_cast<float>(ReadPcm16Le(Src + SampleIndex * 2)) * Gain * Balance;
-						}
+						MixScratch[OutFrame] += Sample * Gain;
 					}
 				}
-
-				Source.ByteOffset += FramesToMix * SrcBytesPerFrame;
-				OutputFrame += FramesToMix;
+				else
+				{
+					for (int32 Channel = 0; Channel < Channels; ++Channel)
+					{
+						const float Balance = Channel == 0 ? GainL : (Channel == 1 ? GainR : 1.0f);
+						MixScratch[OutFrame * WireChannels + Channel] +=
+							FMath::Lerp(Read(I0, Channel), Read(I1, Channel), Frac) * Gain * Balance;
+					}
+				}
+				Source.ReadFrame += Rate;
 			}
-			if (!Source.Mirror->bLoop.load(std::memory_order_relaxed)
-				&& Source.ByteOffset / SrcBytesPerFrame >= Source.Pcm16.Num() / SrcBytesPerFrame)
+			if (!bLoopNow && Source.ReadFrame >= NumFrames)
 			{
 				bFinished = true;
 			}

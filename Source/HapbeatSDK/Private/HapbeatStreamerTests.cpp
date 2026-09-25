@@ -216,6 +216,88 @@ bool FHapbeatMultiSourceStreamerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatPlaybackRateStreamerTest,
+	"Hapbeat.Streaming.PlaybackRate",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatPlaybackRateStreamerTest::RunTest(const FString& Parameters)
+{
+	// A ramp (frame N = N x 100) makes the resampling position visible in the samples.
+	auto Ramp = [](int32 Frames)
+	{
+		TArray<uint8> Bytes;
+		Bytes.SetNumUninitialized(Frames * 4);
+		for (int32 Frame = 0; Frame < Frames; ++Frame)
+		{
+			const uint16 Value = static_cast<uint16>(static_cast<int16>(Frame * 100));
+			for (int32 Channel = 0; Channel < 2; ++Channel)
+			{
+				Bytes[Frame * 4 + Channel * 2] = static_cast<uint8>(Value & 0xFF);
+				Bytes[Frame * 4 + Channel * 2 + 1] = static_cast<uint8>((Value >> 8) & 0xFF);
+			}
+		}
+		return Bytes;
+	};
+	auto LeftSample = [](const TArray<uint8>& Packet, int32 Frame)
+	{
+		const int32 At = 12 + Frame * 4; // header (8) + byte offset (4), stereo PCM16
+		return static_cast<int16>(static_cast<uint16>(Packet[At]) | (static_cast<uint16>(Packet[At + 1]) << 8));
+	};
+	auto Run = [&](float Rate, int32 Frames, TArray<TArray<uint8>>& Packets, TArray<FGuid>& Finished)
+	{
+		uint16 Sequence = 0;
+		auto Mirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+		Mirror->PlaybackRate.store(Rate, std::memory_order_relaxed);
+		const FGuid Id = FGuid::NewGuid();
+		FHapbeatStreamer Streamer(16000, 2, FString(), Mirror, [&Sequence]() { return ++Sequence; },
+			[&Packets](const TArray<uint8>& Packet) { Packets.Add(Packet); }, 0.05f);
+		Streamer.AddSource(Id, Ramp(Frames), Mirror);
+		Streamer.Start(0.0);
+		Streamer.Tick(0.0);
+		Streamer.DrainFinishedSourceIds(Finished);
+		return Id;
+	};
+	auto FirstData = [](const TArray<TArray<uint8>>& Packets) -> const TArray<uint8>*
+	{
+		for (const TArray<uint8>& Packet : Packets)
+		{
+			if (Packet.Num() > 20 && Packet[3] == FHapbeatProtocol::CmdStreamData)
+			{
+				return &Packet;
+			}
+		}
+		return nullptr;
+	};
+
+	TArray<TArray<uint8>> Half; TArray<FGuid> HalfDone;
+	Run(0.5f, 64, Half, HalfDone);
+	if (const TArray<uint8>* Data = FirstData(Half))
+	{
+		TestEqual(TEXT("rate 0.5 interpolates between frames"), LeftSample(*Data, 1), static_cast<int16>(50));
+		TestEqual(TEXT("rate 0.5 reaches frame 1 on output frame 2"), LeftSample(*Data, 2), static_cast<int16>(100));
+	}
+	else
+	{
+		AddError(TEXT("no data at rate 0.5"));
+	}
+
+	TArray<TArray<uint8>> Double; TArray<FGuid> DoubleDone;
+	const FGuid DoubleId = Run(2.0f, 64, Double, DoubleDone);
+	if (const TArray<uint8>* Data = FirstData(Double))
+	{
+		TestEqual(TEXT("rate 2 skips every other frame"), LeftSample(*Data, 3), static_cast<int16>(600));
+	}
+	TestTrue(TEXT("rate 2 one-shot ends after half the output frames"), DoubleDone.Contains(DoubleId));
+
+	TArray<TArray<uint8>> Unity; TArray<FGuid> UnityDone;
+	Run(1.0f, 64, Unity, UnityDone);
+	if (const TArray<uint8>* Data = FirstData(Unity))
+	{
+		TestEqual(TEXT("rate 1 is a plain copy"), LeftSample(*Data, 5), static_cast<int16>(500));
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatRuntimeLoopRejoinTest,
 	"Hapbeat.Streaming.RuntimeLoopRejoin",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

@@ -63,7 +63,8 @@ private:
 	{
 		FGuid Id;
 		TArray<uint8> Pcm16;
-		int32 ByteOffset = 0;
+		/** Fractional read position in source frames (advanced by the playback rate). */
+		double ReadFrame = 0.0;
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
 
 		FSource(const FGuid& InSourceId, TArray<uint8>&& InPcm16,

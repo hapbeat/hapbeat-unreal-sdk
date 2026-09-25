@@ -26,7 +26,7 @@ sidebar:
 
 - `UHapbeatBlueprintLibrary` — Event Map entry を再生する static library。`PlayHapbeatEvent` / `StopHapbeatEvent` / `FireHapbeatTickFromValue`。
 - `UHapbeatSubsystem` — GameInstance ごとの UDP・Command・Stream 実行基盤。`Connect` / `Play` / `Stop` / `StopAll` / `PlayEntry` / `StopEntry` / `StreamClip` / `StopStream` / `Ping`。
-- `UHapbeatStreamPlayback` — 1 回の Stream source を操作する handle。`ApplyGainModulation` / `SetPan` / `SetLoop` / `Stop` / `GetStatus`。
+- `UHapbeatStreamPlayback` — 1 回の Stream source を操作する handle。`ApplyGainModulation` / `SetPan` / `SetPlaybackRate` / `SetLoop` / `Stop` / `GetStatus`。
 - `UHapbeatTargetLibrary` — Target 文字列と Address Override を扱う static library。`BuildTarget` / `ParseTarget` / `ResolveTarget` / `ApplyAddressPlaceholders` / `AddressMatches`。
 
 ### Actor component
@@ -174,6 +174,7 @@ Target の意味と構成別の使い分けは[ターゲティング](./targetin
 | --- | --- |
 | `ApplyGainModulation(Value)` | entry の baseline Gain に `Value` を掛け、0〜2 に制限して即時反映する。 |
 | `SetPan(Value)` | Stream の左右バランスを `-1`〜`1` で設定する。 |
+| `SetPlaybackRate(Value)` | Stream の再生速度（= ピッチ）を `0.25`〜`4` で設定する。`1` で authored のまま。 |
 | `SetLoop(bLoop)` | loop の有無を切り替える。 |
 | `Stop()` | この handle の source だけを停止する。 |
 | `IsActive()` / `GetStatus()` / `GetDeferredReason()` | 再生中か、送信先待ちか、停止済みかを確認する。 |
@@ -866,6 +867,12 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
 
   ```cpp
   void SetPan(float NewPan);
+  ```
+
+- `SetPlaybackRate`（関数）
+
+  ```cpp
+  void SetPlaybackRate(float NewRate);
   ```
 
 - `SetLoop`（関数）

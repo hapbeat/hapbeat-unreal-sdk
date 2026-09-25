@@ -108,6 +108,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Set Stream Loop (Hapbeat)"))
 	void SetLoop(bool bNewLoop);
 
+	/**
+	 * Set the playback rate, clamped to [0.25, 4]. The clip is resampled on the
+	 * host (linear interpolation), so its frequency content scales with the rate:
+	 * a 100 Hz clip at 0.8 plays as 80 Hz, and a loop's period shortens or
+	 * lengthens accordingly. Applied per stream chunk, like gain; the device sees
+	 * ordinary PCM, so no protocol or firmware change is involved.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Set Stream Playback Rate (Hapbeat)"))
+	void SetPlaybackRate(float NewRate);
+
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Stream Playback Rate (Hapbeat)"))
+	float GetPlaybackRate() const { return PlaybackRate; }
+
 	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Stream Loop (Hapbeat)"))
 	bool GetLoop() const { return bLoop; }
 
@@ -191,6 +204,7 @@ private:
 	float Gain = 1.0f;
 	/** Live pan, clamped to [-1, 1]. */
 	float Pan = 0.0f;
+	float PlaybackRate = 1.0f;
 	bool bLoop = false;
 	/** Set once the stream has been asked to stop / has finished. */
 	bool bStopped = false;

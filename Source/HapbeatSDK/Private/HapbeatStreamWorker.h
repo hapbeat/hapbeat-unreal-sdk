@@ -30,8 +30,10 @@ class FRunnableThread;
  *     so a session stopped before its successor on the same endpoint was added
  *     sends its END before the successor's first BEGIN.
  *   - With no active session the worker parks on an FEvent (100 ms timeout);
- *     otherwise it paces to the next 10 ms tick with
- *     FHapbeatStreamRunnable::PreciseWaitUntil.
+ *     otherwise it paces to the next 10 ms tick (sleep-then-spin like
+ *     FHapbeatStreamRunnable::PreciseWaitUntil). Either wait ends early when a
+ *     session is handed over (AddSession) or flagged to stop (Wake), so a
+ *     BEGIN / END leaves within about a millisecond instead of up to one tick.
  *   - Shutdown(): the caller first flags every session Stop()/Abandon(). The
  *     worker then runs ONE final pass, in which every session sends its END (or
  *     suppresses it when abandoned), and the thread is joined once. Only after
@@ -56,6 +58,9 @@ public:
 	/** Game thread: hand a new session to the worker. Never blocks beyond a short lock. */
 	void AddSession(const FSessionPtr& Session);
 
+	/** Game thread: a session was flagged Stop()/Abandon(); run a pass now so its END is not held for a tick. */
+	void Wake();
+
 	bool IsRunning() const { return Thread != nullptr; }
 
 	// FRunnable
@@ -65,11 +70,15 @@ public:
 private:
 	/** Worker thread: admit + Init arrivals, then Step every active session once. */
 	void RunPass();
+	/** Worker thread: pace to TargetSeconds, returning early on Wake()/AddSession()/Stop(). */
+	void WaitForNextPass(double TargetSeconds);
 
 	FRunnableThread* Thread = nullptr;
 	/** Auto-reset wake for the idle wait; triggered by AddSession() and Stop(). */
 	FEvent* WakeEvent = nullptr;
 	std::atomic<bool> bStopRequested{false};
+	/** Set by AddSession()/Wake(): ends the current pacing wait so the next pass runs at once. */
+	std::atomic<bool> bWorkPending{false};
 
 	FCriticalSection IncomingMutex;
 	/** Sessions handed over by the game thread, in call order. Guarded by IncomingMutex. */

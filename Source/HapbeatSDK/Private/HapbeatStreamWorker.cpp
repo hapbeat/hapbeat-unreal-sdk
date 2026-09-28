@@ -62,6 +62,12 @@ void FHapbeatStreamWorker::AddSession(const FSessionPtr& Session)
 		FScopeLock Lock(&IncomingMutex);
 		Incoming.Add(Session);
 	}
+	Wake();
+}
+
+void FHapbeatStreamWorker::Wake()
+{
+	bWorkPending.store(true, std::memory_order_release);
 	WakeEvent->Trigger();
 }
 
@@ -70,6 +76,9 @@ uint32 FHapbeatStreamWorker::Run()
 	while (!bStopRequested.load(std::memory_order_acquire))
 	{
 		const double PassStart = FPlatformTime::Seconds();
+		// Cleared BEFORE the pass: work handed over during the pass sets it again
+		// and cuts the following wait short.
+		bWorkPending.store(false, std::memory_order_release);
 		RunPass();
 		if (Active.Num() == 0)
 		{
@@ -79,8 +88,7 @@ uint32 FHapbeatStreamWorker::Run()
 		}
 		else
 		{
-			FHapbeatStreamRunnable::PreciseWaitUntil(
-				PassStart + FHapbeatStreamRunnable::TickIntervalSeconds, bStopRequested);
+			WaitForNextPass(PassStart + FHapbeatStreamRunnable::TickIntervalSeconds);
 		}
 	}
 
@@ -96,6 +104,28 @@ void FHapbeatStreamWorker::Stop()
 {
 	bStopRequested.store(true, std::memory_order_release);
 	WakeEvent->Trigger();
+}
+
+void FHapbeatStreamWorker::WaitForNextPass(double TargetSeconds)
+{
+	// Same pacing as FHapbeatStreamRunnable::PreciseWaitUntil (spin on Windows, whose
+	// sleep floors to ~15.6 ms; 1 ms sleep slices then a short spin elsewhere), but a
+	// hand-over or stop request ends it at once. An early pass is harmless: every
+	// streamer paces its sends from the clock, not from the pass count.
+	auto Interrupted = [this]()
+	{
+		return bStopRequested.load(std::memory_order_relaxed) || bWorkPending.load(std::memory_order_acquire);
+	};
+#if !PLATFORM_WINDOWS
+	while (!Interrupted() && FPlatformTime::Seconds() < TargetSeconds - 0.0015)
+	{
+		FPlatformProcess::SleepNoStats(0.001f);
+	}
+#endif
+	while (!Interrupted() && FPlatformTime::Seconds() < TargetSeconds)
+	{
+		FPlatformProcess::Yield();
+	}
 }
 
 void FHapbeatStreamWorker::RunPass()

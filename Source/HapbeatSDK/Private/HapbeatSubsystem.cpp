@@ -1373,6 +1373,10 @@ void UHapbeatSubsystem::StopStreamSession(const FString& EndpointKey)
 	// Flag only: the worker sends STREAM_END on its next pass. Never joined here;
 	// the retiring record is released once the session reports IsFinished().
 	Session.Runnable->Stop();
+	if (StreamWorker != nullptr)
+	{
+		StreamWorker->Wake(); // END goes out on an immediate pass, not the next tick
+	}
 	FRetiringStreamSession& Retiring = RetiringStreamSessions.AddDefaulted_GetRef();
 	Retiring.Runnable = MoveTemp(Session.Runnable);
 	Retiring.EndpointKey = EndpointKey;
@@ -1395,6 +1399,10 @@ void UHapbeatSubsystem::AbandonStreamSession(const FString& EndpointKey)
 		return;
 	}
 	Session.Runnable->Abandon();
+	if (StreamWorker != nullptr)
+	{
+		StreamWorker->Wake();
+	}
 	FRetiringStreamSession& Retiring = RetiringStreamSessions.AddDefaulted_GetRef();
 	Retiring.Runnable = MoveTemp(Session.Runnable);
 	Retiring.EndpointKey = EndpointKey;

@@ -42,9 +42,23 @@ namespace
 	 * Unity SDK); revisit only with a measured alternative — a plain sleep here
 	 * reintroduces the original bug, and an FEvent-based wait would also need
 	 * to keep Kill(true) fast (see StopStream()).
+	 *
+	 * Non-Windows platforms (Android / Quest, Linux, Mac) sleep with ~0.1 ms
+	 * precision, so there the thread sleeps in 1 ms slices until the last
+	 * ~1.5 ms and only spins that remainder. On a Quest a whole core spun at
+	 * above-normal priority competes with the game / render / RHI threads.
+	 * Each slice re-checks the stop flag, so Kill(true) stays fast.
 	 */
 	void PreciseWaitUntil(double TargetSeconds, const std::atomic<bool>& bStopRequested)
 	{
+#if !PLATFORM_WINDOWS
+		constexpr double SpinTailSeconds = 0.0015;
+		while (!bStopRequested.load(std::memory_order_relaxed)
+			&& FPlatformTime::Seconds() < TargetSeconds - SpinTailSeconds)
+		{
+			FPlatformProcess::SleepNoStats(0.001f);
+		}
+#endif
 		while (!bStopRequested.load(std::memory_order_relaxed)
 			&& FPlatformTime::Seconds() < TargetSeconds)
 		{

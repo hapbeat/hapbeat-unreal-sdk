@@ -191,6 +191,9 @@ public:
 	UHapbeatStreamPlayback* GetActivePlayback() const;
 
 protected:
+	/** Preloads EventMap's Stream Clips (UHapbeatSubsystem::PreloadEventMap) so the first fire neither loads nor converts. */
+	virtual void BeginPlay() override;
+
 #if WITH_DEV_AUTOMATION_TESTS
 	// Allows the Showcase regression to supply an in-memory playback without opening a socket.
 	friend class FHapbeatZ4BindingReferencesTest;

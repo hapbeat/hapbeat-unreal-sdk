@@ -21,6 +21,23 @@ UHapbeatTriggerComponent::UHapbeatTriggerComponent()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
+void UHapbeatTriggerComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	// Load, pin and convert this map's clips at level start rather than on the
+	// first fire. Silent when there is no subsystem / map: firing reports those.
+	UWorld* World = GetWorld();
+	UGameInstance* GameInstance = World != nullptr ? World->GetGameInstance() : nullptr;
+	UHapbeatSubsystem* Subsystem = GameInstance != nullptr
+		? GameInstance->GetSubsystem<UHapbeatSubsystem>()
+		: nullptr;
+	if (Subsystem != nullptr && EventMap != nullptr)
+	{
+		Subsystem->PreloadEventMap(EventMap);
+	}
+}
+
 void UHapbeatTriggerComponent::Fire()
 {
 	FireInternal(1.0f);

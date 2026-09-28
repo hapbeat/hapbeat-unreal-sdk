@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatStreamer.h"
 
+#include "HapbeatClip.h"
+#include "HapbeatEventEntry.h"
+#include "HapbeatEventMap.h"
 #include "HapbeatProtocol.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamRunnable.h"
@@ -11,6 +14,8 @@
 #include "HAL/PlatformTime.h"
 #include "HAL/RunnableThread.h"
 #include "Misc/AutomationTest.h"
+#include "UObject/Package.h"
+#include "UObject/UObjectGlobals.h"
 #include <thread>
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -384,8 +389,11 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	Playback->Init(1.0f, 1.0f);
 	const FGuid SourceId = Playback->Id;
 	auto Mirror = Playback->GetMirror();
-	FRecordingStreamRunnable Runner(SourceId, MakeStereoPcm(1000, 160), Mirror);
-	TestTrue(TEXT("migration runner initializes"), Runner.Init());
+	// Shared like a real session; this test drives it itself (it is never handed
+	// to the stream worker).
+	TSharedPtr<FRecordingStreamRunnable, ESPMode::ThreadSafe> Runner =
+		MakeShared<FRecordingStreamRunnable, ESPMode::ThreadSafe>(SourceId, MakeStereoPcm(1000, 160), Mirror);
+	TestTrue(TEXT("migration runner initializes"), Runner->Init());
 	const double Now = FPlatformTime::Seconds();
 	const FString OldKey = TEXT("192.0.2.40:7700|player_4/pos_l_arm");
 	const FString NewKey = TEXT("192.0.2.40:7700|player_5/pos_l_arm");
@@ -399,7 +407,7 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	Source.EndpointKeys.Add(OldKey);
 	Migrating->ActivePlaybacks.Add(Playback);
 	UHapbeatSubsystem::FStreamSession& Session = Migrating->StreamSessions.Add(OldKey);
-	Session.Runnable = &Runner;
+	Session.Runnable = Runner;
 	Session.SourceIds.Add(SourceId);
 	Playback->SetActive();
 	Migrating->RegisterStreamEndpoint(TEXT("192.0.2.40"), 7700, TEXT("player_5/pos_l_arm"), Now + 0.01);
@@ -413,10 +421,10 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("mismatched Playback becomes Deferred"),
 		Playback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
 	TestEqual(TEXT("mismatched Playback has no endpoint keys"), Source.EndpointKeys.Num(), 0);
-	Runner.Run();
+	Runner->Run();
 	TestEqual(TEXT("detached old-address source emits no DATA"),
-		Runner.DataCount.load(std::memory_order_relaxed), 0);
-	Migrating->StreamSessions.Empty(); // Runner is stack-owned by this test.
+		Runner->DataCount.load(std::memory_order_relaxed), 0);
+	Migrating->StreamSessions.Empty(); // Runner is driven by this test, not the stream worker.
 
 	// Address overrides re-route ACTIVE logical sources without restarting
 	// playback. The fake discovery seam proves an unknown target asks for a PING
@@ -447,23 +455,24 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	OverrideSource.EndpointKeys.Add(P1Key);
 	OverrideRouting->ActivePlaybacks.Add(OverridePlayback);
 	auto OverrideMirror = OverridePlayback->GetMirror();
-	FRecordingStreamRunnable OverrideRunner(OverrideSourceId, MakeStereoPcm(1000, 160), OverrideMirror);
-	TestTrue(TEXT("override runner initializes"), OverrideRunner.Init());
+	TSharedPtr<FRecordingStreamRunnable, ESPMode::ThreadSafe> OverrideRunner =
+		MakeShared<FRecordingStreamRunnable, ESPMode::ThreadSafe>(OverrideSourceId, MakeStereoPcm(1000, 160), OverrideMirror);
+	TestTrue(TEXT("override runner initializes"), OverrideRunner->Init());
 	UHapbeatSubsystem::FStreamSession& OverrideSession = OverrideRouting->StreamSessions.Add(P1Key);
-	OverrideSession.Runnable = &OverrideRunner;
+	OverrideSession.Runnable = OverrideRunner;
 	OverrideSession.SourceIds.Add(OverrideSourceId);
 
 	OverrideRouting->SetAddressOverride(2, UHapbeatSubsystem::AddressOverrideDisabled);
 	TestEqual(TEXT("P1 -> known P2 updates effective target"), OverrideSource.ResolvedTarget, P2);
 	TestTrue(TEXT("P1 -> known P2 joins immediately"), OverrideSource.EndpointKeys.Contains(P2Key));
 	TestFalse(TEXT("P1 -> known P2 leaves old endpoint"), OverrideSource.EndpointKeys.Contains(P1Key));
-	OverrideRunner.Run();
+	OverrideRunner->Run();
 	TestEqual(TEXT("P1 -> known P2 stops old endpoint DATA"),
-		OverrideRunner.DataCount.load(std::memory_order_relaxed), 0);
+		OverrideRunner->DataCount.load(std::memory_order_relaxed), 0);
 
 	// The known P2 endpoint starts a fresh endpoint session from the logical
 	// source's frame zero: one BEGIN, then DATA whose offset is zero. This is the
-	// in-memory seam for StartEndpointSession's socket-backed worker.
+	// in-memory seam for StartEndpointSession's socket-backed session.
 	FRecordingStreamRunnable P2Rejoin(OverrideSourceId, TArray<uint8>(OverrideSource.CanonicalPcm16),
 		OverrideMirror, P2);
 	TestTrue(TEXT("known P2 rejoin runner initializes"), P2Rejoin.Init());
@@ -547,7 +556,7 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 		UHapbeatSubsystem::ResolvePongRttUs(UnsolicitedPings, 0, 1'000, 0, 2'000'000), 0LL);
 	TestTrue(TEXT("timestamp-zero unsolicited PONG preserves wrapped pending PING"),
 		UnsolicitedPings.Contains(0));
-	OverrideRouting->StreamSessions.Empty(); // OverrideRunner is stack-owned by this test.
+	OverrideRouting->StreamSessions.Empty(); // OverrideRunner is driven by this test, not the stream worker.
 	return true;
 }
 
@@ -638,6 +647,75 @@ bool FHapbeatStreamRunnableLifecycleTest::RunTest(const FString& Parameters)
 		RaceThread->Kill(true);
 		delete RaceThread;
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatClipPreloadCacheTest,
+	"Hapbeat.Streaming.ClipPreloadCache",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatClipPreloadCacheTest::RunTest(const FString& Parameters)
+{
+	UHapbeatSubsystem* Sub = NewTestSubsystem();
+	// Rooted for the GC below (the game instance is kept alive as its outer).
+	Sub->AddToRoot();
+
+	// --- (c) The canonical PCM is built once per clip, however often it plays.
+	UHapbeatClip* Clip = NewObject<UHapbeatClip>(GetTransientPackage());
+	Clip->SampleRate = 8000;
+	Clip->NumChannels = 1;
+	Clip->Pcm16.SetNumZeroed(80 * 2);
+	for (int32 Frame = 0; Frame < 80; ++Frame)
+	{
+		Clip->Pcm16[Frame * 2] = static_cast<uint8>(Frame);
+	}
+	TArray<uint8> Expected;
+	TestTrue(TEXT("reference normalization succeeds"), Sub->NormalizeClipToCanonical(Clip, Expected));
+	const TArray<uint8>* FirstPlay = Sub->FindOrBuildCanonicalPcm(Clip);
+	const TArray<uint8>* SecondPlay = Sub->FindOrBuildCanonicalPcm(Clip);
+	const TArray<uint8>* ThirdPlay = Sub->FindOrBuildCanonicalPcm(Clip);
+	TestNotNull(TEXT("canonical PCM is available"), FirstPlay);
+	TestEqual(TEXT("the clip is normalized exactly once for repeated plays"),
+		Sub->CanonicalPcmBuildCountForAutomationTest, 1);
+	TestTrue(TEXT("repeated plays reuse the cached bytes"), FirstPlay == SecondPlay && SecondPlay == ThirdPlay);
+	TestTrue(TEXT("the cache holds exactly what NormalizeClipToCanonical produces"),
+		FirstPlay != nullptr && *FirstPlay == Expected);
+
+	// --- (d) PreloadEventMap pins every Stream Clip against GC (the entry's soft
+	// pointer alone would not) and pre-builds its PCM.
+	UHapbeatClip* PinnedClip = NewObject<UHapbeatClip>(GetTransientPackage());
+	PinnedClip->SampleRate = 16000;
+	PinnedClip->NumChannels = 2;
+	PinnedClip->Pcm16 = MakeStereoPcm(1000, 160);
+	UHapbeatEventMap* Map = NewObject<UHapbeatEventMap>(GetTransientPackage());
+	Map->AddToRoot();
+	FHapbeatEventEntry& Entry = Map->Entries.AddDefaulted_GetRef();
+	Entry.Id = FGuid::NewGuid();
+	Entry.Mode = EHapticMode::StreamClip;
+	Entry.StreamClip = PinnedClip;
+	// Control: an unpinned clip only a soft pointer refers to must be collected,
+	// proving the GC below really runs.
+	UHapbeatClip* UnpinnedClip = NewObject<UHapbeatClip>(GetTransientPackage());
+	const TSoftObjectPtr<UHapbeatClip> UnpinnedSoft(UnpinnedClip);
+	const TWeakObjectPtr<UHapbeatClip> PinnedWeak(PinnedClip);
+	const TWeakObjectPtr<UHapbeatClip> UnpinnedWeak(UnpinnedClip);
+	PinnedClip = nullptr;
+	UnpinnedClip = nullptr;
+
+	Sub->PreloadEventMap(Map);
+	TestTrue(TEXT("the map is remembered as preloaded"), Sub->PreloadedEventMaps.Contains(Map));
+	TestEqual(TEXT("preload builds the clip's canonical PCM"), Sub->CanonicalPcmBuildCountForAutomationTest, 2);
+
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+	TestFalse(TEXT("an unpinned soft-referenced clip is collected"), UnpinnedWeak.IsValid());
+	TestTrue(TEXT("a preloaded clip survives garbage collection"), PinnedWeak.IsValid());
+	TestTrue(TEXT("... and still resolves through the entry's soft pointer"),
+		Map->Entries[0].StreamClip.Get() == PinnedWeak.Get());
+	Sub->FindOrBuildCanonicalPcm(PinnedWeak.Get());
+	TestEqual(TEXT("a play after preload does not normalize again"), Sub->CanonicalPcmBuildCountForAutomationTest, 2);
+
+	Map->RemoveFromRoot();
+	Sub->RemoveFromRoot();
 	return true;
 }
 

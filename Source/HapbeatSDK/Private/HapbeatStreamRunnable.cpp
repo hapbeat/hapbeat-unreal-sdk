@@ -14,56 +14,52 @@
 // the stream thread, and its Verbose per-chunk lines are easier to filter alone.
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatStream, Log, All);
 
-namespace
+/**
+ * Busy-wait until TargetSeconds, checking the stop flag as we go.
+ *
+ * DELIBERATELY A SPIN, NOT A SLEEP — this is the whole point of Unity's
+ * 7c0aafc fix, ported. On Windows, Sleep()/SleepNoStats() floors to the OS
+ * timer-resolution period: a requested 1ms can actually sleep ~15.6ms
+ * unless the process raised timer resolution (which a plugin cannot
+ * assume). At our 10ms cadence ANY sleep can therefore overshoot the whole
+ * interval, which is exactly the bug Unity hit — the send rate falls
+ * permanently below real time and the stream degrades into a regular
+ * play/stop stutter. So we spin.
+ *
+ * FPlatformProcess::Yield() is the CPU pause instruction (_mm_pause on x86,
+ * __yield on ARM — verified in GenericPlatformProcess.h), i.e. the direct
+ * equivalent of Unity's Thread.SpinWait: it hints the core to back off
+ * (power / hyperthread-sibling friendly) WITHOUT a scheduler syscall. It is
+ * still a busy-wait: expect the calling thread (the subsystem's shared
+ * FHapbeatStreamWorker, or a runnable driven by its own Run()) to hold ~1 core
+ * while any session is active. That cost is accepted for glitch-free haptics
+ * (and matches the Unity SDK); revisit only with a measured alternative — a
+ * plain sleep here reintroduces the original bug. The worker parks on an
+ * FEvent only when it has no session at all.
+ *
+ * Non-Windows platforms (Android / Quest, Linux, Mac) sleep with ~0.1 ms
+ * precision, so there the thread sleeps in 1 ms slices until the last
+ * ~1.5 ms and only spins that remainder. On a Quest a whole core spun at
+ * above-normal priority competes with the game / render / RHI threads.
+ * Each slice re-checks the stop flag, so Kill(true) stays fast.
+ *
+ * Shared by Run() and FHapbeatStreamWorker::Run(); bStopRequested is the
+ * caller's own stop flag.
+ */
+void FHapbeatStreamRunnable::PreciseWaitUntil(double TargetSeconds, const std::atomic<bool>& bStopRequested)
 {
-	// Target cadence between Run() loop iterations. FHapbeatStreamer's own
-	// send-ahead/lead math decides WHETHER a chunk actually goes out each call;
-	// this just governs how often we ask.
-	constexpr double TickIntervalSeconds = 0.010;
-
-	/**
-	 * Busy-wait until TargetSeconds, checking the stop flag as we go.
-	 *
-	 * DELIBERATELY A SPIN, NOT A SLEEP — this is the whole point of Unity's
-	 * 7c0aafc fix, ported. On Windows, Sleep()/SleepNoStats() floors to the OS
-	 * timer-resolution period: a requested 1ms can actually sleep ~15.6ms
-	 * unless the process raised timer resolution (which a plugin cannot
-	 * assume). At our 10ms cadence ANY sleep can therefore overshoot the whole
-	 * interval, which is exactly the bug Unity hit — the send rate falls
-	 * permanently below real time and the stream degrades into a regular
-	 * play/stop stutter. So we spin.
-	 *
-	 * FPlatformProcess::Yield() is the CPU pause instruction (_mm_pause on x86,
-	 * __yield on ARM — verified in GenericPlatformProcess.h), i.e. the direct
-	 * equivalent of Unity's Thread.SpinWait: it hints the core to back off
-	 * (power / hyperthread-sibling friendly) WITHOUT a scheduler syscall. It is
-	 * still a busy-wait: expect this thread to hold ~1 core for the duration of
-	 * a stream. That cost is accepted for glitch-free haptics (and matches the
-	 * Unity SDK); revisit only with a measured alternative — a plain sleep here
-	 * reintroduces the original bug, and an FEvent-based wait would also need
-	 * to keep Kill(true) fast (see StopStream()).
-	 *
-	 * Non-Windows platforms (Android / Quest, Linux, Mac) sleep with ~0.1 ms
-	 * precision, so there the thread sleeps in 1 ms slices until the last
-	 * ~1.5 ms and only spins that remainder. On a Quest a whole core spun at
-	 * above-normal priority competes with the game / render / RHI threads.
-	 * Each slice re-checks the stop flag, so Kill(true) stays fast.
-	 */
-	void PreciseWaitUntil(double TargetSeconds, const std::atomic<bool>& bStopRequested)
-	{
 #if !PLATFORM_WINDOWS
-		constexpr double SpinTailSeconds = 0.0015;
-		while (!bStopRequested.load(std::memory_order_relaxed)
-			&& FPlatformTime::Seconds() < TargetSeconds - SpinTailSeconds)
-		{
-			FPlatformProcess::SleepNoStats(0.001f);
-		}
+	constexpr double SpinTailSeconds = 0.0015;
+	while (!bStopRequested.load(std::memory_order_relaxed)
+		&& FPlatformTime::Seconds() < TargetSeconds - SpinTailSeconds)
+	{
+		FPlatformProcess::SleepNoStats(0.001f);
+	}
 #endif
-		while (!bStopRequested.load(std::memory_order_relaxed)
-			&& FPlatformTime::Seconds() < TargetSeconds)
-		{
-			FPlatformProcess::Yield();
-		}
+	while (!bStopRequested.load(std::memory_order_relaxed)
+		&& FPlatformTime::Seconds() < TargetSeconds)
+	{
+		FPlatformProcess::Yield();
 	}
 }
 
@@ -102,7 +98,8 @@ FHapbeatStreamRunnable::~FHapbeatStreamRunnable() = default;
 
 bool FHapbeatStreamRunnable::Init()
 {
-	// Runs on the NEW thread, before Run(). Build this thread's OWN FInternetAddr
+	// Runs on the SENDING thread (the shared FHapbeatStreamWorker when it admits
+	// this session, or this runnable's own thread before Run()). Build its OWN FInternetAddr
 	// instances from the plain IP/port values captured at construction — never
 	// share the game thread's FInternetAddr objects (see the class doc's
 	// threading contract).
@@ -112,12 +109,12 @@ bool FHapbeatStreamRunnable::Init()
 	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
 	if (SocketSubsystem == nullptr)
 	{
-		// Run() is not called when Init() returns false — but FRunnableThread::Create()
-		// still hands back a VALID thread object (verified in UE 5.4
-		// MicrosoftRunnableThread.h CreateInternal: `return Thread != NULL`, i.e. the
-		// OS-thread result only; Init()'s bool is never propagated). So the game-thread
-		// watchdog would poll IsFinished() forever and IsStreaming() would be stuck
-		// true. Publish completion here so StopStream() cleans up on the next tick.
+		// Neither Run() nor Step() is called after Init() returns false (the worker
+		// drops the session; FRunnableThread skips Run()), yet nothing propagates
+		// Init()'s bool to the game thread (verified in UE 5.4
+		// MicrosoftRunnableThread.h CreateInternal: `return Thread != NULL`). So the
+		// game-thread watchdog would poll IsFinished() forever and IsStreaming()
+		// would be stuck true. Publish completion here so TickStream() reaps it.
 		bFinished.store(true, std::memory_order_release);
 		return false;
 	}
@@ -135,7 +132,7 @@ bool FHapbeatStreamRunnable::Init()
 		}
 	}
 
-	// Build the streamer HERE (worker thread) so its ctor-time scratch-buffer
+	// Build the streamer HERE (sending thread) so its ctor-time scratch-buffer
 	// allocation belongs to this thread. Publish it under the same barrier used
 	// by DetachSource(), which may have recorded a pre-init tombstone.
 	TUniquePtr<FHapbeatStreamer> NewStreamer = MakeUnique<FHapbeatStreamer>(
@@ -176,12 +173,36 @@ uint32 FHapbeatStreamRunnable::Run()
 		return 1;
 	}
 
+	// Self-paced mode (editor Test Play, runner contract tests): the same Step()
+	// the shared FHapbeatStreamWorker drives, on this runnable's own thread.
+	for (;;)
 	{
-		FScopeLock Lock(&StreamerMutex);
-		Streamer->Start(FPlatformTime::Seconds());
+		const double IterationStart = FPlatformTime::Seconds();
+		if (!Step(IterationStart))
+		{
+			break;
+		}
+		PreciseWaitUntil(IterationStart + TickIntervalSeconds, bStopRequested);
+	}
+	return 0;
+}
+
+bool FHapbeatStreamRunnable::Step(double NowSeconds)
+{
+	if (!Streamer.IsValid())
+	{
+		bFinished.store(true, std::memory_order_release);
+		return false;
 	}
 
-	while (!Streamer->IsDone())
+	if (!bStarted)
+	{
+		FScopeLock Lock(&StreamerMutex);
+		Streamer->Start(NowSeconds);
+		bStarted = true;
+	}
+
+	if (!Streamer->IsDone())
 	{
 		if (bStopRequested.load(std::memory_order_acquire))
 		{
@@ -193,53 +214,53 @@ uint32 FHapbeatStreamRunnable::Run()
 				FScopeLock Lock(&StreamerMutex);
 				Streamer->SendEnd();
 			}
-			break;
 		}
-
 		// Additions and the final empty decision share SourceMutex. If this returns
 		// false, admission was closed while holding that lock, so no game-thread
 		// AddSource can be accepted behind the worker's back after STREAM_END.
-		if (!DrainPendingSourcesOrClose())
+		else if (!DrainPendingSourcesOrClose(NowSeconds))
 		{
 			if (!bAbandonRequested.load(std::memory_order_acquire))
 			{
 				FScopeLock Lock(&StreamerMutex);
 				Streamer->SendEnd();
 			}
-			break;
 		}
-
-		TArray<FGuid> Finished;
-		const double IterationStart = FPlatformTime::Seconds();
+		else
 		{
-			FScopeLock Lock(&StreamerMutex);
-			Streamer->Tick(IterationStart);
-			Streamer->DrainFinishedSourceIds(Finished);
-		}
-		if (Finished.Num() > 0)
-		{
-			FScopeLock Lock(&SourceMutex);
-			FinishedSourceIds.Append(MoveTemp(Finished));
-		}
-
-		if (!Streamer->IsDone())
-		{
-			PreciseWaitUntil(IterationStart + TickIntervalSeconds, bStopRequested);
+			TArray<FGuid> Finished;
+			{
+				FScopeLock Lock(&StreamerMutex);
+				Streamer->Tick(NowSeconds);
+				Streamer->DrainFinishedSourceIds(Finished);
+			}
+			if (Finished.Num() > 0)
+			{
+				FScopeLock Lock(&SourceMutex);
+				FinishedSourceIds.Append(MoveTemp(Finished));
+			}
+			if (!Streamer->IsDone())
+			{
+				return true;
+			}
 		}
 	}
 
-	// Last statement: by the time a poller observes bFinished, the worker has
-	// either sent the ordinary END or deliberately suppressed it for Abandon.
+	// Last statement: by the time a poller observes bFinished, the sending
+	// thread has either sent the ordinary END or deliberately suppressed it for
+	// Abandon.
 	bFinished.store(true, std::memory_order_release);
-	return 0;
+	return false;
 }
 
 void FHapbeatStreamRunnable::Stop()
 {
-	// Called by the game thread (FRunnableThread::Kill -> Runnable->Stop()).
-	// Just flags the request; Run() notices it (and sends STREAM_END) at the
-	// top of its next loop iteration, or promptly mid-wait (PreciseWaitUntil
-	// polls this flag too, instead of sleeping out a stale pacing target).
+	// Called by the game thread (UHapbeatSubsystem::StopStreamSession, or
+	// FRunnableThread::Kill -> Runnable->Stop() when Run() drives this runnable
+	// on its own thread). Just flags the request; the next Step() notices it and
+	// sends STREAM_END. A self-paced Run() also notices it mid-wait
+	// (PreciseWaitUntil polls this flag); on the shared worker it lands on the
+	// next 10 ms pass.
 	{
 		FScopeLock Lock(&SourceMutex);
 		bAcceptingSources = false;
@@ -344,7 +365,7 @@ void FHapbeatStreamRunnable::DrainFinishedSourceIds(TArray<FGuid>& OutSourceIds)
 	FinishedSourceIds.Reset();
 }
 
-bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
+bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose(double NowSeconds)
 {
 	FScopeLock SourceLock(&SourceMutex);
 	FScopeLock StreamerLock(&StreamerMutex);
@@ -361,18 +382,17 @@ bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 	{
 		if (EmptySinceSeconds >= 0.0)
 		{
-			Streamer->RebasePacing(FPlatformTime::Seconds());
+			Streamer->RebasePacing(NowSeconds);
 		}
 		EmptySinceSeconds = -1.0;
 		return true;
 	}
-	const double Now = FPlatformTime::Seconds();
 	if (EmptySinceSeconds < 0.0)
 	{
-		EmptySinceSeconds = Now;
+		EmptySinceSeconds = NowSeconds;
 		return true;
 	}
-	if (Now - EmptySinceSeconds < 0.300)
+	if (NowSeconds - EmptySinceSeconds < 0.300)
 	{
 		return true;
 	}
@@ -389,7 +409,7 @@ void FHapbeatStreamRunnable::SendRaw(const TArray<uint8>& Packet)
 		return;
 	}
 
-	// Worker-thread only. Socket is guaranteed valid for this object's entire
+	// Sending-thread only. Socket is guaranteed valid for this object's entire
 	// lifetime (see the class doc's threading contract).
 	if (Socket == nullptr)
 	{

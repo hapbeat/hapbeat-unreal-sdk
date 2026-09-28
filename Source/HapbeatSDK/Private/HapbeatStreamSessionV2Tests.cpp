@@ -9,6 +9,7 @@
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamRunnable.h"
 #include "HapbeatStreamSessionContract.h"
+#include "HapbeatStreamWorker.h"
 #include "HapbeatSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "HAL/CriticalSection.h"
@@ -180,8 +181,48 @@ namespace HapbeatStreamSessionV2Test
 			return Result;
 		}
 
+		/** Park the NEXT STREAM_DATA send (on the stream worker) until ReleaseHeldData(). */
+		void HoldNextData()
+		{
+			bDataHeld.store(false, std::memory_order_release);
+			bReleaseData.store(false, std::memory_order_release);
+			bHoldNextData.store(true, std::memory_order_release);
+		}
+
+		void ReleaseHeldData()
+		{
+			bReleaseData.store(true, std::memory_order_release);
+		}
+
+		/** Sending-thread side of HoldNextData(). */
+		void HoldIfArmed(const TArray<uint8>& Packet)
+		{
+			if (Packet.Num() >= FHapbeatProtocol::HeaderSize && Packet[3] == FHapbeatProtocol::CmdStreamData
+				&& bHoldNextData.exchange(false, std::memory_order_acq_rel))
+			{
+				bDataHeld.store(true, std::memory_order_release);
+				while (!bReleaseData.load(std::memory_order_acquire))
+				{
+					FPlatformProcess::Yield();
+				}
+			}
+		}
+
+		bool WaitUntilDataHeld() const
+		{
+			const double Deadline = FPlatformTime::Seconds() + 2.0;
+			while (!bDataHeld.load(std::memory_order_acquire) && FPlatformTime::Seconds() < Deadline)
+			{
+				FPlatformProcess::Yield();
+			}
+			return bDataHeld.load(std::memory_order_acquire);
+		}
+
 		mutable FCriticalSection Lock;
 		TArray<FEntry> Entries;
+		std::atomic<bool> bHoldNextData{false};
+		std::atomic<bool> bDataHeld{false};
+		std::atomic<bool> bReleaseData{false};
 	};
 
 	TArray<FString> LoggingEndpoint()
@@ -208,6 +249,7 @@ namespace HapbeatStreamSessionV2Test
 	protected:
 		virtual void SendRaw(const TArray<uint8>& Packet) override
 		{
+			Log->HoldIfArmed(Packet);
 			Log->Add(Endpoint, Packet);
 		}
 
@@ -606,6 +648,25 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 	{
 		TestEqual(TEXT("v2 restart uses the next generation"), Sub->StreamSessions[KeyB].Identity.Generation, 2u);
 	}
+	// The legacy guard starts when the worker has actually sent A's END: wait
+	// for the retiring sessions to finish, then let the watchdog reap them.
+	{
+		const double Deadline = FPlatformTime::Seconds() + 2.0;
+		bool bAllFinished = false;
+		while (!bAllFinished && FPlatformTime::Seconds() < Deadline)
+		{
+			bAllFinished = true;
+			for (const UHapbeatSubsystem::FRetiringStreamSession& Retiring : Sub->RetiringStreamSessions)
+			{
+				bAllFinished &= Retiring.Runnable->IsFinished();
+			}
+			FPlatformProcess::Yield();
+		}
+		TestTrue(TEXT("stopped sessions finish on the worker"), bAllFinished);
+	}
+	Sub->ReconcileStreamSources();
+	TestFalse(TEXT("legacy endpoint still waits for its 300 ms guard once its END is out"),
+		Sub->StreamSessions.Contains(KeyA));
 	TestFalse(TEXT("a v2 END arms no guard"), Sub->StreamSessionEndedAt.Contains(KeyB));
 	TestTrue(TEXT("a legacy END arms the guard"), Sub->StreamSessionEndedAt.Contains(KeyA));
 	// Age the legacy END past 300 ms instead of sleeping.
@@ -651,7 +712,7 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 	}
 
 	// --- Ignore rules: nothing below may change B's class or restart its session.
-	FHapbeatStreamRunnable* RunningB = Sub->StreamSessions.Contains(KeyB) ? Sub->StreamSessions[KeyB].Runnable : nullptr;
+	FHapbeatStreamRunnable* RunningB = Sub->StreamSessions.Contains(KeyB) ? Sub->StreamSessions[KeyB].Runnable.Get() : nullptr;
 	const TPair<uint16, int64> Newer = IssuePing();
 	Deliver(TEXT("192.0.2.81"), Newer.Key, V2Pong(Newer.Value, "player_1/pos_r_arm", Inc, BootB, 3));
 	const int64 AcceptedTs = Sub->StreamEndpoints.FindChecked(KeyB).LeaseState.LastAcceptedTimestampUs;
@@ -665,7 +726,7 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("... and do not advance its accepted request"),
 		Sub->StreamEndpoints.FindChecked(KeyB).LeaseState.LastAcceptedTimestampUs, AcceptedTs);
 	TestTrue(TEXT("... and leave its session running untouched"),
-		Sub->StreamSessions.Contains(KeyB) && Sub->StreamSessions[KeyB].Runnable == RunningB);
+		Sub->StreamSessions.Contains(KeyB) && Sub->StreamSessions[KeyB].Runnable.Get() == RunningB);
 
 	const FString KeyC = TEXT("192.0.2.82:7700|player_1/pos_chest");
 	const TPair<uint16, int64> ForC = IssuePing();
@@ -891,7 +952,7 @@ bool FHapbeatStreamReacquireOwnershipTest::RunTest(const FString& Parameters)
 	const TPair<uint16, int64> Periodic = IssuePing();
 	Deliver(TEXT("192.0.2.91"), Periodic.Key, V2Pong(Periodic.Value, "player_1/pos_r_arm", Inc, BootB, 3, 0x03));
 	TestFalse(TEXT("B stays deferred under the same incarnation"), Sub->StreamSessions.Contains(KeyB));
-	FHapbeatStreamRunnable* const RunningA = Sub->StreamSessions[KeyA].Runnable;
+	FHapbeatStreamRunnable* const RunningA = Sub->StreamSessions[KeyA].Runnable.Get();
 	const int32 APacketsBefore = Log->Snapshot(AddrA).Num();
 
 	// --- The foreground hook is bound to the application lifecycle and reacquires.
@@ -913,7 +974,7 @@ bool FHapbeatStreamReacquireOwnershipTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("reacquire keeps the legacy class"), ClassOf(KeyA), EHapbeatStreamEndpointClass::Legacy);
 	TestTrue(TEXT("... and leaves the legacy session running untouched"),
-		Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions[KeyA].Runnable == RunningA);
+		Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions[KeyA].Runnable.Get() == RunningA);
 	TestEqual(TEXT("... without sending it an END"),
 		Log->Count(AddrA, FHapbeatProtocol::CmdStreamEnd), 0);
 	TestEqual(TEXT("reacquire forgets the superseded v2 lease"), ClassOf(KeyB), EHapbeatStreamEndpointClass::Unknown);
@@ -933,7 +994,7 @@ bool FHapbeatStreamReacquireOwnershipTest::RunTest(const FString& Parameters)
 		&& Sub->StreamSessions[KeyB].Identity == FHapbeatStreamSessionIdentity(FHapbeatStreamLeaseIdentity(BootB, 4), 1));
 	TestTrue(TEXT("B BEGIN under the new lease sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 2));
 	TestTrue(TEXT("legacy session still the same runner"),
-		Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions[KeyA].Runnable == RunningA);
+		Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions[KeyA].Runnable.Get() == RunningA);
 
 	// --- Reacquire while a v2 session is running: END under the relinquished
 	// identity first, nothing more under it afterwards.
@@ -1046,6 +1107,168 @@ bool FHapbeatStreamIdentityUpdateDiscoveryTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("... and is active"), Playback->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
 
 	Sub->StopStream();
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Persistent stream worker: non-blocking stop, reaping, END -> BEGIN order
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamWorkerSessionTest,
+	"Hapbeat.Streaming.Worker.SessionLifecycle",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatStreamWorkerSessionTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	UGameInstance* GameInstance = NewObject<UGameInstance>();
+	UHapbeatSubsystem* Sub = NewObject<UHapbeatSubsystem>(GameInstance);
+	Sub->bSuppressStreamDiscoveryForAutomationTest = true;
+	const uint64 Inc = 0x5555666677778888ULL;
+	Sub->ClientIncarnation = Inc;
+	TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> Log = MakeShared<FStreamPacketLog, ESPMode::ThreadSafe>();
+	Sub->StreamRunnableFactoryForAutomationTest =
+		[Log](const FGuid& SourceId, TArray<uint8>&& Pcm16, const FString& Target,
+			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror, EHapbeatStreamWireFormat Format,
+			const FHapbeatStreamSessionIdentity& Identity) -> FHapbeatStreamRunnable*
+		{
+			return new FLoggingStreamRunnable(SourceId, MoveTemp(Pcm16), Target, Mirror, Format, Identity, Log);
+		};
+
+	const FString Addr = TEXT("player_1/pos_r_arm");
+	const FString Key = TEXT("192.0.2.97:7700|player_1/pos_r_arm");
+	const uint64 Boot = 0x00000000000B0097ULL;
+	auto AddLoopSource = [&]() -> UHapbeatStreamPlayback*
+	{
+		UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(Sub);
+		Playback->Init(1.0f, 1.0f);
+		Playback->SetLoop(true);
+		UHapbeatSubsystem::FStreamSource& Source = Sub->StreamSources.Add(Playback->Id);
+		Source.CanonicalPcm16 = MakeSessionTestPcm(1000, 160);
+		Source.Playback = Playback;
+		Sub->ActivePlaybacks.Add(Playback);
+		return Playback;
+	};
+	auto HoldWorker = [&]() -> bool
+	{
+		Log->HoldNextData();
+		if (Log->WaitUntilDataHeld())
+		{
+			return true;
+		}
+		Log->ReleaseHeldData();
+		return false;
+	};
+
+	// A v2 endpoint (identity-stamped sessions restart immediately).
+	UHapbeatStreamPlayback* First = AddLoopSource();
+	Sub->PendingPings.Add(500, Pending(30000, Inc));
+	Sub->HandlePongGameThread(TEXT("192.0.2.97"), 7700, 500,
+		static_cast<int64>(FPlatformTime::Seconds() * 1'000'000.0),
+		V2Pong(30000, "player_1/pos_r_arm", Inc, Boot, 1));
+	if (!TestTrue(TEXT("v2 session running"), Sub->StreamSessions.Contains(Key)))
+	{
+		Sub->StopStream();
+		return false;
+	}
+	TestTrue(TEXT("the session runs on the persistent worker"),
+		Sub->StreamWorker != nullptr && Sub->StreamWorker->IsRunning());
+	TestTrue(TEXT("first BEGIN sent"), WaitForCount(*Log, Addr, FHapbeatProtocol::CmdStreamBegin, 1));
+
+	// --- (a) Stopping never waits for the worker. The worker is parked INSIDE a
+	// DATA send, so a stop that joined (or waited for END) could not return.
+	if (!TestTrue(TEXT("worker parked mid-send"), HoldWorker()))
+	{
+		Sub->StopStream();
+		return false;
+	}
+	First->Stop();
+	Sub->StopStreamSession(Key);
+	TestFalse(TEXT("stop returns while the worker is busy"), Sub->StreamSessions.Contains(Key));
+	TestEqual(TEXT("the stopped session is retiring"), Sub->RetiringStreamSessions.Num(), 1);
+	TestFalse(TEXT("... and not finished yet"),
+		Sub->RetiringStreamSessions.Num() == 1 && Sub->RetiringStreamSessions[0].Runnable->IsFinished());
+	TestEqual(TEXT("no END can be out yet"), Log->Count(Addr, FHapbeatProtocol::CmdStreamEnd), 0);
+	Sub->TickStream(0.0f);
+	TestEqual(TEXT("an unfinished retiring session is kept by the watchdog"), Sub->RetiringStreamSessions.Num(), 1);
+	TWeakPtr<FHapbeatStreamRunnable, ESPMode::ThreadSafe> Retired;
+	if (Sub->RetiringStreamSessions.Num() == 1)
+	{
+		Retired = Sub->RetiringStreamSessions[0].Runnable;
+	}
+	Log->ReleaseHeldData();
+	TestTrue(TEXT("the worker sends the END after release"), WaitForCount(*Log, Addr, FHapbeatProtocol::CmdStreamEnd, 1));
+	{
+		const double Deadline = FPlatformTime::Seconds() + 2.0;
+		while (Retired.IsValid() && !Retired.Pin()->IsFinished() && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Yield();
+		}
+	}
+	Sub->TickStream(0.0f);
+	TestEqual(TEXT("a finished retiring session is reaped on a later tick"), Sub->RetiringStreamSessions.Num(), 0);
+	{
+		// The worker drops its reference right after the final Step(); allow it that pass.
+		const double Deadline = FPlatformTime::Seconds() + 1.0;
+		while (Retired.IsValid() && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Yield();
+		}
+	}
+	TestFalse(TEXT("the last reference released deletes the session"), Retired.IsValid());
+
+	// --- (b) Two consecutive sessions on the same endpoint: the first one's END
+	// precedes the second one's BEGIN, even when both land in the same pass.
+	AddLoopSource();
+	Sub->ReconcileStreamSources();
+	TestTrue(TEXT("second session running"), Sub->StreamSessions.Contains(Key));
+	TestTrue(TEXT("second BEGIN sent"), WaitForCount(*Log, Addr, FHapbeatProtocol::CmdStreamBegin, 2));
+	const int32 PacketsBefore = Log->Snapshot(Addr).Num();
+	if (!TestTrue(TEXT("worker parked mid-send again"), HoldWorker()))
+	{
+		Sub->StopStream();
+		return false;
+	}
+	Sub->StopStreamSession(Key);
+	Sub->ReconcileStreamSources();
+	TestTrue(TEXT("third session queued at once (v2)"),
+		Sub->StreamSessions.Contains(Key) && Sub->StreamSessions[Key].Identity.Generation == 3u);
+	Log->ReleaseHeldData();
+	TestTrue(TEXT("third BEGIN sent"), WaitForCount(*Log, Addr, FHapbeatProtocol::CmdStreamBegin, 3));
+	{
+		const TArray<FStreamPacketLog::FEntry> Entries = Log->Snapshot(Addr);
+		int32 OldEndIndex = INDEX_NONE;
+		int32 NewBeginIndex = INDEX_NONE;
+		bool bOldAfterNewBegin = false;
+		for (int32 Index = PacketsBefore; Index < Entries.Num(); ++Index)
+		{
+			const TArray<uint8>& Packet = Entries[Index].Packet;
+			const uint32 Generation = EnvelopeOf(Packet).Generation;
+			if (OldEndIndex == INDEX_NONE && Packet[3] == FHapbeatProtocol::CmdStreamEnd && Generation == 2u)
+			{
+				OldEndIndex = Index;
+			}
+			if (NewBeginIndex == INDEX_NONE && Packet[3] == FHapbeatProtocol::CmdStreamBegin && Generation == 3u)
+			{
+				NewBeginIndex = Index;
+			}
+			if (NewBeginIndex != INDEX_NONE && Generation == 2u)
+			{
+				bOldAfterNewBegin = true;
+			}
+		}
+		TestTrue(TEXT("the first session's END precedes the second session's BEGIN"),
+			OldEndIndex != INDEX_NONE && NewBeginIndex != INDEX_NONE && OldEndIndex < NewBeginIndex);
+		TestFalse(TEXT("nothing of the first session follows the second BEGIN"), bOldAfterNewBegin);
+	}
+
+	// Teardown: the final worker pass ENDs the running session before the join.
+	const int32 EndsBeforeShutdown = Log->Count(Addr, FHapbeatProtocol::CmdStreamEnd);
+	Sub->ShutdownStreamWorker();
+	TestEqual(TEXT("shutdown's final pass sends the running session's END"),
+		Log->Count(Addr, FHapbeatProtocol::CmdStreamEnd), EndsBeforeShutdown + 1);
+	TestTrue(TEXT("shutdown releases every session"),
+		Sub->StreamSessions.Num() == 0 && Sub->RetiringStreamSessions.Num() == 0 && Sub->StreamWorker == nullptr);
 	return true;
 }
 

@@ -10,12 +10,13 @@
 #include "HapbeatStreamLease.h"               // per-endpoint stream class / lease state (stream session v2)
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
 #include "Subsystems/GameInstanceSubsystem.h"
+#include "UObject/ObjectKey.h"                  // TObjectKey (clip PCM cache / preloaded event maps)
 #include "HapbeatSubsystem.generated.h"
 
 class FSocket;
 class FInternetAddr;
 class FHapbeatStreamRunnable;
-class FRunnableThread;
+class FHapbeatStreamWorker;
 class UHapbeatClip;
 class UHapbeatEventMap;
 class UHapbeatStreamPlayback;
@@ -24,6 +25,8 @@ struct FHapbeatEventEntry;
 class FHapbeatStreamLegacyFallbackSubsystemTest;
 class FHapbeatStreamReacquireOwnershipTest;
 class FHapbeatStreamIdentityUpdateDiscoveryTest;
+class FHapbeatStreamWorkerSessionTest;
+class FHapbeatClipPreloadCacheTest;
 struct FHapbeatStreamGainMirror;
 
 /** What a deferred (haptic-delay) send does once its timer fires. See FHapbeatPendingSend. */
@@ -126,10 +129,10 @@ public:
 	static constexpr int32 AddressOverrideDisabled = -1;
 
 	UHapbeatSubsystem();
-	// Out-of-line dtor (defined in the .cpp where FHapbeatStreamRunnable is
-	// complete) so the owned Streamer/thread pointers can be deleted with only
-	// a forward declaration in this header (the generated dtor would otherwise
-	// need the full types).
+	// Out-of-line dtor (defined in the .cpp where FHapbeatStreamWorker /
+	// FHapbeatStreamRunnable are complete) so the owned stream worker can be
+	// shut down and deleted with only a forward declaration in this header (the
+	// generated dtor would otherwise need the full types).
 	virtual ~UHapbeatSubsystem() override;
 
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -265,8 +268,10 @@ public:
 	 * its own STREAM_BEGIN/END session. Sources with different targets therefore
 	 * play concurrently on their devices, and sources sharing a device are mixed.
 	 * Each returned handle has independent gain, pan, loop and stop state. The
-	 * mixers are paced by DEDICATED background threads, so frame hitches
-	 * (GC / render / physics) cannot starve the device's ring buffer.
+	 * mixers are paced by ONE dedicated background stream thread (created with
+	 * the socket, shared by every session), so frame hitches (GC / render /
+	 * physics) cannot starve the device's ring buffer, and starting or ending a
+	 * session never creates or joins a thread on the game thread.
 	 *
 	 * @param Clip         The PCM16 clip (mono or stereo). Null / empty => warn + nullptr.
 	 * @param BaselineGain Frozen author gain (entry.gain x manifest.intensity). 0..2.
@@ -286,13 +291,25 @@ public:
 		const FString& Target = TEXT(""), bool bLoop = false, float InitialPan = 0.0f);
 
 	/**
-	 * Stop every source on every endpoint session: signal each stream thread to send STREAM_END, JOIN
-	 * it (blocks briefly — the thread notices within one ~10ms pacing tick),
-	 * then mark the handle stopped and unregister the watchdog ticker. No-op if
-	 * nothing is streaming.
+	 * Stop every source on every endpoint session: flag each session to send
+	 * STREAM_END (the stream thread does so within one ~10 ms pacing pass) and
+	 * mark every handle stopped. Never blocks on the stream thread; ended
+	 * sessions are released by the watchdog ticker once their END is out.
+	 * No-op if nothing is streaming.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop Streams (Hapbeat)"))
 	void StopStream();
+
+	/**
+	 * Load every Stream Clip of Map now, keep those clips loaded for the
+	 * subsystem's lifetime and pre-build their 16 kHz stereo stream PCM, so no
+	 * later play of this map loads an asset or converts PCM on the game thread.
+	 * PlayEntry does this automatically the first time it sees a map, and the
+	 * SDK trigger components do it in BeginPlay; call it yourself (e.g. during a
+	 * loading screen) for maps you only play through other paths.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Stream", meta = (DisplayName = "Preload Event Map (Hapbeat)"))
+	void PreloadEventMap(UHapbeatEventMap* Map);
 
 	// ---- Global address override (single-app, multi-HMD 1:1 deployments) ----
 
@@ -420,6 +437,8 @@ private:
 	friend class FHapbeatStreamLegacyFallbackSubsystemTest;
 	friend class FHapbeatStreamReacquireOwnershipTest;
 	friend class FHapbeatStreamIdentityUpdateDiscoveryTest;
+	friend class FHapbeatStreamWorkerSessionTest;
+	friend class FHapbeatClipPreloadCacheTest;
 	void SendPacket(const TArray<uint8>& Packet);
 
 	// ---- Haptic delay (PlayEntry / StopEntry only) ----
@@ -461,7 +480,7 @@ private:
 	/**
 	 * Everything StreamClip does once the handle exists: join a compatible active
 	 * session or create a new one, ensure the socket, resolve the target, snapshot
-	 * the unicast destinations and spin up the stream thread. Split out so the
+	 * the unicast destinations and hand the session to the stream worker. Split out so the
 	 * delayed path can create the handle NOW and start the session LATER on the
 	 * very same handle. Returns false if the session could not be started
 	 * (the playback is not retained in ActivePlaybacks in that case).
@@ -482,6 +501,40 @@ private:
 	void AbandonStreamSession(const FString& EndpointKey);
 	void StartEndpointSession(const FString& EndpointKey);
 	bool NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const;
+	/**
+	 * Clip's canonical (16 kHz stereo PCM16) bytes from CanonicalPcmCache, built
+	 * by NormalizeClipToCanonical on the first request only. nullptr if the clip
+	 * cannot be normalized. The pointer is valid until the cache is next modified.
+	 */
+	const TArray<uint8>* FindOrBuildCanonicalPcm(const UHapbeatClip* Clip);
+#if WITH_EDITOR
+	/** Drop a clip's cached canonical PCM when the editor modifies / re-imports / undoes it. */
+	void HandleClipObjectModified(UObject* Object);
+	void HandleClipPropertyChanged(UObject* Object, struct FPropertyChangedEvent& Event);
+#endif
+
+	/**
+	 * Create the persistent stream worker thread if it is not running. Called by
+	 * Connect() once the socket exists (never from a gameplay event). Returns
+	 * false if the thread could not be created.
+	 */
+	bool EnsureStreamWorker();
+	/**
+	 * Teardown only (Deinitialize / dtor): flag every session to END, let the
+	 * worker send those ENDs in one final pass, join it once and release every
+	 * session. After this returns the socket may be destroyed.
+	 */
+	void ShutdownStreamWorker();
+	/** Stop every session (to the retiring list) and every source; no ticker handling, no join. */
+	void RetireAllStreamSessions();
+	/**
+	 * Release retiring sessions whose worker has finished them. A finished
+	 * LEGACY session records its END time here (the 300 ms legacy guard starts
+	 * when its END has actually been sent).
+	 */
+	void ReapRetiredStreamSessions();
+	/** A legacy session for this endpoint (or route) is still retiring, i.e. its END may not be out yet. */
+	bool IsLegacyStreamRetiring(const FString& EndpointKey, const FString& RouteKey) const;
 
 	/**
 	 * Send a PLAY / STOP / STOP_ALL packet. Routing (verbatim parity with Unity
@@ -528,12 +581,12 @@ private:
 	bool TickKeepAlive(float DeltaSeconds);
 
 	/**
-	 * Game-thread watchdog: polls whether the active FHapbeatStreamRunnable has
-	 * finished on its own (natural EOF on a non-loop clip, or the handle's own
-	 * Stop() was called) and, if so, calls StopStream() to join + clean up
-	 * (harmlessly idempotent if the thread is already gone). Bound to a
+	 * Game-thread watchdog: drains per-source EOFs, releases endpoint sessions
+	 * the worker has finished (natural completion) and retiring sessions whose
+	 * END is out, and reconciles sources. Never joins a thread. Bound to a
 	 * dedicated FTSTicker registered only while streaming. Returns false
-	 * (auto-unregisters the ticker) once nothing is streaming; true to keep polling.
+	 * (auto-unregisters the ticker) once no source, session or retiring session
+	 * is left; true to keep polling.
 	 */
 	bool TickStream(float DeltaSeconds);
 
@@ -732,8 +785,29 @@ private:
 	int32 OverrideGroup = AddressOverrideDisabled;
 
 	// --- streaming; game-thread-owned handles, but the actual pacing/sending
-	//     runs on a dedicated stream thread since the 2026-07-25 migration
-	//     (see FHapbeatStreamRunnable's class doc for the full threading contract) ---
+	//     runs on ONE persistent stream worker thread (FHapbeatStreamWorker),
+	//     created with the socket and joined only at teardown (see the
+	//     FHapbeatStreamWorker / FHapbeatStreamRunnable class docs for the full
+	//     threading contract) ---
+
+	/** The persistent stream worker; created in Connect(), shut down in Deinitialize()/dtor. */
+	FHapbeatStreamWorker* StreamWorker = nullptr;
+
+	/**
+	 * Clips loaded by PreloadEventMap. UPROPERTY keeps them from being garbage
+	 * collected (FHapbeatEventEntry::StreamClip is a soft pointer), so a later
+	 * play never loads the asset again.
+	 */
+	UPROPERTY()
+	TSet<TObjectPtr<UHapbeatClip>> PinnedStreamClips;
+	/** Maps PreloadEventMap has already run for (PlayEntry preloads on first use). */
+	TSet<TObjectKey<UHapbeatEventMap>> PreloadedEventMaps;
+	/** NormalizeClipToCanonical output per clip; built once, dropped in editor when the clip changes. */
+	TMap<TObjectKey<UHapbeatClip>, TArray<uint8>> CanonicalPcmCache;
+#if WITH_EDITOR
+	FDelegateHandle ClipObjectModifiedHandle;
+	FDelegateHandle ClipPropertyChangedHandle;
+#endif
 
 	/**
 	 * Active local source handles. UPROPERTY roots every source while the shared
@@ -767,8 +841,8 @@ private:
 
 	struct FStreamSession
 	{
-		FHapbeatStreamRunnable* Runnable = nullptr;
-		FRunnableThread* Thread = nullptr;
+		/** Shared with the stream worker, which drops its reference once Step() finishes the session. */
+		TSharedPtr<FHapbeatStreamRunnable, ESPMode::ThreadSafe> Runnable;
 		TSet<FGuid> SourceIds;
 		/** Immutable for the session: the END goes out in this format even after a class change. */
 		EHapbeatStreamWireFormat Format = EHapbeatStreamWireFormat::LegacyV1;
@@ -800,17 +874,36 @@ private:
 	TMap<FString, FStreamEndpoint> StreamEndpoints;
 	/** Logical sources, each independently assigned to matching endpoint sessions. */
 	TMap<FGuid, FStreamSource> StreamSources;
-	/** One runnable/thread per exact PONG endpoint. */
+	/** One runnable per exact PONG endpoint, all driven by StreamWorker. */
 	TMap<FString, FStreamSession> StreamSessions;
+
+	/** A session stopped/abandoned on the game thread whose END the worker may not have sent yet. */
+	struct FRetiringStreamSession
+	{
+		TSharedPtr<FHapbeatStreamRunnable, ESPMode::ThreadSafe> Runnable;
+		FString EndpointKey;
+		/** Ip|Address of the endpoint when it retired (legacy route guard). */
+		FString RouteKey;
+		EHapbeatStreamWireFormat Format = EHapbeatStreamWireFormat::LegacyV1;
+		/** Abandoned routes send no END, so they arm no legacy guard. */
+		bool bAbandoned = false;
+	};
+	/**
+	 * Sessions retired by StopStreamSession / AbandonStreamSession, released by
+	 * ReapRetiredStreamSessions once IsFinished(). The game thread never joins.
+	 */
+	TArray<FRetiringStreamSession> RetiringStreamSessions;
 	/**
 	 * Last LEGACY END time per endpoint / route+address; enforces the 300 ms
-	 * END->BEGIN guard for pre-v2 receivers only. v2 sessions never record here
+	 * END->BEGIN guard for pre-v2 receivers only. Recorded when the finished
+	 * session is observed (its END is out); while a legacy session is still
+	 * retiring its endpoint does not start either. v2 sessions never record here
 	 * and never wait (stream-session-v2.md "Legacy receiver fallback (SDK)").
 	 */
 	TMap<FString, double> StreamSessionEndedAt;
 	TMap<FString, double> StreamRouteEndedAt;
 
-	/** Game-thread watchdog ticker driving TickStream; valid while sources are active or Deferred. */
+	/** Game-thread watchdog ticker driving TickStream; valid while sources are active or Deferred, or sessions are retiring. */
 	FTSTicker::FDelegateHandle StreamTickHandle;
 
 	/** Send-ahead lead for streaming; seeded from UHapbeatConfig in Initialize. */
@@ -836,12 +929,15 @@ private:
 	int32 StreamDiscoveryRequestCount = 0;
 	/**
 	 * Test-only session seam: when bound, StartEndpointSession builds its runnable
-	 * here (a recording runner whose SendRaw never touches a socket) and no socket
-	 * is required. Arguments: first source id, its PCM, BEGIN target, mirror,
-	 * wire format and session identity.
+	 * here (a recording runner whose SendRaw never touches a socket; the subsystem
+	 * takes ownership) and no socket is required — the stream worker is then
+	 * started on demand. Arguments: first source id, its PCM, BEGIN target,
+	 * mirror, wire format and session identity.
 	 */
 	TFunction<FHapbeatStreamRunnable*(const FGuid&, TArray<uint8>&&, const FString&,
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>, EHapbeatStreamWireFormat,
 		const FHapbeatStreamSessionIdentity&)> StreamRunnableFactoryForAutomationTest;
+	/** Test-only: how many times FindOrBuildCanonicalPcm actually normalized a clip. */
+	int32 CanonicalPcmBuildCountForAutomationTest = 0;
 #endif
 };

@@ -11,13 +11,13 @@
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamSessionContract.h"
 #include "HapbeatStreamRunnable.h"
+#include "HapbeatStreamWorker.h"
 #include "HapbeatTargetLibrary.h"
 #include "Async/Async.h"
 #include "Common/UdpSocketBuilder.h"
 #include "Common/UdpSocketReceiver.h"
 #include "Engine/GameInstance.h"  // GetGameInstance()->GetTimerManager() — the haptic-delay timers
 #include "TimerManager.h"
-#include "HAL/RunnableThread.h"   // FRunnableThread::Create/Kill for the dedicated stream thread
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Framework/Application/SlateApplication.h" // desktop app activation -> ReacquireStreamOwnership
 #include "Misc/App.h"
@@ -26,6 +26,9 @@
 #include "Misc/ScopeLock.h"      // FScopeLock (SeqLock)
 #include "Sockets.h"
 #include "SocketSubsystem.h"
+#if WITH_EDITOR
+#include "UObject/UObjectGlobals.h" // FCoreUObjectDelegates — clip edits invalidate the canonical PCM cache
+#endif
 
 namespace
 {
@@ -43,7 +46,9 @@ DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 UHapbeatSubsystem::UHapbeatSubsystem() = default;
 UHapbeatSubsystem::~UHapbeatSubsystem()
 {
-	StopStream();
+	// Normally already done by Deinitialize(); idempotent. Covers subsystems
+	// that were never initialized (automation tests start the worker on demand).
+	ShutdownStreamWorker();
 }
 
 void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -108,6 +113,17 @@ void UHapbeatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// stream-session-v2.md: foreground resume issues a fresh client incarnation
 	// (Unity HapbeatManager.OnApplicationFocus -> ReacquireStreamOwnership).
 	BindApplicationLifecycle();
+
+#if WITH_EDITOR
+	// A clip edited while PIE runs (Details "Import WAV", scripting re-import,
+	// undo/redo) must not keep streaming its stale canonical PCM. Every editor
+	// path that rewrites an existing clip's samples calls Modify() first, and
+	// undo/redo ends in PostEditChange, so these two delegates cover them.
+	ClipObjectModifiedHandle = FCoreUObjectDelegates::OnObjectModified.AddUObject(
+		this, &UHapbeatSubsystem::HandleClipObjectModified);
+	ClipPropertyChangedHandle = FCoreUObjectDelegates::OnObjectPropertyChanged.AddUObject(
+		this, &UHapbeatSubsystem::HandleClipPropertyChanged);
+#endif
 }
 
 void UHapbeatSubsystem::Deinitialize()
@@ -115,6 +131,12 @@ void UHapbeatSubsystem::Deinitialize()
 	// Block any late SendPacket from lazily re-opening the socket during teardown.
 	bShuttingDown = true;
 	UnbindApplicationLifecycle();
+#if WITH_EDITOR
+	FCoreUObjectDelegates::OnObjectModified.Remove(ClipObjectModifiedHandle);
+	FCoreUObjectDelegates::OnObjectPropertyChanged.Remove(ClipPropertyChangedHandle);
+	ClipObjectModifiedHandle.Reset();
+	ClipPropertyChangedHandle.Reset();
+#endif
 
 	// Drop anything the haptic delay was still holding. The GameInstance timer
 	// manager dies with the game instance anyway (PIE stop), but clearing here
@@ -122,11 +144,12 @@ void UHapbeatSubsystem::Deinitialize()
 	// playback objects those records were keeping alive.
 	CancelPendingSends();
 
-	// End any active stream FIRST, while the socket is still open: this sends
-	// STREAM_END to the device and removes the streaming ticker. Doing it before
-	// the receiver/socket teardown guarantees the END actually goes out (and the
-	// ticker can't fire into a half-destroyed subsystem).
-	StopStream();
+	// End any active stream FIRST, while the socket is still open: every session
+	// is flagged, the stream worker sends each STREAM_END in one final pass and
+	// is joined, and the streaming ticker is removed. Doing it before the
+	// receiver/socket teardown guarantees the END actually goes out (and neither
+	// the worker nor the ticker can touch a half-destroyed subsystem).
+	ShutdownStreamWorker();
 
 	// Stop the keep-alive ticker first so it can't fire mid-teardown.
 	if (KeepAliveHandle.IsValid())
@@ -191,6 +214,10 @@ void UHapbeatSubsystem::Connect(int32 InPort, const FString& InAppName)
 		UE_LOG(LogHapbeat, Warning, TEXT("Failed to create/bind UDP socket on port %d"), Port);
 		return;
 	}
+
+	// The one stream sending thread lives as long as the socket: starting it here
+	// keeps thread creation out of every gameplay haptic event.
+	EnsureStreamWorker();
 
 	ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
 	if (SocketSubsystem == nullptr)
@@ -314,6 +341,14 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 
 	if (Entry.Mode == EHapticMode::StreamClip)
 	{
+		// First use of this map: load + pin every clip it streams and build their
+		// canonical PCM now, once, so later plays neither hit storage nor convert.
+		if (!PreloadedEventMaps.Contains(Map))
+		{
+			PreloadEventMap(Map);
+		}
+		// Resolves the pinned, already-loaded clip; loads only an entry edited
+		// after the preload (editor).
 		UHapbeatClip* Clip = Entry.StreamClip.LoadSynchronous();
 		if (Clip == nullptr)
 		{
@@ -793,7 +828,8 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 
 	// The stream thread must NOT lazily Connect() itself (that touches
 	// Receiver/tickers/etc — game-thread-only machinery) — ensure the socket
-	// exists here, on the game thread, before spinning the thread up. Same
+	// (and with it the stream worker) exists here, on the game thread, before
+	// any session is handed over. Same
 	// teardown guard as SendPacket: never resurrect the socket / receiver /
 	// keep-alive ticker on an already-deinitialized subsystem.
 	if (Socket == nullptr)
@@ -810,8 +846,8 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 		}
 	}
 
-	TArray<uint8> CanonicalPcm16;
-	if (!NormalizeClipToCanonical(Clip, CanonicalPcm16))
+	const TArray<uint8>* CanonicalPcm16 = FindOrBuildCanonicalPcm(Clip);
+	if (CanonicalPcm16 == nullptr)
 	{
 		UE_LOG(LogHapbeat, Warning, TEXT("StreamClip: could not normalize clip to 16 kHz stereo PCM16; ignoring."));
 		return false;
@@ -821,7 +857,7 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 	Playback->SetLoop(bLoop);
 	ActivePlaybacks.Add(Playback);
 	FStreamSource& Source = StreamSources.Add(Playback->Id);
-	Source.CanonicalPcm16 = MoveTemp(CanonicalPcm16);
+	Source.CanonicalPcm16 = *CanonicalPcm16;
 	Source.AuthoredTarget = Target;
 	Source.ResolvedTarget = ResolvedTarget;
 	Source.Playback = Playback;
@@ -835,7 +871,7 @@ bool UHapbeatSubsystem::StartStreamSession(UHapbeatClip* Clip, UHapbeatStreamPla
 	}
 
 	ReconcileStreamSources();
-	UE_LOG(LogHapbeat, Log, TEXT("Stream source registered: 16000Hz stereo, target=%s, loop=%d"),
+	UE_LOG(LogHapbeat, Verbose, TEXT("Stream source registered: 16000Hz stereo, target=%s, loop=%d"),
 		ResolvedTarget.IsEmpty() ? TEXT("all") : *ResolvedTarget, bLoop ? 1 : 0);
 
 	return true;
@@ -876,6 +912,70 @@ void UHapbeatSubsystem::RequestStreamDiscoveryForDeferredSources()
 		return;
 	}
 }
+
+void UHapbeatSubsystem::PreloadEventMap(UHapbeatEventMap* Map)
+{
+	if (Map == nullptr)
+	{
+		return;
+	}
+	PreloadedEventMaps.Add(Map);
+	for (const FHapbeatEventEntry& Entry : Map->Entries)
+	{
+		if (Entry.Mode != EHapticMode::StreamClip || Entry.StreamClip.IsNull())
+		{
+			continue;
+		}
+		UHapbeatClip* Clip = Entry.StreamClip.LoadSynchronous();
+		if (Clip == nullptr)
+		{
+			continue;
+		}
+		PinnedStreamClips.Add(Clip);
+		// Invalid clips are reported when played (StartStreamSession); here the
+		// only goal is that a valid one is never converted on a play again.
+		FindOrBuildCanonicalPcm(Clip);
+	}
+}
+
+const TArray<uint8>* UHapbeatSubsystem::FindOrBuildCanonicalPcm(const UHapbeatClip* Clip)
+{
+	if (Clip == nullptr)
+	{
+		return nullptr;
+	}
+	const TObjectKey<UHapbeatClip> Key(Clip);
+	if (const TArray<uint8>* Cached = CanonicalPcmCache.Find(Key))
+	{
+		return Cached;
+	}
+	TArray<uint8> CanonicalPcm16;
+	if (!NormalizeClipToCanonical(Clip, CanonicalPcm16))
+	{
+		return nullptr;
+	}
+#if WITH_DEV_AUTOMATION_TESTS
+	++CanonicalPcmBuildCountForAutomationTest;
+#endif
+	return &CanonicalPcmCache.Add(Key, MoveTemp(CanonicalPcm16));
+}
+
+#if WITH_EDITOR
+void UHapbeatSubsystem::HandleClipObjectModified(UObject* Object)
+{
+	// Modify() runs before the new samples are written, in the same game-thread
+	// call; the next play (necessarily later) rebuilds from the new data.
+	if (const UHapbeatClip* Clip = Cast<UHapbeatClip>(Object))
+	{
+		CanonicalPcmCache.Remove(TObjectKey<UHapbeatClip>(Clip));
+	}
+}
+
+void UHapbeatSubsystem::HandleClipPropertyChanged(UObject* Object, FPropertyChangedEvent& /*Event*/)
+{
+	HandleClipObjectModified(Object);
+}
+#endif
 
 bool UHapbeatSubsystem::NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const
 {
@@ -973,7 +1073,7 @@ FString UHapbeatSubsystem::RegisterStreamEndpoint(
 		FStreamSession Migrated;
 		if (StreamSessions.RemoveAndCopyValue(OldKey, Migrated))
 		{
-			if (Migrated.Runnable != nullptr)
+			if (Migrated.Runnable.IsValid())
 			{
 				Migrated.Runnable->UpdateEndpoint(Ip, InPort);
 			}
@@ -982,6 +1082,15 @@ FString UHapbeatSubsystem::RegisterStreamEndpoint(
 		if (const double* EndedAt = StreamSessionEndedAt.Find(OldKey))
 		{
 			StreamSessionEndedAt.Add(EndpointKey, *EndedAt);
+		}
+		// A retiring legacy session's pending END guards the endpoint wherever
+		// it moves, exactly like the END time it has not recorded yet.
+		for (FRetiringStreamSession& Retiring : RetiringStreamSessions)
+		{
+			if (Retiring.EndpointKey == OldKey)
+			{
+				Retiring.EndpointKey = EndpointKey;
+			}
 		}
 		// The stream class / lease belongs to the device, not to the route it
 		// answered from: carry it like the END time so a migrated session keeps
@@ -1020,6 +1129,9 @@ FString UHapbeatSubsystem::RegisterStreamEndpoint(
 
 void UHapbeatSubsystem::ReconcileStreamSources()
 {
+	// Release retiring sessions whose END is out first, so a legacy endpoint's
+	// guard below starts from the END it has actually sent.
+	ReapRetiredStreamSessions();
 	const double Now = FPlatformTime::Seconds();
 	TArray<FString> ExpiredEndpointKeys;
 	for (const TPair<FString, FStreamEndpoint>& Pair : StreamEndpoints)
@@ -1081,7 +1193,7 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 			}
 			if (FStreamSession* PreviousSession = StreamSessions.Find(PreviousEndpointKey))
 			{
-				if (PreviousSession->Runnable != nullptr)
+				if (PreviousSession->Runnable.IsValid())
 				{
 					PreviousSession->Runnable->DetachSource(Pair.Key);
 				}
@@ -1099,7 +1211,7 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 		for (const FString& EndpointKey : Source.EndpointKeys)
 		{
 			FStreamSession* Existing = StreamSessions.Find(EndpointKey);
-			if (Existing != nullptr && Existing->Runnable != nullptr)
+			if (Existing != nullptr && Existing->Runnable.IsValid())
 			{
 				if (!Existing->SourceIds.Contains(Pair.Key))
 				{
@@ -1126,6 +1238,11 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 			// this endpoint alone keeps the 300 ms END->BEGIN guard; the source
 			// stays deferred for it meanwhile and other endpoints are unaffected.
 			const FString RouteKey = Endpoint != nullptr ? Endpoint->Ip + TEXT("|") + Endpoint->Address : FString();
+			if (IsLegacyStreamRetiring(EndpointKey, RouteKey))
+			{
+				// Its END may still be queued on the worker; the guard starts once it is out.
+				continue;
+			}
 			const double* EndedAt = StreamSessionEndedAt.Find(EndpointKey);
 			const double* RouteEndedAt = StreamRouteEndedAt.Find(RouteKey);
 			if ((EndedAt == nullptr || Now - *EndedAt >= 0.300)
@@ -1146,8 +1263,14 @@ void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 	}
 	bool bHasTransport = Socket != nullptr;
 #if WITH_DEV_AUTOMATION_TESTS
-	bHasTransport = bHasTransport || static_cast<bool>(StreamRunnableFactoryForAutomationTest);
+	if (StreamRunnableFactoryForAutomationTest)
+	{
+		// In-memory sessions need no socket, but still the real worker. Tests
+		// never call Connect(), so this seam alone starts it on demand.
+		bHasTransport = EnsureStreamWorker();
+	}
 #endif
+	bHasTransport = bHasTransport && StreamWorker != nullptr && StreamWorker->IsRunning();
 	if (!bHasTransport || !IsEndpointStreamable(*Endpoint))
 	{
 		return;
@@ -1195,30 +1318,23 @@ void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 #if WITH_DEV_AUTOMATION_TESTS
 	if (StreamRunnableFactoryForAutomationTest)
 	{
-		Session.Runnable = StreamRunnableFactoryForAutomationTest(FirstSourceId,
+		Session.Runnable = MakeShareable(StreamRunnableFactoryForAutomationTest(FirstSourceId,
 			TArray<uint8>(FirstSource->CanonicalPcm16), Endpoint->Address, FirstPlayback->GetMirror(),
-			Session.Format, Session.Identity);
+			Session.Format, Session.Identity));
 	}
 	else
 #endif
 	{
 		TArray<FString> EndpointIps;
 		EndpointIps.Add(Endpoint->Ip);
-		Session.Runnable = new FHapbeatStreamRunnable(
+		Session.Runnable = MakeShared<FHapbeatStreamRunnable, ESPMode::ThreadSafe>(
 			FirstSourceId, TArray<uint8>(FirstSource->CanonicalPcm16), 16000, 2, Endpoint->Address,
 			FirstPlayback->GetMirror(), [this]() { return NextSeq(); }, Socket,
 			Endpoint->Port, MoveTemp(EndpointIps), StreamSendAheadSeconds,
 			Session.Format, Session.Identity);
 	}
-	if (Session.Runnable == nullptr)
+	if (!Session.Runnable.IsValid())
 	{
-		FirstPlayback->SetDeferredNoEndpoint();
-		return;
-	}
-	Session.Thread = FRunnableThread::Create(Session.Runnable, TEXT("HapbeatStreamEndpointThread"), 0, TPri_AboveNormal);
-	if (Session.Thread == nullptr)
-	{
-		delete Session.Runnable;
 		FirstPlayback->SetDeferredNoEndpoint();
 		return;
 	}
@@ -1236,6 +1352,9 @@ void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 			}
 		}
 	}
+	// Hand-over only: the worker Init()s the session on its own thread and sends
+	// its BEGIN on its next pass, after any END queued ahead of it.
+	StreamWorker->AddSession(Session.Runnable);
 	StreamSessions.Add(EndpointKey, MoveTemp(Session));
 }
 
@@ -1247,23 +1366,21 @@ void UHapbeatSubsystem::StopStreamSession(const FString& EndpointKey)
 	{
 		return;
 	}
-	if (Session.Thread != nullptr)
+	if (!Session.Runnable.IsValid())
 	{
-		Session.Thread->Kill(true);
-		delete Session.Thread;
+		return;
 	}
-	delete Session.Runnable;
+	// Flag only: the worker sends STREAM_END on its next pass. Never joined here;
+	// the retiring record is released once the session reports IsFinished().
+	Session.Runnable->Stop();
+	FRetiringStreamSession& Retiring = RetiringStreamSessions.AddDefaulted_GetRef();
+	Retiring.Runnable = MoveTemp(Session.Runnable);
+	Retiring.EndpointKey = EndpointKey;
+	Retiring.RouteKey = Endpoint != nullptr ? Endpoint->Ip + TEXT("|") + Endpoint->Address : FString();
 	// Only a LEGACY END arms the 300 ms guard (pre-v2 firmware cannot reject a
-	// stale END). A v2 END is identity-stamped, so the next v2 BEGIN is immediate.
-	if (Session.Format == EHapbeatStreamWireFormat::LegacyV1)
-	{
-		const double EndedAt = FPlatformTime::Seconds();
-		StreamSessionEndedAt.Add(EndpointKey, EndedAt);
-		if (Endpoint != nullptr)
-		{
-			StreamRouteEndedAt.Add(Endpoint->Ip + TEXT("|") + Endpoint->Address, EndedAt);
-		}
-	}
+	// stale END), recorded when the finished session is reaped. A v2 END is
+	// identity-stamped, so the next v2 BEGIN is immediate.
+	Retiring.Format = Session.Format;
 }
 
 void UHapbeatSubsystem::AbandonStreamSession(const FString& EndpointKey)
@@ -1273,23 +1390,122 @@ void UHapbeatSubsystem::AbandonStreamSession(const FString& EndpointKey)
 	{
 		return;
 	}
-	if (Session.Runnable != nullptr)
+	if (!Session.Runnable.IsValid())
 	{
-		Session.Runnable->Abandon();
+		return;
 	}
-	if (Session.Thread != nullptr)
+	Session.Runnable->Abandon();
+	FRetiringStreamSession& Retiring = RetiringStreamSessions.AddDefaulted_GetRef();
+	Retiring.Runnable = MoveTemp(Session.Runnable);
+	Retiring.EndpointKey = EndpointKey;
+	Retiring.Format = Session.Format;
+	Retiring.bAbandoned = true;
+}
+
+void UHapbeatSubsystem::ReapRetiredStreamSessions()
+{
+	for (int32 Index = RetiringStreamSessions.Num() - 1; Index >= 0; --Index)
 	{
-		Session.Thread->Kill(true);
-		delete Session.Thread;
+		const FRetiringStreamSession& Retiring = RetiringStreamSessions[Index];
+		if (Retiring.Runnable.IsValid() && !Retiring.Runnable->IsFinished())
+		{
+			continue;
+		}
+		if (!Retiring.bAbandoned && Retiring.Format == EHapbeatStreamWireFormat::LegacyV1)
+		{
+			const double EndedAt = FPlatformTime::Seconds();
+			StreamSessionEndedAt.Add(Retiring.EndpointKey, EndedAt);
+			if (!Retiring.RouteKey.IsEmpty())
+			{
+				StreamRouteEndedAt.Add(Retiring.RouteKey, EndedAt);
+			}
+		}
+		// Drops the game thread's reference; the worker already dropped its own
+		// (or drops it on this pass), and the last one deletes the runnable.
+		RetiringStreamSessions.RemoveAt(Index);
 	}
-	delete Session.Runnable;
+}
+
+bool UHapbeatSubsystem::IsLegacyStreamRetiring(const FString& EndpointKey, const FString& RouteKey) const
+{
+	for (const FRetiringStreamSession& Retiring : RetiringStreamSessions)
+	{
+		if (!Retiring.bAbandoned && Retiring.Format == EHapbeatStreamWireFormat::LegacyV1
+			&& (Retiring.EndpointKey == EndpointKey || (!RouteKey.IsEmpty() && Retiring.RouteKey == RouteKey)))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UHapbeatSubsystem::EnsureStreamWorker()
+{
+	if (StreamWorker != nullptr && StreamWorker->IsRunning())
+	{
+		return true;
+	}
+	if (bShuttingDown)
+	{
+		return false;
+	}
+	if (StreamWorker == nullptr)
+	{
+		StreamWorker = new FHapbeatStreamWorker();
+	}
+	if (!StreamWorker->Start())
+	{
+		UE_LOG(LogHapbeat, Warning, TEXT("Could not create the Hapbeat stream worker thread; clip streaming is unavailable."));
+		return false;
+	}
+	return true;
+}
+
+void UHapbeatSubsystem::RetireAllStreamSessions()
+{
+	TArray<FString> SessionKeys;
+	StreamSessions.GetKeys(SessionKeys);
+	for (const FString& Key : SessionKeys)
+	{
+		StopStreamSession(Key);
+	}
+
+	for (UHapbeatStreamPlayback* Playback : ActivePlaybacks)
+	{
+		if (Playback != nullptr)
+		{
+			Playback->Stop();
+		}
+	}
+	ActivePlaybacks.Empty();
+	StreamSources.Empty();
+}
+
+void UHapbeatSubsystem::ShutdownStreamWorker()
+{
+	// Every session is flagged BEFORE the worker is asked to stop, so its final
+	// pass sends each ordinary END (abandoned ones stay silent). The one join.
+	RetireAllStreamSessions();
+	if (StreamWorker != nullptr)
+	{
+		StreamWorker->Shutdown();
+		delete StreamWorker;
+		StreamWorker = nullptr;
+	}
+	RetiringStreamSessions.Empty();
+
+	if (StreamTickHandle.IsValid())
+	{
+		FTSTicker::GetCoreTicker().RemoveTicker(StreamTickHandle);
+		StreamTickHandle.Reset();
+	}
 }
 
 bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 {
 	for (TPair<FString, FStreamSession>& SessionPair : StreamSessions)
 	{
-		if (SessionPair.Value.Runnable == nullptr)
+		if (!SessionPair.Value.Runnable.IsValid())
 		{
 			continue;
 		}
@@ -1361,18 +1577,15 @@ bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 	for (auto It = StreamSessions.CreateIterator(); It; ++It)
 	{
 		FStreamSession& Session = It.Value();
-		if (Session.Runnable != nullptr && Session.Runnable->IsFinished())
+		if (Session.Runnable.IsValid() && Session.Runnable->IsFinished())
 		{
 			for (const FGuid& SourceId : Session.SourceIds)
 			{
 				CompletedCandidates.Add(SourceId);
 			}
-			if (Session.Thread != nullptr)
-			{
-				Session.Thread->Kill(true);
-				delete Session.Thread;
-			}
-			delete Session.Runnable;
+			// Finished on the worker (natural completion): its END is out and the
+			// worker has let go, so dropping this reference releases it. No join.
+			Session.Runnable.Reset();
 			if (Session.Format == EHapbeatStreamWireFormat::LegacyV1)
 			{
 				const double EndedAt = FPlatformTime::Seconds();
@@ -1407,8 +1620,9 @@ bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 			}
 		}
 	}
+	// Also reaps retiring sessions whose END is out (first thing it does).
 	ReconcileStreamSources();
-	if (StreamSources.Num() > 0 || StreamSessions.Num() > 0)
+	if (StreamSources.Num() > 0 || StreamSessions.Num() > 0 || RetiringStreamSessions.Num() > 0)
 	{
 		return true;
 	}
@@ -1418,29 +1632,24 @@ bool UHapbeatSubsystem::TickStream(float /*DeltaSeconds*/)
 
 void UHapbeatSubsystem::StopStream()
 {
-	TArray<FString> SessionKeys;
-	StreamSessions.GetKeys(SessionKeys);
-	for (const FString& Key : SessionKeys)
-	{
-		StopStreamSession(Key);
-	}
+	RetireAllStreamSessions();
 
-	for (UHapbeatStreamPlayback* Playback : ActivePlaybacks)
+	if (RetiringStreamSessions.Num() > 0)
 	{
-		if (Playback != nullptr)
+		// Keep the watchdog running until the worker has sent every END, so the
+		// retired sessions are released (and a legacy guard is armed) on time.
+		if (!StreamTickHandle.IsValid())
 		{
-			Playback->Stop();
+			StreamTickHandle = FTSTicker::GetCoreTicker().AddTicker(
+				FTickerDelegate::CreateUObject(this, &UHapbeatSubsystem::TickStream), 0.0f);
 		}
+		return;
 	}
-	ActivePlaybacks.Empty();
-	StreamSources.Empty();
 
-	// Remove the ticker explicitly. Callers from OUTSIDE the tick callback
-	// (StreamClip's replace path, Deinitialize) land here with a valid handle.
-	// TickStream's watchdog path deliberately Reset()s the handle before
-	// calling us, so this branch is skipped there and its `return false`
-	// stays the sole unregister mechanism (never RemoveTicker the
-	// currently-firing handle).
+	// Nothing left to watch: remove the ticker explicitly. Callers land here from
+	// OUTSIDE the tick callback (StopEntry, a delayed StopStream, Blueprint);
+	// TickStream never calls StopStream, so its own `return false` stays the only
+	// way the currently-firing handle unregisters itself.
 	if (StreamTickHandle.IsValid())
 	{
 		FTSTicker::GetCoreTicker().RemoveTicker(StreamTickHandle);

@@ -13,42 +13,55 @@ class FSocket;
 class FInternetAddr;
 
 /**
- * Dedicated background thread that paces and sends one wire StreamClip session.
- * Compatible overlapping local sources are mixed into that session before each
- * STREAM_DATA chunk is sent. Replaces the old game-thread FTSTicker-driven model
- * (see the FHapbeatStreamer class doc / dev-notes/unreal-sdk-v1-design.md §5):
- * frame hitches (GC / render / physics spikes) on the game thread used to
- * starve the device ring buffer and cause irregular, audible dropouts — a
- * dedicated thread with its own precise pacing avoids that entirely. The
- * Unity SDK hit the identical bug in production and fixed it the same way
- * (commits 94ec760 / 7c0aafc); this is that fix, ported.
+ * One wire StreamClip session to one exact endpoint, paced and sent OFF the
+ * game thread. Compatible overlapping local sources are mixed into that session
+ * before each STREAM_DATA chunk is sent. Replaces the old game-thread
+ * FTSTicker-driven model (see the FHapbeatStreamer class doc /
+ * dev-notes/unreal-sdk-v1-design.md §5): frame hitches (GC / render / physics
+ * spikes) on the game thread used to starve the device ring buffer and cause
+ * irregular, audible dropouts — a dedicated sending thread with its own precise
+ * pacing avoids that entirely. The Unity SDK hit the identical bug in
+ * production and fixed it the same way (commits 94ec760 / 7c0aafc); this is
+ * that fix, ported.
+ *
+ * Execution model: UHapbeatSubsystem hands every session to its ONE persistent
+ * FHapbeatStreamWorker thread (created with the UDP socket, not per event). The
+ * worker calls Init() when it admits the session and then Step() once per 10 ms
+ * pass, in admission order, until Step() returns false. Run() is kept as a
+ * self-paced loop over the same Step() for callers that drive a runnable on its
+ * own FRunnableThread (editor Test Play, runner contract tests). "Sending
+ * thread" below means whichever of the two drives this object.
  *
  * Threading contract (read before touching this class):
- *   - Run() owns FHapbeatStreamer's pacing and wire state. DetachSource() is
- *     the one game-thread exception: it takes StreamerMutex before removing a
- *     cursor, which is also held around every worker tick/send. Therefore when
- *     DetachSource() returns, no STREAM_DATA containing that source can still
- *     be sent on this endpoint.
+ *   - Init()/Step()/Run() (the sending thread) own FHapbeatStreamer's pacing and
+ *     wire state. DetachSource() is the one game-thread exception: it takes
+ *     StreamerMutex before removing a cursor, which is also held around every
+ *     sending-thread tick/send. Therefore when DetachSource() returns, no
+ *     STREAM_DATA containing that source can still be sent on this endpoint.
  *   - The ONLY source state shared with the game thread is the
  *     Gain/Pan/Loop/bStopped
  *     ATOMIC mirror (FHapbeatStreamGainMirror — never the UHapbeatStreamPlayback
  *     UObject itself, which is unsafe to read from a non-game thread under GC);
- *     the subsystem's Socket raw pointer (valid for this thread's entire
- *     lifetime by construction — UHapbeatSubsystem::StopStream() always
- *     Kill(true)-joins this thread before the subsystem could ever destroy the
- *     socket); and the subsystem's internally-locked NextSeq() callback (shared
- *     with the game thread's Play/Stop/Ping/etc. sends, exactly like Unity's
- *     single locked _sequenceNumber).
+ *     the subsystem's Socket raw pointer (valid for this object's entire sending
+ *     life by construction — UHapbeatSubsystem joins its stream worker, after a
+ *     final pass that sends every pending END, before it destroys the socket);
+ *     and the subsystem's internally-locked NextSeq() callback (shared with the
+ *     game thread's Play/Stop/Ping/etc. sends, exactly like Unity's single
+ *     locked _sequenceNumber).
+ *   - Lifetime is shared (TSharedPtr, ThreadSafe): the subsystem and the worker
+ *     each hold a reference, and whichever releases last deletes the object.
+ *     The game thread never blocks on the sending thread: Stop()/Abandon() only
+ *     set flags, and it later observes IsFinished() to drop its reference.
  *   - Exact unicast targets are captured as PLAIN VALUES (IP strings / port)
- *     at construction time and turned into this thread's
+ *     at construction time and turned into the sending thread's
  *     OWN FInternetAddr instances in Init() — never a TSharedPtr<FInternetAddr>
  *     shared with the game thread. (UE5's TSharedPtr default IS ThreadSafe, so
  *     the refcount itself would be fine; the point is that the pointed-to
  *     FInternetAddr is a mutable object with no documented thread-safety
  *     contract, so each thread simply owns its own.)
- *   - STREAM_END is owned by Run(). Ordinary stop/natural empty completion
+ *   - STREAM_END is owned by Step(). Ordinary stop/natural empty completion
  *     sends it once; Abandon suppresses it on every stop branch because route
- *     retirement must never send END across a migrated/expired path. Run()
+ *     retirement must never send END across a migrated/expired path. Step()
  *     publishes bFinished only after that decision is complete.
  */
 class HAPBEATSDK_API FHapbeatStreamRunnable : public FRunnable
@@ -88,15 +101,33 @@ public:
 	EHapbeatStreamWireFormat GetWireFormat() const { return WireFormat; }
 	const FHapbeatStreamSessionIdentity& GetSessionIdentity() const { return SessionIdentity; }
 
+	/** Target cadence between Step() calls (FHapbeatStreamer decides whether a chunk actually goes out). */
+	static constexpr double TickIntervalSeconds = 0.010;
+
+	/**
+	 * Wait until TargetSeconds or until bStopRequested is set: spin on Windows,
+	 * sleep-then-spin elsewhere. Shared by Run() and FHapbeatStreamWorker.
+	 */
+	static void PreciseWaitUntil(double TargetSeconds, const std::atomic<bool>& bStopRequested);
+
 	// FRunnable
+	/** Sending thread: build this thread's addresses and the streamer. Returns false (and publishes bFinished) on failure. */
 	virtual bool Init() override;
+	/** Self-paced loop: Step() every TickIntervalSeconds until it returns false. */
 	virtual uint32 Run() override;
 	virtual void Stop() override;
+
+	/**
+	 * Sending thread: one pacing iteration. The first call sends STREAM_BEGIN.
+	 * Returns false once the session is over (END sent, or suppressed for
+	 * Abandon) and bFinished is published; it must not be called again then.
+	 */
+	bool Step(double NowSeconds);
 	/** Stop without STREAM_END when a PONG endpoint expires. */
 	void Abandon();
 	void UpdateEndpoint(const FString& InIp, int32 InPort);
 
-	/** True once Run() has returned (END sent unless this route was abandoned). */
+	/** True once Step() has finished the session (END sent unless this route was abandoned). */
 	bool IsFinished() const { return bFinished.load(std::memory_order_acquire); }
 
 	/** Format/target equality required to join this wire session (Unity parity). */
@@ -136,8 +167,8 @@ private:
 		}
 	};
 
-	/** Worker-thread: drain game-thread additions, or close admission if the session is empty. */
-	bool DrainPendingSourcesOrClose();
+	/** Sending thread: drain game-thread additions, or close admission if the session is empty. */
+	bool DrainPendingSourcesOrClose(double NowSeconds);
 
 	// --- construction-time immutable inputs (never written after the ctor) ---
 	FSocket* Socket = nullptr;
@@ -145,20 +176,22 @@ private:
 	TArray<FString> UnicastTargetIps;
 	float SendAheadSeconds = 0.05f;
 
-	// Built in Init() (on the worker thread itself), from the plain values
+	// Built in Init() (on the sending thread itself), from the plain values
 	// above — never shared with / touched by the game thread.
 	TArray<TSharedPtr<FInternetAddr>> LocalUnicastTargets;
 
-	// Owns ALL per-session pacing/cursor state; single-writer (this thread only).
+	// Owns ALL per-session pacing/cursor state; single-writer (the sending thread only).
 	// Built in Init() so its ctor-time scratch-buffer allocation, and every byte
 	// of state it subsequently owns, belongs to this thread from the moment it exists.
 	TUniquePtr<FHapbeatStreamer> Streamer;
 
-	/** Set by Stop() (game thread, via FRunnableThread::Kill); polled by Run(). */
+	/** Set by Stop()/Abandon() (game thread); polled by Step() and the self-paced Run() wait. */
 	std::atomic<bool> bStopRequested{false};
 	std::atomic<bool> bAbandonRequested{false};
-	/** Set by Run() as its last statement; polled by the game-thread watchdog. */
+	/** Published by Step() once the session is over; polled by the game-thread watchdog. */
 	std::atomic<bool> bFinished{false};
+	/** Sending thread only: Streamer->Start() (STREAM_BEGIN) has run. */
+	bool bStarted = false;
 
 	// Session compatibility values. Immutable after construction.
 	TFunction<uint16()> NextSeqFn;

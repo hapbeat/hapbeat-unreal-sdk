@@ -8,6 +8,7 @@
 #include "HapbeatNetworkSafety.h"
 #include "HapbeatEventEntry.h"
 #include "HapbeatEventMap.h"
+#include "HapbeatLog.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamSessionContract.h"
 #include "HapbeatStreamRunnable.h"
@@ -37,8 +38,6 @@ namespace
 	const TCHAR* AddressOverridePlayerKey = TEXT("AddressOverridePlayer");
 	const TCHAR* AddressOverrideGroupKey = TEXT("AddressOverrideGroup");
 }
-
-DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
 UHapbeatSubsystem::UHapbeatSubsystem() = default;
 UHapbeatSubsystem::~UHapbeatSubsystem()

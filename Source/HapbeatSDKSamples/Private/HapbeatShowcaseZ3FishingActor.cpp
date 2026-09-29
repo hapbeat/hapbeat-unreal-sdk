@@ -44,7 +44,7 @@ namespace
 	 */
 	const FVector SharkRestCm(100.0f, 50.0f, 35.0f);
 	/** Unity Z3_Fishing/PlayerSpawn: local (0, 1, -2). Z is the player's feet, hence 0. */
-	const FVector PlayerSpawnCm(-200.0f, 0.0f, 0.0f);
+	const FVector Z3PlayerSpawnCm(-200.0f, 0.0f, 0.0f);
 
 	/** Source-mesh local endpoint: the manually movable Marker starts on the thin tip. */
 	const FVector RodTipDefaultMeshLocal(0.0f, 7.000275f, 0.0f);
@@ -964,7 +964,7 @@ TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ3FishingActor::GetHudCommand
 
 FTransform AHapbeatShowcaseZ3FishingActor::GetPlayerSpawnRelative() const
 {
-	return FTransform(FRotator::ZeroRotator, PlayerSpawnCm);
+	return FTransform(FRotator::ZeroRotator, Z3PlayerSpawnCm);
 }
 
 // =============================================================================

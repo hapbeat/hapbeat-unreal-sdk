@@ -5,14 +5,13 @@
 #include "HapbeatSubsystem.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatClip.h"
+#include "HapbeatLog.h"
 #include "HapbeatParameterBinding.h"
 #include "Curves/CurveFloat.h"
 #include "GameFramework/Actor.h" // AActor::GetComponents in PreSeedBindings()
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Misc/App.h" // FApp::GetCurrentTime() fallback in NowUnscaledSeconds()
-
-DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
 UHapbeatTriggerComponent::UHapbeatTriggerComponent()
 {

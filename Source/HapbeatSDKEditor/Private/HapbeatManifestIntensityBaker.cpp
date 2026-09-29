@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatManifestIntensityBaker.h"
 
+#include "HapbeatEditorLog.h"
 #include "HapbeatEventMap.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -10,8 +11,6 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
-
-DEFINE_LOG_CATEGORY_STATIC(LogHapbeatEditor, Log, All);
 
 TMap<FHapbeatManifestEventKey, float> FHapbeatManifestIntensityBaker::ScanProjectManifests(int32* OutNumManifestsScanned)
 {

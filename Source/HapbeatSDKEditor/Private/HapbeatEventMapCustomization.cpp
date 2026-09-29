@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatEventMapCustomization.h"
 
+#include "HapbeatEditorLog.h"
 #include "HapbeatEditorSender.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatManifestIntensityBaker.h"
@@ -15,8 +16,6 @@
 #include "Widgets/Text/STextBlock.h"
 
 #define LOCTEXT_NAMESPACE "FHapbeatEventMapCustomization"
-
-DEFINE_LOG_CATEGORY_STATIC(LogHapbeatEditor, Log, All);
 
 // Static: survives the RequestForceRefresh instance swap (see header).
 FText FHapbeatEventMapCustomization::LastRefreshSummary;

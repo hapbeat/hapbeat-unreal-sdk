@@ -3,6 +3,7 @@
 
 #include "HapbeatAssetFactories.h"
 #include "HapbeatClip.h"
+#include "HapbeatEditorLog.h"
 #include "HapbeatEditorSender.h"
 #include "HapbeatEventMap.h"
 #include "HapbeatClipCustomization.h"
@@ -28,6 +29,8 @@
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
 #include "ToolMenus.h"
+
+DEFINE_LOG_CATEGORY(LogHapbeatEditor);
 
 #define LOCTEXT_NAMESPACE "HapbeatSDKEditor"
 

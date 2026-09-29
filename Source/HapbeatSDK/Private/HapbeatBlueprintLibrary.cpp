@@ -2,6 +2,7 @@
 #include "HapbeatBlueprintLibrary.h"
 
 #include "HapbeatEventMap.h"
+#include "HapbeatLog.h"
 #include "HapbeatSubsystem.h"
 #include "HapbeatTickEmitterComponent.h"
 #include "HapbeatTriggerComponent.h"
@@ -9,8 +10,6 @@
 #include "Engine/Engine.h"       // GEngine->GetWorldFromContextObject
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
-
-DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
 namespace
 {

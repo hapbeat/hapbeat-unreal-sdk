@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatSequenceComponent.h"
 
+#include "HapbeatLog.h"
+
 #include "Engine/World.h"
 #include "TimerManager.h"
-
-DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
 UHapbeatSequenceComponent::UHapbeatSequenceComponent()
 {

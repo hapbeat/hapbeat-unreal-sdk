@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatCollisionTriggerComponent.h"
 
+#include "HapbeatLog.h"
+
 #include "Components/PrimitiveComponent.h"
 #include "GameFramework/Actor.h"
 #include "Engine/HitResult.h"             // FHitResult (split out of EngineTypes.h in UE5)
 #include "PhysicsEngine/BodyInstance.h"   // FBodyInstance::bNotifyRigidBodyCollision (read for the Hit hint)
-
-DEFINE_LOG_CATEGORY_STATIC(LogHapbeat, Log, All);
 
 UHapbeatCollisionTriggerComponent::UHapbeatCollisionTriggerComponent()
 {

@@ -52,7 +52,7 @@ namespace
 	const FVector TargetLocalCm(539.0f, 17.0f, 300.0f);
 
 	/** Unity Z5_ChargeShot/PlayerSpawn: the zone origin. */
-	const FVector PlayerSpawnCm(0.0f, 0.0f, 0.0f);
+	const FVector Z5PlayerSpawnCm(0.0f, 0.0f, 0.0f);
 
 	/** Muzzle fallback with no player holding the blaster. */
 	constexpr float FallbackMuzzleForwardCm = 120.0f;
@@ -1095,7 +1095,7 @@ FTransform AHapbeatShowcaseZ5ChargeShotActor::GetPlayerSpawnRelative() const
 	// Unity Z5_ChargeShot/PlayerSpawn is the zone origin, and the board is placed
 	// relative to that -- so standing anywhere else would put the board somewhere
 	// other than where Unity has it relative to the player.
-	return FTransform(FRotator::ZeroRotator, PlayerSpawnCm);
+	return FTransform(FRotator::ZeroRotator, Z5PlayerSpawnCm);
 }
 
 // =============================================================================

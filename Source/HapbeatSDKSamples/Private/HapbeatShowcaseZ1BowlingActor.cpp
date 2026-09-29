@@ -76,7 +76,7 @@ namespace
 	constexpr float PinMassKg = 0.5f;
 
 	/** Unity Z1_Bowling/PlayerSpawn: local (0, 0, -1.87). */
-	const FVector PlayerSpawnCm(-187.0f, 0.0f, 0.0f);
+	const FVector Z1PlayerSpawnCm(-187.0f, 0.0f, 0.0f);
 }
 
 // The tag that marks "a thing a pin may react to". Defined here rather than
@@ -496,7 +496,7 @@ TArray<FHapbeatShowcaseHudCommand> AHapbeatShowcaseZ1BowlingActor::GetHudCommand
 
 FTransform AHapbeatShowcaseZ1BowlingActor::GetPlayerSpawnRelative() const
 {
-	return FTransform(FRotator::ZeroRotator, PlayerSpawnCm);
+	return FTransform(FRotator::ZeroRotator, Z1PlayerSpawnCm);
 }
 
 // =============================================================================

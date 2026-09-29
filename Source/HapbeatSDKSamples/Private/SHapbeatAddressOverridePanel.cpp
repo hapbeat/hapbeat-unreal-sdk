@@ -15,9 +15,6 @@
 
 namespace
 {
-	const FSlateFontInfo TitleFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
-	const FSlateFontInfo BodyFont = FCoreStyle::GetDefaultFontStyle("Regular", 16);
-	const FSlateFontInfo AddressValueFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
 
 	/** Event the Test button fires when the component names none. */
 	const TCHAR* DefaultTestEventId = TEXT("sample-kit.sine_100hz");
@@ -40,6 +37,11 @@ namespace
 
 void SHapbeatAddressOverridePanel::Construct(const FArguments& InArgs)
 {
+	// CoreStyle can load UFont objects. Android loads this module before UObject
+	// initialization, so never resolve these fonts from a namespace initializer.
+	TitleFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
+	BodyFont = FCoreStyle::GetDefaultFontStyle("Regular", 16);
+	AddressValueFont = FCoreStyle::GetDefaultFontStyle("Bold", 18);
 	WeakSubsystem = InArgs._Subsystem;
 	bPersistOnApply = InArgs._bPersistOnApply;
 	bShowCloseButton = InArgs._bShowCloseButton;

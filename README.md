@@ -18,9 +18,9 @@ Two pieces, linked only by event id (the same design as the Hapbeat Unity SDK):
 ## Requirements
 
 - Unreal Engine 5.3+ (verified on 5.6.1 and 5.4; with no preference, use 5.6.1,
-  which the Hapbeat demos are built with) and a C++ toolchain: the
-  plugin ships native modules, so even a Blueprint-only project builds once
-  after adding it ([build steps](docs/unreal-build.md)).
+  which the Hapbeat demos are built with). The prebuilt ZIPs (UE 5.4 / 5.5 / 5.6)
+  open without a C++ toolchain; installing from source and packaging a game
+  (the plugin builds from `Source/`) need one ([build steps](docs/unreal-build.md)).
 - A Hapbeat on the same Wi-Fi / LAN. Command (Fire) events need a Kit deployed
   with [Hapbeat Studio](https://devtools.hapbeat.com); StreamClip events need no
   Kit on the device.
@@ -29,16 +29,31 @@ Two pieces, linked only by event id (the same design as the Hapbeat Unity SDK):
 
 ## Install
 
-1. In the project root (the folder with the `.uproject`), run
-   `git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK`
-   (for a ZIP, copy its contents into `Plugins/HapbeatSDK/` so
-   `Plugins/HapbeatSDK/HapbeatSDK.uplugin` exists). Clone once per project —
-   do not share one clone through a symlink / junction (build outputs live in
-   the plugin folder). Update with `git pull` and rebuild.
-2. Regenerate project files and build the **Development Editor / Win64** target.
+1. Download `HapbeatSDK-<version>-UE<your engine>.zip` from
+   [Releases](https://github.com/hapbeat/hapbeat-unreal-sdk/releases/latest).
+2. In the project root (the folder with the `.uproject`), create
+   `Plugins/HapbeatSDK/` and extract the ZIP into it so
+   `Plugins/HapbeatSDK/HapbeatSDK.uplugin` exists. The ZIP has prebuilt
+   binaries, so no build is needed.
 3. **Edit → Plugins → Hapbeat SDK** → enable. Settings are in
    **Project Settings → Plugins → Hapbeat** (also **Tools → Hapbeat → Hapbeat Settings**).
 4. C++ only: add `HapbeatSDK` to your module's `PublicDependencyModuleNames`.
+
+**Update**: close the editor and run, in the project root:
+
+```
+powershell -ExecutionPolicy Bypass -File Plugins/HapbeatSDK/Scripts/Update-HapbeatSDK.ps1
+```
+
+It downloads the latest ZIP for your engine, checks its SHA256 and moves the
+old folder to `Saved/HapbeatSDK-backup-*` before replacing it.
+
+**From source** (engines without a ZIP, source-built engines, SDK development):
+in the project root run
+`git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK`,
+regenerate project files and build **Development Editor / Win64**; update with
+`git pull`. Clone once per project — do not share one copy through a symlink /
+junction (build outputs live in the plugin folder).
 
 Then open `Plugins/HapbeatSDK/Content/HapbeatSamples/BasicExample/Maps/BasicExample`
 (enable **Show Plugin Content** in the Content Browser) and press Space in PIE.

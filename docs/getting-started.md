@@ -14,13 +14,18 @@ sidebar:
 ファイル操作と Unreal の build を実行できる AI には、次の依頼文を渡します。`<ProjectRoot>` は対象プロジェクトの絶対パスに置き換えます。
 
 ```text
-Unreal Engine 5.4 の C++ プロジェクト <ProjectRoot> に Hapbeat Unreal SDK を導入してください。
+Unreal Engine 5.6 の C++ プロジェクト <ProjectRoot> に Hapbeat Unreal SDK を導入してください。
 https://github.com/hapbeat/hapbeat-unreal-sdk.git を <ProjectRoot>/Plugins/HapbeatSDK に clone し、project files を再生成して Editor target を build してください。
 Hapbeat SDK を有効化し、Plugin Content の BasicExample マップを開いてください。
 PIE、Test Play、実機への触覚送信は実行しないでください。
 ```
 
 :::
+
+## 動作環境
+
+-   **Unreal Engine 5.6.1 を推奨**します（Hapbeat のデモ制作で使用しているバージョン）。5.3 以上で動作し、5.4 でもビルドを確認しています。
+-   C++ プロジェクトのビルド環境（Windows は Visual Studio）が必要です。Blueprint のみのプロジェクトでも、プラグインのために 1 回ビルドします。
 
 ## 1\. プロジェクトへ追加する
 

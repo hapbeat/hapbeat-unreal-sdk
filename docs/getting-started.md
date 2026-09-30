@@ -30,7 +30,13 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 ## 1\. プロジェクトへ追加する
 
 1.  次のいずれかで、このリポジトリの**内容**を C++ プロジェクトの `Plugins/HapbeatSDK/` に置きます。`<ProjectRoot>` は `.uproject` があるフォルダです。新規作成したプロジェクトには `Plugins` フォルダがありません。
-    -   Git: `git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git <ProjectRoot>/Plugins/HapbeatSDK` を実行します。`Plugins` と `HapbeatSDK` の両フォルダは clone 時に自動で作られるため、事前の作成は不要です。
+    -   Git: `<ProjectRoot>` でターミナル（PowerShell 等）を開き、次を実行します。`Plugins` と `HapbeatSDK` の両フォルダは clone 時に自動で作られるため、事前の作成は不要です。
+
+        ```
+        git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK
+        ```
+
+        フルパスで指定する場合、パスにスペースが含まれるときは `"C:\My Projects\MyGame\Plugins\HapbeatSDK"` のように引用符で囲みます。囲まないと `Too many arguments` で失敗します。
     -   ZIP: `<ProjectRoot>` の下に `Plugins` フォルダ、その中に `HapbeatSDK` フォルダを自分で作成します。GitHub から ZIP をダウンロードして解凍し、展開されたフォルダの中身を `<ProjectRoot>/Plugins/HapbeatSDK/` へコピーします。
 2.  `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。ZIP の親フォルダまで入れて、`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` となる配置は誤りです。
 3.  project files を再生成して、プロジェクトの **Development Editor / Win64** を build します。[ビルド手順](./unreal-build.md)

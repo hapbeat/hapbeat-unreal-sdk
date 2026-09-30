@@ -36,9 +36,15 @@ Unity SDK):
 1. Clone this repo into your project as `Plugins/HapbeatSDK/` (recommended;
    Git creates both folders, so `Plugins/HapbeatSDK/HapbeatSDK.uplugin` exists):
 
+   Open a terminal in the project root (the folder with the `.uproject`), then:
+
    ```
-   git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git <ProjectRoot>/Plugins/HapbeatSDK
+   git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK
    ```
+
+   If you pass a full path instead and it contains spaces, wrap it in quotes
+   (`"C:\My Projects\MyGame\Plugins\HapbeatSDK"`); otherwise Git fails with
+   "Too many arguments".
 
    Without Git, create `Plugins/HapbeatSDK/` yourself and copy the contents of
    the downloaded ZIP into it.

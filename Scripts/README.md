@@ -2,7 +2,8 @@
 
 Headless generators for the assets that ship inside `Content/`. Run them from a
 project that has the plugin enabled, then commit the resulting `.uasset` files —
-an end user never runs these.
+an end user never runs these. The release scripts are described under
+[Releasing](#releasing-prebuilt-zips).
 
 Run them in this order — each consumes what the ones before it wrote. Note the
 third one's different invocation:
@@ -40,3 +41,35 @@ The first two touch disjoint assets, so either can be run alone. The third takes
 the floor's material from the art import and the zones' Event Map from the
 sample assets, but only writes the map package — changing the map never means
 re-running the other two. Both map generators are re-runnable.
+
+## Releasing (prebuilt ZIPs)
+
+`Update-HapbeatSDK.ps1` ships inside the plugin for end users (see the README
+Install section). `package-release.ps1` is for maintainers:
+
+1. Bump `VersionName` in `HapbeatSDK.uplugin` and add the `## [x.y.z]`
+   section to `CHANGELOG.md`; commit.
+2. On a Windows PC with the Epic Launcher engines installed, from a clean tree:
+
+   ```
+   powershell -ExecutionPolicy Bypass -File Scripts/package-release.ps1
+   ```
+
+   It builds every installed UE 5.3+ engine (`-Engines 5.4,5.6` to pick) with
+   `RunUAT BuildPlugin` and writes to `Saved/ReleasePackages/`:
+   `HapbeatSDK-<ver>-UE5.x.zip` (plugin contents at the ZIP root: Win64 editor
+   DLLs, Source, Content, Config; no Intermediate, no PDBs unless
+   `-IncludePdb`), `HapbeatSDK-<ver>-SHA256SUMS.txt`, and `logs/`. The
+   packaged `.uplugin` gets `"EngineVersion": "5.x.0"` and `"Installed": true`
+   from BuildPlugin. It exits nonzero if any engine fails.
+3. Push the `vX.Y.Z` tag. The Release workflow creates the GitHub Release
+   (notes from CHANGELOG, plus a source ZIP). Then attach the engine ZIPs and
+   the checksum file:
+
+   ```
+   gh release upload vX.Y.Z Saved/ReleasePackages/HapbeatSDK-X.Y.Z-UE5.*.zip Saved/ReleasePackages/HapbeatSDK-X.Y.Z-SHA256SUMS.txt
+   ```
+
+   `Update-HapbeatSDK.ps1` picks `HapbeatSDK-*-UE<engine>.zip` from the latest
+   release and verifies it against the `*-SHA256SUMS.txt` asset, so keep those
+   names. Engines without a ZIP fall back to the source install.

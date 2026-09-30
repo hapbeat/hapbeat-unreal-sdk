@@ -33,39 +33,29 @@ Unity SDK):
 
 ## Install
 
-1. Clone this repo into your project as `Plugins/HapbeatSDK/` (recommended;
-   Git creates both folders, so `Plugins/HapbeatSDK/HapbeatSDK.uplugin` exists):
-
-   Open a terminal in the project root (the folder with the `.uproject`), then:
+1. In the project root (the folder with the `.uproject`), run:
 
    ```
    git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK
    ```
 
-   If you pass a full path instead and it contains spaces, wrap it in quotes
-   (`"C:\My Projects\MyGame\Plugins\HapbeatSDK"`); otherwise Git fails with
-   "Too many arguments".
-
-   Without Git, create `Plugins/HapbeatSDK/` yourself and copy the contents of
-   the downloaded ZIP into it.
 2. Regenerate project files and build (the plugin compiles with your project).
 3. **Edit → Plugins → Hardware → Hapbeat SDK** → Enabled (if not already).
 4. C++ only: add `HapbeatSDK` to your module's `PublicDependencyModuleNames`
    to `#include "HapbeatSubsystem.h"`.
 
-### Updating and multiple projects
+<details>
+<summary>Tips: ZIP install, updating, multiple projects</summary>
 
-Unreal has no Git-based package manager, so each project keeps its own clone:
+- **ZIP**: create `Plugins/HapbeatSDK/` and copy the *contents* of the extracted
+  ZIP into it (`Plugins/HapbeatSDK/HapbeatSDK.uplugin` must exist).
+- **Full paths with spaces**: quote them, or Git fails with "Too many arguments".
+- **Update**: `git pull` (or `git checkout vX.Y.Z`) in `Plugins/HapbeatSDK`, then rebuild.
+- **Multiple projects**: clone once per project (or `git submodule add`). Do not
+  share one clone through a symlink/junction — build outputs live inside the
+  plugin folder, so projects overwrite each other's DLLs.
 
-- **Update**: in `Plugins/HapbeatSDK`, run `git pull` (or `git checkout vX.Y.Z`
-  to pin a release), then rebuild the project.
-- **Several projects**: clone once per project. Each project updates
-  independently, so a finished project can stay on an older version.
-- **Project under Git**: `git submodule add https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK`
-  records the SDK commit in your repo; check out a newer tag there to update.
-- **Do not share one clone between projects** through a symlink/junction: the
-  plugin's build outputs (`Binaries/`, `Intermediate/`) live inside the plugin
-  folder, so projects overwrite each other's DLLs.
+</details>
 
 Connection / behavior settings (port, app name, ping interval, streaming
 send-ahead, haptic delay, logging) live in **Project Settings → Plugins →

@@ -29,26 +29,25 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 
 ## 1\. プロジェクトへ追加する
 
-1.  次のいずれかで、このリポジトリの**内容**を C++ プロジェクトの `Plugins/HapbeatSDK/` に置きます。`<ProjectRoot>` は `.uproject` があるフォルダです。新規作成したプロジェクトには `Plugins` フォルダがありません。
-    -   Git: `<ProjectRoot>` でターミナル（PowerShell 等）を開き、次を実行します。`Plugins` と `HapbeatSDK` の両フォルダは clone 時に自動で作られるため、事前の作成は不要です。
+1.  `.uproject` があるフォルダでターミナルを開き、次を実行します（`Plugins/HapbeatSDK` フォルダは自動で作られます）。
 
-        ```
-        git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK
-        ```
+    ```
+    git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK
+    ```
 
-        フルパスで指定する場合、パスにスペースが含まれるときは `"C:\My Projects\MyGame\Plugins\HapbeatSDK"` のように引用符で囲みます。囲まないと `Too many arguments` で失敗します。
-    -   ZIP: `<ProjectRoot>` の下に `Plugins` フォルダ、その中に `HapbeatSDK` フォルダを自分で作成します。GitHub から ZIP をダウンロードして解凍し、展開されたフォルダの中身を `<ProjectRoot>/Plugins/HapbeatSDK/` へコピーします。
-2.  `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。ZIP の親フォルダまで入れて、`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` となる配置は誤りです。
+2.  `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。
 3.  project files を再生成して、プロジェクトの **Development Editor / Win64** を build します。[ビルド手順](./unreal-build.md)
 
-### 更新と複数プロジェクト
+<details>
+<summary>補足: ZIP で入れる場合・更新・複数プロジェクト</summary>
 
-Unreal には Git からプラグインを取得・更新する標準の仕組みがないため、プロジェクトごとに clone します。
+-   **ZIP で入れる場合**: `Plugins/HapbeatSDK/` フォルダを作成し、ZIP を解凍したフォルダの**中身**をコピーします。`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` のように 1 階層深くなる配置は誤りです。
+-   **パスを指定して clone する場合**: パスにスペースが含まれるときは `"..."` で囲みます。囲まないと `Too many arguments` で失敗します。
+-   **更新**: `Plugins/HapbeatSDK` で `git pull`（リリースに固定するなら `git checkout vX.Y.Z`）を実行し、build し直します。
+-   **複数プロジェクト**: プロジェクトごとに clone します。プロジェクトを Git で管理しているなら `git submodule add` でも構いません。
+-   **1 つの clone をリンクで複数プロジェクトから共有しないでください。** build 成果物がプラグインのフォルダ内に作られるため、プロジェクト間で DLL が上書きされます。
 
--   **更新**: `Plugins/HapbeatSDK` で `git pull`（特定のリリースに固定する場合は `git checkout vX.Y.Z`）を実行し、プロジェクトを build し直します。
--   **複数プロジェクト**: プロジェクトごとに clone します。更新はプロジェクト単位なので、完成したプロジェクトは古いバージョンのまま残せます。
--   **プロジェクト自体を Git で管理している場合**: `git submodule add https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK` にすると、使用中の SDK のコミットがプロジェクトの repo に記録されます。
--   **1 つの clone をリンク（シンボリックリンク・ジャンクション）で複数プロジェクトから共有しないでください。** build 成果物（`Binaries/`・`Intermediate/`）がプラグインのフォルダ内に作られるため、プロジェクト間で DLL が上書きされます。
+</details>
 
 ## 2\. プラグインを有効にする
 

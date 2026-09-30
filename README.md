@@ -17,9 +17,9 @@ Unity SDK):
 
 ## Requirements
 
-- Unreal Engine 5.3+. **Recommended: 5.6.1** (used for the Hapbeat demos);
-  also compile-verified on 5.4. Stable UE5 APIs only, no engine version pinned
-  in `HapbeatSDK.uplugin`.
+- Unreal Engine 5.3+ should work (verified on 5.6.1 and 5.4). If you have no
+  preference, 5.6.1 is what the Hapbeat demos are built with. Stable UE5 APIs
+  only, no engine version pinned in `HapbeatSDK.uplugin`.
 - A **C++ toolchain for your project**: the plugin ships native Runtime /
   Samples / Editor modules, so even a Blueprint-only project needs to
   regenerate project files and build once after adding it (Unreal creates the
@@ -377,8 +377,8 @@ Details-panel authoring, manifest-intensity baking, Test Play), collision /
 sequence trigger components, real-time clip streaming with gain/pan
 (`UHapbeatParameterBinding`), global address override, PONG-based device
 liveness + delegates, 2 sample projects (BasicExample + 5-zone Showcase).
-Recommended UE 5.6.1 (used for the Hapbeat demos); also compile-verified on
-UE 5.4. Build it in your own project to confirm on other engine versions.
+Verified on UE 5.6.1 and 5.4; UE 5.3+ should work. Build it in your own project
+to confirm on other engine versions.
 
 ## License
 

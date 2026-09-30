@@ -35,6 +35,15 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 2.  `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。ZIP の親フォルダまで入れて、`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` となる配置は誤りです。
 3.  project files を再生成して、プロジェクトの **Development Editor / Win64** を build します。[ビルド手順](./unreal-build.md)
 
+### 更新と複数プロジェクト
+
+Unreal には Git からプラグインを取得・更新する標準の仕組みがないため、プロジェクトごとに clone します。
+
+-   **更新**: `Plugins/HapbeatSDK` で `git pull`（特定のリリースに固定する場合は `git checkout vX.Y.Z`）を実行し、プロジェクトを build し直します。
+-   **複数プロジェクト**: プロジェクトごとに clone します。更新はプロジェクト単位なので、完成したプロジェクトは古いバージョンのまま残せます。
+-   **プロジェクト自体を Git で管理している場合**: `git submodule add https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK` にすると、使用中の SDK のコミットがプロジェクトの repo に記録されます。
+-   **1 つの clone をリンク（シンボリックリンク・ジャンクション）で複数プロジェクトから共有しないでください。** build 成果物（`Binaries/`・`Intermediate/`）がプラグインのフォルダ内に作られるため、プロジェクト間で DLL が上書きされます。
+
 ## 2\. プラグインを有効にする
 
 1.  Unreal Editor の **Edit → Plugins** で `Hapbeat SDK` を有効にします。

@@ -420,6 +420,7 @@ private:
 	friend class FHapbeatStreamLegacyFallbackSubsystemTest;
 	friend class FHapbeatStreamReacquireOwnershipTest;
 	friend class FHapbeatStreamIdentityUpdateDiscoveryTest;
+	friend class FHapbeatClipResampleTest;
 	void SendPacket(const TArray<uint8>& Packet);
 
 	// ---- Haptic delay (PlayEntry / StopEntry only) ----

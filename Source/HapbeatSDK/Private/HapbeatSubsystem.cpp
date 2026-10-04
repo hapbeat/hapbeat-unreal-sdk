@@ -886,17 +886,32 @@ bool UHapbeatSubsystem::NormalizeClipToCanonical(const UHapbeatClip* Clip, TArra
 	const int32 SourceFrames = Clip->Pcm16.Num() / (Clip->NumChannels * 2);
 	const int32 OutputFrames = FMath::Max(1, FMath::CeilToInt(static_cast<float>(SourceFrames) * 16000.0f / Clip->SampleRate));
 	OutPcm16.SetNumUninitialized(OutputFrames * 4);
+	auto ReadSample = [Clip](int32 Frame, int32 Channel)
+	{
+		const int32 Offset = (Frame * Clip->NumChannels + Channel) * 2;
+		return static_cast<int16>(static_cast<uint16>(Clip->Pcm16[Offset])
+			| (static_cast<uint16>(Clip->Pcm16[Offset + 1]) << 8));
+	};
+	// sdk-multi-stream.md §5.9: linear interpolation between the two neighbouring
+	// source frames (nearest-neighbour is not allowed). At 16 kHz the position stays
+	// on whole frames, so the samples are copied unchanged.
+	const double SourceFramesPerOutputFrame = static_cast<double>(Clip->SampleRate) / 16000.0;
 	for (int32 OutputFrame = 0; OutputFrame < OutputFrames; ++OutputFrame)
 	{
-		const int32 SourceFrame = FMath::Min(SourceFrames - 1,
-			FMath::FloorToInt(static_cast<float>(OutputFrame) * Clip->SampleRate / 16000.0f));
+		const double Position = static_cast<double>(OutputFrame) * SourceFramesPerOutputFrame;
+		const int32 Frame0 = FMath::Min(SourceFrames - 1, FMath::FloorToInt32(Position));
+		const int32 Frame1 = FMath::Min(SourceFrames - 1, Frame0 + 1);
+		const double Frac = FMath::Clamp(Position - static_cast<double>(Frame0), 0.0, 1.0);
 		for (int32 Channel = 0; Channel < 2; ++Channel)
 		{
 			const int32 SourceChannel = Clip->NumChannels == 1 ? 0 : FMath::Min(Channel, Clip->NumChannels - 1);
-			const int32 SourceOffset = (SourceFrame * Clip->NumChannels + SourceChannel) * 2;
+			const double Interpolated = FMath::Lerp(
+				static_cast<double>(ReadSample(Frame0, SourceChannel)),
+				static_cast<double>(ReadSample(Frame1, SourceChannel)), Frac);
+			const uint16 Pcm = static_cast<uint16>(static_cast<int16>(FMath::RoundToInt32(Interpolated)));
 			const int32 OutputOffset = (OutputFrame * 2 + Channel) * 2;
-			OutPcm16[OutputOffset] = Clip->Pcm16[SourceOffset];
-			OutPcm16[OutputOffset + 1] = Clip->Pcm16[SourceOffset + 1];
+			OutPcm16[OutputOffset] = static_cast<uint8>(Pcm & 0xFF);
+			OutPcm16[OutputOffset + 1] = static_cast<uint8>((Pcm >> 8) & 0xFF);
 		}
 	}
 	return true;

@@ -11,9 +11,10 @@
  * thread; source cursors and mixing buffers therefore remain single-writer.
  * The runnable moves newly queued sources into AddSource() between chunks.
  *
- * Every source has its own atomic Gain/Pan/Stopped mirror. Samples are scaled,
- * summed locally, clamped once to PCM16, then sent as one STREAM_DATA sequence.
- * Matches Unity's HapbeatManager multi-source mixer.
+ * Every source has its own atomic Gain/Pan/Stopped mirror. Samples are scaled
+ * (channel gains ramped per sample from the previous chunk, no zipper), summed
+ * locally, passed through the full-scale limiter, saturated once to PCM16, then
+ * sent as one STREAM_DATA sequence (sdk-multi-stream.md §5.3, §5.7, §5.8).
  *
  * The wire format (legacy v1 vs stream session v2) and, for v2, the session
  * identity are fixed at construction: every BEGIN/DATA/END of one session uses
@@ -65,6 +66,11 @@ private:
 		TArray<uint8> Pcm16;
 		/** Fractional read position in source frames (advanced by the playback rate). */
 		double ReadFrame = 0.0;
+		/** Channel gains (gain x balance) applied at the end of the previous chunk; ramp start of the next. */
+		float LastGainL = 0.0f;
+		float LastGainR = 0.0f;
+		/** False until the first mixed chunk: a new source starts at its gains without a ramp (§5.7). */
+		bool bHasLastGains = false;
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
 
 		FSource(const FGuid& InSourceId, TArray<uint8>&& InPcm16,
@@ -76,6 +82,8 @@ private:
 
 	/** Mark a source naturally finished and remove it without affecting its siblings. */
 	void FinishSource(int32 SourceIndex);
+	/** Full-scale limiter over MixScratch (sdk-multi-stream.md §5.8); leaves a block within full scale untouched. */
+	void ApplyLimiter(int32 FramesPerChunk);
 
 	int32 SampleRate = 0;
 	int32 Channels = 0;
@@ -97,6 +105,8 @@ private:
 	int64 TotalFramesSent = 0;
 	double StartTimeSeconds = 0.0;
 	bool bDone = false;
+	/** Limiter gain reached at the end of the previous chunk (1 = no reduction). */
+	float LimiterGain = 1.0f;
 
 	TArray<float> MixScratch;
 	TArray<uint8> PcmScratch;

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 #include "HapbeatStreamer.h"
 
+#include "HapbeatClip.h"
 #include "HapbeatProtocol.h"
 #include "HapbeatStreamPlayback.h"
 #include "HapbeatStreamRunnable.h"
@@ -637,6 +638,248 @@ bool FHapbeatStreamRunnableLifecycleTest::RunTest(const FString& Parameters)
 		Race.Abandon();
 		RaceThread->Kill(true);
 		delete RaceThread;
+	}
+	return true;
+}
+
+namespace
+{
+	/** Drives one FHapbeatStreamer chunk by chunk and keeps the mixed output (interleaved L/R). */
+	struct FMixHarness
+	{
+		uint16 Sequence = 0;
+		TArray<int16> Output;
+		double Now = 0.0;
+		FHapbeatStreamer Streamer;
+
+		FMixHarness()
+			: Streamer(16000, 2, FString(), MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>(),
+				[this]() { return ++Sequence; },
+				[this](const TArray<uint8>& Packet) { Record(Packet); },
+				/*SendAheadSeconds=*/0.05f)
+		{
+		}
+
+		void Record(const TArray<uint8>& Packet)
+		{
+			// Header (8) + STREAM_DATA byte offset (4), then stereo PCM16.
+			if (Packet.Num() <= 12 || Packet[3] != FHapbeatProtocol::CmdStreamData)
+			{
+				return;
+			}
+			for (int32 At = 12; At + 1 < Packet.Num(); At += 2)
+			{
+				Output.Add(static_cast<int16>(static_cast<uint16>(Packet[At])
+					| (static_cast<uint16>(Packet[At + 1]) << 8)));
+			}
+		}
+
+		/** The first Tick fills the send-ahead (several chunks); each later one adds one 10 ms chunk. */
+		void Tick()
+		{
+			Streamer.Tick(Now);
+			Now += 0.010;
+		}
+
+		TArray<int16> Channel(int32 Index, int32 FromFrame = 0) const
+		{
+			TArray<int16> Result;
+			for (int32 At = FromFrame * 2 + Index; At < Output.Num(); At += 2)
+			{
+				Result.Add(Output[At]);
+			}
+			return Result;
+		}
+	};
+
+	TArray<uint8> MakeStereoSine(float Frequency, int32 Frames, float Amplitude)
+	{
+		TArray<uint8> Bytes;
+		Bytes.SetNumUninitialized(Frames * 4);
+		for (int32 Frame = 0; Frame < Frames; ++Frame)
+		{
+			const int16 Sample = static_cast<int16>(Amplitude * 32767.0f
+				* FMath::Sin(2.0f * PI * Frequency * static_cast<float>(Frame) / 16000.0f));
+			const uint16 Value = static_cast<uint16>(Sample);
+			for (int32 Channel = 0; Channel < 2; ++Channel)
+			{
+				Bytes[Frame * 4 + Channel * 2] = static_cast<uint8>(Value & 0xFF);
+				Bytes[Frame * 4 + Channel * 2 + 1] = static_cast<uint8>((Value >> 8) & 0xFF);
+			}
+		}
+		return Bytes;
+	}
+
+	int32 MaxStep(const TArray<int16>& Samples)
+	{
+		int32 Result = 0;
+		for (int32 Index = 1; Index < Samples.Num(); ++Index)
+		{
+			Result = FMath::Max(Result, FMath::Abs(static_cast<int32>(Samples[Index]) - Samples[Index - 1]));
+		}
+		return Result;
+	}
+
+	int32 PeakOf(const TArray<int16>& Samples)
+	{
+		int32 Result = 0;
+		for (const int16 Sample : Samples)
+		{
+			Result = FMath::Max(Result, FMath::Abs(static_cast<int32>(Sample)));
+		}
+		return Result;
+	}
+
+	constexpr int32 MixChunkFrames = 160; // 10 ms at 16 kHz
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatMixGainRampTest,
+	"Hapbeat.Streaming.MixGainRamp",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatMixGainRampTest::RunTest(const FString& Parameters)
+{
+	// sdk-multi-stream.md §7 case 8. A constant (DC) source makes any gain step
+	// visible: switching 1.0 -> 0.2 at once would be an 18000 step.
+	{
+		FMixHarness Mix;
+		auto Mirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+		Mirror->bLoop.store(true, std::memory_order_relaxed);
+		Mix.Streamer.AddSource(FGuid::NewGuid(), MakeStereoPcm(20000, 1600), Mirror);
+		Mix.Streamer.Start(0.0);
+		Mix.Tick();
+		const int32 FramesBefore = Mix.Output.Num() / 2;
+		Mirror->Gain.store(0.2f, std::memory_order_relaxed);
+		Mirror->Pan.store(0.5f, std::memory_order_relaxed);
+		Mix.Tick();
+		Mix.Tick();
+
+		const TArray<int16> Left = Mix.Channel(0, FramesBefore - 2);
+		const TArray<int16> Right = Mix.Channel(1, FramesBefore - 2);
+		TestTrue(TEXT("the later ticks mixed at least two chunks"), Left.Num() >= 2 + 2 * MixChunkFrames);
+		// Balance law: L = g (1 - pan) = 0.1, R = g = 0.2, ramped over one chunk.
+		TestTrue(TEXT("left gain change is ramped (no zipper step)"),
+			MaxStep(Left) <= (20000 - 2000) / MixChunkFrames + 2);
+		TestTrue(TEXT("right gain change is ramped (no zipper step)"),
+			MaxStep(Right) <= (20000 - 4000) / MixChunkFrames + 2);
+		TestTrue(TEXT("left settles at the new gain"), FMath::Abs(Left.Last() - 2000) <= 1);
+		TestTrue(TEXT("right settles at the new gain"), FMath::Abs(Right.Last() - 4000) <= 1);
+	}
+
+	// A new source starts at its own gain without a ramp; its PCM carries the onset.
+	{
+		FMixHarness Mix;
+		auto Mirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
+		Mirror->Gain.store(0.5f, std::memory_order_relaxed);
+		Mix.Streamer.AddSource(FGuid::NewGuid(), MakeStereoPcm(10000, 1024), Mirror);
+		Mix.Streamer.Start(0.0);
+		Mix.Tick();
+		TestTrue(TEXT("mixed data was sent"), Mix.Output.Num() >= 2);
+		if (Mix.Output.Num() >= 2)
+		{
+			TestEqual(TEXT("new source first left sample at its gain"), Mix.Output[0], static_cast<int16>(5000));
+			TestEqual(TEXT("new source first right sample at its gain"), Mix.Output[1], static_cast<int16>(5000));
+		}
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatMixLimiterTest,
+	"Hapbeat.Streaming.MixLimiter",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatMixLimiterTest::RunTest(const FString& Parameters)
+{
+	// sdk-multi-stream.md §7 case 9: a sum within full scale passes bit-identical,
+	// including a peak inside the soft-knee band (0.95..1.0 FS).
+	auto RunDc = [this](int16 Sample, int32 Expected, const TCHAR* What)
+	{
+		FMixHarness Mix;
+		for (int32 Index = 0; Index < 2; ++Index)
+		{
+			Mix.Streamer.AddSource(FGuid::NewGuid(), MakeStereoPcm(Sample, 2048),
+				MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>());
+		}
+		Mix.Streamer.Start(0.0);
+		Mix.Tick();
+		bool bAllExpected = Mix.Output.Num() > 0;
+		for (const int16 Value : Mix.Output)
+		{
+			bAllExpected &= Value == Expected;
+		}
+		TestTrue(What, bAllExpected);
+	};
+	RunDc(15000, 30000, TEXT("sum below the knee is unchanged"));
+	RunDc(16000, 32000, TEXT("sum in the knee band but within full scale is unchanged"));
+
+	// Four full-gain full-scale sines: limited to the target, never pinned at
+	// +-32767, and the waveform stays a sine (no flat tops, no chunk-boundary step).
+	constexpr float Frequency = 140.0f;
+	FMixHarness Mix;
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		Mix.Streamer.AddSource(FGuid::NewGuid(), MakeStereoSine(Frequency, 8000, 1.0f),
+			MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>());
+	}
+	Mix.Streamer.Start(0.0);
+	for (int32 TickIndex = 0; TickIndex < 16; ++TickIndex)
+	{
+		Mix.Tick();
+	}
+	const TArray<int16> Left = Mix.Channel(0);
+	TestTrue(TEXT("20 chunks were mixed"), Left.Num() >= 20 * MixChunkFrames);
+	TestTrue(TEXT("output stays within PCM16"), PeakOf(Left) <= 32767);
+
+	const TArray<int16> Settled = Mix.Channel(0, 2 * MixChunkFrames);
+	const int32 Peak = PeakOf(Settled);
+	TestTrue(TEXT("settled peak is limited to the target"),
+		Peak >= static_cast<int32>(0.85f * 32767.0f) && Peak <= static_cast<int32>(0.95f * 32767.0f));
+	int32 Pinned = 0;
+	for (const int16 Value : Settled)
+	{
+		Pinned += FMath::Abs(static_cast<int32>(Value)) >= 32767 ? 1 : 0;
+	}
+	TestEqual(TEXT("no settled sample is pinned at full scale"), Pinned, 0);
+	const float CleanStep = static_cast<float>(Peak) * 2.0f * FMath::Sin(PI * Frequency / 16000.0f);
+	TestTrue(TEXT("limited output keeps sine-like steps (no boundary step)"),
+		static_cast<float>(MaxStep(Settled)) <= 1.1f * CleanStep);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatClipResampleTest,
+	"Hapbeat.Streaming.ClipResampleLinear",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatClipResampleTest::RunTest(const FString& Parameters)
+{
+	// sdk-multi-stream.md §5.9: 8 kHz mono -> 16 kHz stereo interpolates between frames.
+	UHapbeatClip* Clip = NewObject<UHapbeatClip>();
+	Clip->SampleRate = 8000;
+	Clip->NumChannels = 1;
+	const int16 Source[] = {0, 1000, 2000, 3000};
+	for (const int16 Sample : Source)
+	{
+		const uint16 Value = static_cast<uint16>(Sample);
+		Clip->Pcm16.Add(static_cast<uint8>(Value & 0xFF));
+		Clip->Pcm16.Add(static_cast<uint8>((Value >> 8) & 0xFF));
+	}
+
+	UHapbeatSubsystem* Subsystem = NewTestSubsystem();
+	TArray<uint8> Pcm16;
+	TestTrue(TEXT("clip normalises"), Subsystem->NormalizeClipToCanonical(Clip, Pcm16));
+	TestEqual(TEXT("8 output frames"), Pcm16.Num(), 8 * 4);
+	auto Sample = [&Pcm16](int32 Frame, int32 Channel)
+	{
+		const int32 At = (Frame * 2 + Channel) * 2;
+		return static_cast<int16>(static_cast<uint16>(Pcm16[At]) | (static_cast<uint16>(Pcm16[At + 1]) << 8));
+	};
+	if (Pcm16.Num() == 8 * 4)
+	{
+		TestEqual(TEXT("frame 1 is the midpoint (L)"), Sample(1, 0), static_cast<int16>(500));
+		TestEqual(TEXT("frame 1 is the midpoint (R)"), Sample(1, 1), static_cast<int16>(500));
+		TestEqual(TEXT("frame 2 lands on source frame 1"), Sample(2, 0), static_cast<int16>(1000));
+		TestEqual(TEXT("frame 5 is the midpoint"), Sample(5, 0), static_cast<int16>(2500));
+		TestEqual(TEXT("last frame holds the final sample"), Sample(7, 0), static_cast<int16>(3000));
 	}
 	return true;
 }

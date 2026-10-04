@@ -7,6 +7,14 @@ namespace
 {
 	constexpr float TargetChunkSeconds = 0.010f;
 
+	// Limiter (sdk-multi-stream.md §5.8): a chunk whose peak exceeds full scale is
+	// scaled down to LimitTarget / peak; values past LimitKnee go through a tanh
+	// soft knee that approaches full scale instead of a hard clamp.
+	constexpr float FullScale = 32767.0f;
+	constexpr float LimitTarget = 0.9f * FullScale;
+	constexpr float LimitKnee = 0.95f * FullScale;
+	constexpr float LimitReleasePerChunk = 0.05f;
+
 	int16 ReadPcm16Le(const uint8* Bytes)
 	{
 		return static_cast<int16>(static_cast<uint16>(Bytes[0]) |
@@ -136,8 +144,20 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 
 			const float Gain = Source.Mirror->Gain.load(std::memory_order_relaxed);
 			const float Pan = Source.Mirror->Pan.load(std::memory_order_relaxed);
-			const float GainL = Pan <= 0.0f ? 1.0f : 1.0f - Pan;
-			const float GainR = Pan >= 0.0f ? 1.0f : 1.0f + Pan;
+			const float TargetGainL = Gain * (Pan <= 0.0f ? 1.0f : 1.0f - Pan);
+			const float TargetGainR = Gain * (Pan >= 0.0f ? 1.0f : 1.0f + Pan);
+
+			// §5.7: a changed gain / pan ramps linearly from the previous chunk's
+			// channel gains over this chunk (no zipper step at the chunk boundary).
+			// A new source starts at its own gains; its PCM carries the onset.
+			const float StartGainL = Source.bHasLastGains ? Source.LastGainL : TargetGainL;
+			const float StartGainR = Source.bHasLastGains ? Source.LastGainR : TargetGainR;
+			Source.LastGainL = TargetGainL;
+			Source.LastGainR = TargetGainR;
+			Source.bHasLastGains = true;
+			const float StepL = (TargetGainL - StartGainL) / static_cast<float>(FramesPerChunk);
+			const float StepR = (TargetGainR - StartGainR) / static_cast<float>(FramesPerChunk);
+			const bool bRamp = StepL != 0.0f || StepR != 0.0f;
 
 			// Resampling read: the fractional position advances by the playback rate
 			// and samples are linearly interpolated. At rate 1 the position stays on
@@ -166,13 +186,15 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 				const int32 I0 = static_cast<int32>(Source.ReadFrame);
 				const float Frac = static_cast<float>(Source.ReadFrame - I0);
 				const int32 I1 = I0 + 1 < NumFrames ? I0 + 1 : (bLoopNow ? 0 : I0);
+				const float GainL = bRamp ? StartGainL + StepL * static_cast<float>(OutFrame + 1) : TargetGainL;
+				const float GainR = bRamp ? StartGainR + StepR * static_cast<float>(OutFrame + 1) : TargetGainR;
 				if (Channels == 1)
 				{
 					const float Sample = FMath::Lerp(Read(I0, 0), Read(I1, 0), Frac);
 					if (WireChannels == 2)
 					{
-						MixScratch[OutFrame * 2] += Sample * Gain * GainL;
-						MixScratch[OutFrame * 2 + 1] += Sample * Gain * GainR;
+						MixScratch[OutFrame * 2] += Sample * GainL;
+						MixScratch[OutFrame * 2 + 1] += Sample * GainR;
 					}
 					else
 					{
@@ -183,9 +205,9 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 				{
 					for (int32 Channel = 0; Channel < Channels; ++Channel)
 					{
-						const float Balance = Channel == 0 ? GainL : (Channel == 1 ? GainR : 1.0f);
+						const float ChannelGain = Channel == 0 ? GainL : (Channel == 1 ? GainR : Gain);
 						MixScratch[OutFrame * WireChannels + Channel] +=
-							FMath::Lerp(Read(I0, Channel), Read(I1, Channel), Frac) * Gain * Balance;
+							FMath::Lerp(Read(I0, Channel), Read(I1, Channel), Frac) * ChannelGain;
 					}
 				}
 				Source.ReadFrame += Rate;
@@ -201,6 +223,9 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 			}
 		}
 
+		ApplyLimiter(FramesPerChunk);
+
+		// §5.3: the single final saturation; the limiter keeps the sum in range.
 		for (int32 SampleIndex = 0; SampleIndex < MixScratch.Num(); ++SampleIndex)
 		{
 			const float Clamped = FMath::Clamp(MixScratch[SampleIndex], -32768.0f, 32767.0f);
@@ -219,6 +244,41 @@ void FHapbeatStreamer::Tick(double NowSeconds)
 
 		SentDuration = static_cast<double>(TotalFramesSent) / static_cast<double>(SampleRate);
 		Lead = SentDuration - (NowSeconds - StartTimeSeconds);
+	}
+}
+
+void FHapbeatStreamer::ApplyLimiter(int32 FramesPerChunk)
+{
+	float Peak = 0.0f;
+	for (const float Value : MixScratch)
+	{
+		Peak = FMath::Max(Peak, FMath::Abs(Value));
+	}
+	const float Want = Peak > FullScale ? LimitTarget / Peak : 1.0f;
+	const float Start = LimiterGain;
+	// Attack (lower gain) lands within this chunk; release rises at most +0.05 per chunk.
+	const float End = Want < Start ? Want : FMath::Min(Want, Start + LimitReleasePerChunk);
+	LimiterGain = End;
+	if (Start == 1.0f && End == 1.0f)
+	{
+		// Peak is within full scale and no reduction is active: bit-identical pass-through.
+		return;
+	}
+
+	const float Step = (End - Start) / static_cast<float>(FramesPerChunk);
+	constexpr float KneeSpan = FullScale - LimitKnee;
+	for (int32 Frame = 0; Frame < FramesPerChunk; ++Frame)
+	{
+		const float FrameGain = Start + Step * static_cast<float>(Frame + 1);
+		for (int32 Channel = 0; Channel < WireChannels; ++Channel)
+		{
+			float& Sample = MixScratch[Frame * WireChannels + Channel];
+			const float Scaled = Sample * FrameGain;
+			const float Magnitude = FMath::Abs(Scaled);
+			Sample = Magnitude > LimitKnee
+				? FMath::Sign(Scaled) * (LimitKnee + KneeSpan * FMath::Tanh((Magnitude - LimitKnee) / KneeSpan))
+				: Scaled;
+		}
 	}
 }
 

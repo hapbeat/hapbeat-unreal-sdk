@@ -812,6 +812,36 @@ bool FHapbeatMixLimiterTest::RunTest(const FString& Parameters)
 	RunDc(15000, 30000, TEXT("sum below the knee is unchanged"));
 	RunDc(16000, 32000, TEXT("sum in the knee band but within full scale is unchanged"));
 
+	// §5.8: one full-scale clip containing -32768 (peak 32768) at gain 1 must not
+	// trigger the limiter; it passes bit-identical.
+	{
+		static const int16 Pattern[] = { 32767, -32768, 0, -32768, 16000, -16000 };
+		constexpr int32 PatternLength = UE_ARRAY_COUNT(Pattern);
+		TArray<uint8> Bytes;
+		Bytes.SetNumUninitialized(1600 * 4);
+		for (int32 Frame = 0; Frame < 1600; ++Frame)
+		{
+			const uint16 Value = static_cast<uint16>(Pattern[Frame % PatternLength]);
+			for (int32 Channel = 0; Channel < 2; ++Channel)
+			{
+				Bytes[Frame * 4 + Channel * 2] = static_cast<uint8>(Value & 0xFF);
+				Bytes[Frame * 4 + Channel * 2 + 1] = static_cast<uint8>((Value >> 8) & 0xFF);
+			}
+		}
+		FMixHarness Mix;
+		Mix.Streamer.AddSource(FGuid::NewGuid(), MoveTemp(Bytes),
+			MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>());
+		Mix.Streamer.Start(0.0);
+		Mix.Tick();
+		Mix.Tick();
+		bool bIdentical = Mix.Output.Num() >= 2 * MixChunkFrames;
+		for (int32 At = 0; At < Mix.Output.Num(); ++At)
+		{
+			bIdentical &= Mix.Output[At] == Pattern[(At / 2) % PatternLength];
+		}
+		TestTrue(TEXT("a single full-scale clip with -32768 passes unchanged"), bIdentical);
+	}
+
 	// Four full-gain full-scale sines: limited to the target, never pinned at
 	// +-32767, and the waveform stays a sine (no flat tops, no chunk-boundary step).
 	constexpr float Frequency = 140.0f;

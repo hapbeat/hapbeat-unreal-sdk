@@ -7,10 +7,12 @@ namespace
 {
 	constexpr float TargetChunkSeconds = 0.010f;
 
-	// Limiter (sdk-multi-stream.md §5.8): a chunk whose peak exceeds full scale is
-	// scaled down to LimitTarget / peak; values past LimitKnee go through a tanh
-	// soft knee that approaches full scale instead of a hard clamp.
+	// Limiter (sdk-multi-stream.md §5.8): a chunk whose peak exceeds LimitThreshold
+	// (the PCM16 range including -32768, so one full-scale clip alone never
+	// triggers it) is scaled down to LimitTarget / peak; values past LimitKnee go
+	// through a tanh soft knee that approaches full scale instead of a hard clamp.
 	constexpr float FullScale = 32767.0f;
+	constexpr float LimitThreshold = 32768.0f;
 	constexpr float LimitTarget = 0.9f * FullScale;
 	constexpr float LimitKnee = 0.95f * FullScale;
 	constexpr float LimitReleasePerChunk = 0.05f;
@@ -254,14 +256,15 @@ void FHapbeatStreamer::ApplyLimiter(int32 FramesPerChunk)
 	{
 		Peak = FMath::Max(Peak, FMath::Abs(Value));
 	}
-	const float Want = Peak > FullScale ? LimitTarget / Peak : 1.0f;
+	const float Want = Peak > LimitThreshold ? LimitTarget / Peak : 1.0f;
 	const float Start = LimiterGain;
 	// Attack (lower gain) lands within this chunk; release rises at most +0.05 per chunk.
 	const float End = Want < Start ? Want : FMath::Min(Want, Start + LimitReleasePerChunk);
 	LimiterGain = End;
 	if (Start == 1.0f && End == 1.0f)
 	{
-		// Peak is within full scale and no reduction is active: bit-identical pass-through.
+		// Peak is within LimitThreshold and no reduction is active: bit-identical
+		// pass-through (+32768 then saturates to 32767).
 		return;
 	}
 

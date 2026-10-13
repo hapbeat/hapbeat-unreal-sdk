@@ -2,6 +2,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Fonts/SlateFontInfo.h"
 #include "Widgets/SCompoundWidget.h"
 
 class UHapbeatSubsystem;
@@ -47,6 +48,11 @@ public:
 	void ShowFocusHighlight();
 
 private:
+	// Resolved by Construct, after Unreal and Slate have initialized.
+	FSlateFontInfo TitleFont;
+	FSlateFontInfo BodyFont;
+	FSlateFontInfo AddressValueFont;
+
 	// ---- staged edits ----
 	void StepPlayer(int32 Delta);
 	void StepGroup(int32 Delta);

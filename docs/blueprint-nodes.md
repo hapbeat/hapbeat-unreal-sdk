@@ -96,7 +96,7 @@ Collision / Sequence / Tick Emitter は `Hapbeat Trigger Component` を基底に
 | --- | --- | --- |
 | `Apply Stream Gain Modulation (Hapbeat)` | `Modulator` | authored baseline Gain に倍率を掛ける。`0` は無音、`1` は authored Gain、最大 `2`。 |
 | `Set Stream Pan (Hapbeat)` | `New Pan` | `-1` 左、`0` 中央、`+1` 右へ設定する。mono Clip も送信前に stereo 化されるため、再生中に変更できる。 |
-| `Set Stream Playback Rate (Hapbeat)` | `New Rate` | 再生速度を `0.25`〜`4` で設定する。`1` は authored のまま、`0.8` なら 100 Hz の Clip が 80 Hz になる（周波数も長さも速度に比例）。PC 側で再サンプリングするため、デバイス・通信仕様の対応は不要。 |
+| `Set Stream Playback Rate (Hapbeat)` | `New Rate` | 再生速度を `0.25`〜`4` で設定する。`1` は authored のまま、`0.8` なら 100 Hz の Clip が 80 Hz になる（周波数も長さも速度に比例）。PC 側で再サンプリングするため、デバイス・通信仕様の対応は不要。現在値は `Get Stream Playback Rate (Hapbeat)` で取得できる。 |
 | `Set Stream Loop (Hapbeat)` | `Loop` | 再生中 stream の loop を切り替える。 |
 | `Get Stream Loop (Hapbeat)` | なし | 現在の loop 設定を返す。 |
 | `Stop Stream Playback (Hapbeat)` | なし | この handle の stream だけを停止する。 |
@@ -136,7 +136,7 @@ Collision / Sequence / Tick Emitter は `Hapbeat Trigger Component` を基底に
 
 -   `Tick Mode`: fixed mark を使う `Absolute Position`、または毎回の移動量を積算する `Accumulated Motion`。
 -   `Tick Threshold`: 一回の tick に必要な入力差分。`0.1` なら 0.1 ごと。
--   `Axis`: Vector2D 入力で使う X / Y。
+-   `Axis`: Vector2D 入力で使う `X` / `Y`、またはベクトルの長さ `Magnitude`。
 -   `bEmitOnInitialValue`: 最初の入力でも tick を鳴らすか。
 
 | node | 入力 | 結果・使いどころ |
@@ -168,6 +168,7 @@ Parameter Binding は連続した stream の値を変え、Tick Emitter は操�
 | node / event | 値 | 使いどころ |
 | --- | --- | --- |
 | `Ping (Hapbeat)` | なし | 到達可能な device を探索し、PONG を要求する。 |
+| `Reacquire Stream Ownership (Hapbeat)` | なし | 別のアプリが同じ device へ stream を始めると、この SDK の stream は `Deferred` のまま止まる（`LogHapbeat` に警告が出る）。相手が止まった後、ユーザー操作（再試行ボタン等）からこの node を呼ぶと stream を取り戻す。SDK は自分からは取り戻さない（アプリが前面に戻った時だけ自動で呼ばれる）。 |
 | `On Connected (Hapbeat)` | なし | responsive device 数が 0 から 1 以上へ変わった時に発生。 |
 | `On Disconnected (Hapbeat)` | なし | responsive device 数が 1 以上から 0 になった時に発生。 |
 | `On Error (Hapbeat)` | `Message` | device が ERROR packet を返した時に発生。 |
@@ -399,20 +400,28 @@ void ApplyGainModulation(float Modulator);
 void SetPan(float NewPan);
 ```
 
-### Set Stream Playback Rate (Hapbeat) — UHapbeatStreamPlayback.SetPlaybackRate
-
-所有: `HapbeatSDK / HapbeatStreamPlayback.h`。Callable（実行ピンあり）。`Get Stream Playback Rate (Hapbeat)` で現在値を取得できる。
-
-```cpp
-void SetPlaybackRate(float NewRate);
-```
-
 ### Set Stream Loop (Hapbeat) — UHapbeatStreamPlayback.SetLoop
 
 所有: `HapbeatSDK / HapbeatStreamPlayback.h`。Callable（実行ピンあり）。
 
 ```cpp
 void SetLoop(bool bNewLoop);
+```
+
+### Set Stream Playback Rate (Hapbeat) — UHapbeatStreamPlayback.SetPlaybackRate
+
+所有: `HapbeatSDK / HapbeatStreamPlayback.h`。Callable（実行ピンあり）。
+
+```cpp
+void SetPlaybackRate(float NewRate);
+```
+
+### Get Stream Playback Rate (Hapbeat) — UHapbeatStreamPlayback.GetPlaybackRate
+
+所有: `HapbeatSDK / HapbeatStreamPlayback.h`。Pure（実行ピンなし）。
+
+```cpp
+float GetPlaybackRate() const;
 ```
 
 ### Get Stream Loop (Hapbeat) — UHapbeatStreamPlayback.GetLoop
@@ -517,6 +526,14 @@ void StopAll(const FString& Target = TEXT(""));
 
 ```cpp
 void Ping();
+```
+
+### Reacquire Stream Ownership (Hapbeat) — UHapbeatSubsystem.ReacquireStreamOwnership
+
+所有: `HapbeatSDK / HapbeatSubsystem.h`。Callable（実行ピンあり）。
+
+```cpp
+void ReacquireStreamOwnership();
 ```
 
 ### Play Stream Clip (Hapbeat) — UHapbeatSubsystem.StreamClip

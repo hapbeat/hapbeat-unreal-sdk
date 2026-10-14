@@ -1,5 +1,31 @@
 # Changelog
 
+Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
+
+形式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、
+バージョン付けは [Semantic Versioning](https://semver.org/lang/ja/) に従います。
+
+---
+
+## [Unreleased]
+
+### 追加
+- Stream session v2（contracts `specs/stream-session-v2.md`, DEC-074 / DEC-075）: 拡張 PING（timestamp + client incarnation）と PONG の HBS2 tail で、端末ごとに v2 か v2 以前かを判定し、v2 端末には lease + generation 付きの v2 形式で、v2 以前のファームウェアには従来形式で stream する。v2 端末は v1 の stream を受け付けないため、ファームウェア 0.5.0 以降の Hapbeat へ stream するにはこの版が必要（FIRE / PLAY は従来どおり）。
+- `UHapbeatSubsystem::ReacquireStreamOwnership()`（Blueprint: `Reacquire Stream Ownership (Hapbeat)`）: 別のアプリに stream の lease を奪われた端末を、ユーザー操作から明示的に取り戻す。SDK は自分からは取り戻さず、アプリが前面に戻った時だけ自動で呼ぶ（1 秒に 1 回まで）。lease を奪われた時は `LogHapbeat` に一度だけ警告を出す。
+- `UHapbeatStreamPlayback::SetPlaybackRate` / `GetPlaybackRate`（0.25〜4）: stream の再生速度（= ピッチ）。PC 側の再サンプリングで、プロトコル・ファームウェアの変更はない。rate 1 は従来と同じ出力。
+
+### 変更
+- stream の mix（contracts `sdk-multi-stream.md` §5.7〜5.9, DEC-081）: source ごとの gain / pan をサンプル単位で前の chunk の値から ramp する。最終の飽和の前に limiter（目標 0.9 FS、0.95 FS 以上は tanh の soft knee）を入れ、ピークが 32768 を超えた時だけ働く（full scale 以内の chunk はビット一致で通す）。clip の 16 kHz への変換を最近傍から線形補間にした。
+- keep-alive の PING 間隔は、v2 端末がいる間は最大 5 s（端末は最後の PING から 15 s で lease を捨てる）。
+- アドレスが変わった PONG で新しい endpoint が現れた時、PING を 1 回送って（1 秒に 1 回まで）PingInterval を待たずに判定する。
+- Windows 以外（Quest 等）では、stream 送出スレッドの 10 ms 間隔の待ちを 1 ms 単位の sleep にし、最後の 1.5 ms だけ spin する（従来は 1 コアを占有していた）。
+
+### 修正
+- Android でサンプルモジュールが UObject 初期化より前に読み込まれ、アドレスパネルのフォント取得が早すぎた。フォントは `Construct` で解決する。
+
+### 既知の制限
+- Editor の Test Play は従来形式でしか stream しないため、v2 端末（ファームウェア 0.5.0 以降）へは StreamClip を Test Play できない（初回に警告を出す）。PIE では stream できる。
+
 ## [0.1.0] - 2026-09-10
 
 - Replaced the single-stream runner with endpoint-scoped StreamHub sessions:
@@ -18,13 +44,6 @@
   value, and an EOF source can rejoin at frame 0 when loop is enabled.
 - Removed the remaining public runnable broadcast fallback parameters. STREAM
   sessions accept exact unicast endpoints only.
-
-Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
-
-形式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、
-バージョン付けは [Semantic Versioning](https://semver.org/lang/ja/) に従います。
-
----
 
 ### 修正（Fixed）
 

@@ -135,6 +135,7 @@ Hapbeat->Play(TEXT("pickup"), 0.8f, TEXT("player_1/pos_chest"));
 | `StreamClip(Clip, BaselineGain, InitialGain, Target, bLoop, InitialPan)` | PCM の `UHapbeatClip` を送信し、個別制御用の Playback handle を返す。 |
 | `StopStream()` | 実行中のすべての Stream source を停止する。 |
 | `Ping()` | PONG を要求して到達可能な Hapbeat を検出する。 |
+| `ReacquireStreamOwnership()` | 別のアプリに奪われた stream（`Deferred` のまま送信されない）を明示的に取り戻す。ユーザー操作から呼ぶ。アプリが前面に戻った時は自動で呼ばれる。 |
 | `IsConnected()` / `IsAlive()` / `GetAliveDeviceCount()` | ソケット状態、応答のある device の有無・台数を確認する。 |
 
 `IsConnected()` は UDP ソケットを開けたかを示すだけです。実際に到達可能な Hapbeat の確認には `Ping()` の後で `IsAlive()` または `GetAliveDeviceCount()` を使います。
@@ -174,7 +175,7 @@ Target の意味と構成別の使い分けは[ターゲティング](./targetin
 | --- | --- |
 | `ApplyGainModulation(Value)` | entry の baseline Gain に `Value` を掛け、0〜2 に制限して即時反映する。 |
 | `SetPan(Value)` | Stream の左右バランスを `-1`〜`1` で設定する。 |
-| `SetPlaybackRate(Value)` | Stream の再生速度（= ピッチ）を `0.25`〜`4` で設定する。`1` で authored のまま。 |
+| `SetPlaybackRate(Value)` / `GetPlaybackRate()` | Stream の再生速度（= ピッチ）を `0.25`〜`4` で設定・取得する。`1` で authored のまま。 |
 | `SetLoop(bLoop)` | loop の有無を切り替える。 |
 | `Stop()` | この handle の source だけを停止する。 |
 | `IsActive()` / `GetStatus()` / `GetDeferredReason()` | 再生中か、送信先待ちか、停止済みかを確認する。 |
@@ -194,6 +195,7 @@ Target の意味と構成別の使い分けは[ターゲティング](./targetin
 - `StopEntry` は Stream Clip の場合 **Subsystem 内の全 source** を停止します。個別停止は `UHapbeatStreamPlayback::Stop()`。Command の `StopAll(Target)` は device event の停止で、SDK 側 Stream の終了には `StopStream()` を使います。
 - Event Map 経路の遅延は `max(0, HapticDelaySeconds + DelayOffsetSeconds + ExtraDelaySeconds)`。`StopEntry` は global + entry の遅延を使い、呼出単位の ExtraDelay は加えません。直接 `Play` / `StreamClip` は Event Map の遅延経路を通りません。
 - UObject / component の操作はゲームスレッドで行います。保持する playback / asset 参照には `UPROPERTY()` を使い、送信ワーカースレッドから UObject を操作しません。
+- 別のアプリが同じ device へ stream を始めると、この SDK の lease は置き換えられ、stream は `Deferred` のまま送信されません（`LogHapbeat` に警告）。SDK は自分からは取り戻さず、アプリが前面に戻った時だけ自動で取り戻します。それ以外はユーザー操作から `ReacquireStreamOwnership()` を呼びます。
 - UDP の発火要求・`OnFired` はデバイスの再生完了通知ではありません。実機への到達確認は PONG と実機試験で行います。
 
 ## C++ 専用の補助 API
@@ -234,7 +236,7 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
 - `EHapbeatBindingSource`: `LocalPositionX` / `LocalPositionY` / `LocalPositionZ`（cm）、`VelocityMagnitude` / `PositionDeltaMagnitude`（cm/s）、`AngularVelocityMagnitude`（deg/s）、`External`（SetValue 入力）。
 - `EHapbeatBindingCurve`: `Linear` は t、`EaseIn` は t²、`EaseOut` は 1−(1−t)²、`Exponential` は (exp(3t)−1)/(exp(3)−1)、`Custom` は CustomCurve の値（未設定は線形）。t は InputMin..InputMax を 0..1 に制限した入力です。
 - `EHapbeatBindingOutput`: `StreamGain` / `StreamPan`。曲線結果を OutputMin..OutputMax に変換します。Gain は baseline × 出力を 0..2 に制限、Pan は出力を −1..1 に制限します。
-- `EHapbeatTickAxis`: `X` / `Y`。`EHapbeatTickMode`: `AbsolutePosition` は固定目盛り通過、`AccumulatedMotion` は前回の基準からの移動量。TickThreshold の単位は入力値と同じです。0 は値の変化ごと、1 回の入力で最大 64 tick。Cooldown により発火数が抑えられることがあります。
+- `EHapbeatTickAxis`: `X` / `Y` / `Magnitude`（Vector2D の長さ）。`EHapbeatTickMode`: `AbsolutePosition` は固定目盛り通過、`AccumulatedMotion` は前回の基準からの移動量。TickThreshold の単位は入力値と同じです。0 は値の変化ごと、1 回の入力で最大 64 tick。Cooldown により発火数が抑えられることがあります。
 
 ## ヘッダーの参照先
 
@@ -869,16 +871,22 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
   void SetPan(float NewPan);
   ```
 
+- `SetLoop`（関数）
+
+  ```cpp
+  void SetLoop(bool bNewLoop);
+  ```
+
 - `SetPlaybackRate`（関数）
 
   ```cpp
   void SetPlaybackRate(float NewRate);
   ```
 
-- `SetLoop`（関数）
+- `GetPlaybackRate`（関数）
 
   ```cpp
-  void SetLoop(bool bNewLoop);
+  float GetPlaybackRate() const;
   ```
 
 - `GetLoop`（関数）
@@ -961,6 +969,12 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
 
   ```cpp
   void Ping();
+  ```
+
+- `ReacquireStreamOwnership`（関数）
+
+  ```cpp
+  void ReacquireStreamOwnership();
   ```
 
 - `StreamClip`（関数）

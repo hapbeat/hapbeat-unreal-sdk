@@ -17,7 +17,8 @@ Two pieces, linked only by event id (the same design as the Hapbeat Unity SDK):
 
 ## Requirements
 
-- Unreal Engine 5 (compile-verified on 5.4 and 5.6) and a C++ toolchain: the
+- Unreal Engine 5.3+ (verified on 5.6.1 and 5.4; with no preference, use 5.6.1,
+  which the Hapbeat demos are built with) and a C++ toolchain: the
   plugin ships native modules, so even a Blueprint-only project builds once
   after adding it ([build steps](docs/unreal-build.md)).
 - A Hapbeat on the same Wi-Fi / LAN. Command (Fire) events need a Kit deployed
@@ -28,8 +29,12 @@ Two pieces, linked only by event id (the same design as the Hapbeat Unity SDK):
 
 ## Install
 
-1. Put the contents of this repository at `<ProjectRoot>/Plugins/HapbeatSDK/`
-   (so `Plugins/HapbeatSDK/HapbeatSDK.uplugin` exists).
+1. In the project root (the folder with the `.uproject`), run
+   `git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK`
+   (for a ZIP, copy its contents into `Plugins/HapbeatSDK/` so
+   `Plugins/HapbeatSDK/HapbeatSDK.uplugin` exists). Clone once per project —
+   do not share one clone through a symlink / junction (build outputs live in
+   the plugin folder). Update with `git pull` and rebuild.
 2. Regenerate project files and build the **Development Editor / Win64** target.
 3. **Edit → Plugins → Hapbeat SDK** → enable. Settings are in
    **Project Settings → Plugins → Hapbeat** (also **Tools → Hapbeat → Hapbeat Settings**).

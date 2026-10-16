@@ -14,7 +14,7 @@ sidebar:
 ファイル操作と Unreal の build を実行できる AI には、次の依頼文を渡します。`<ProjectRoot>` は対象プロジェクトの絶対パスに置き換えます。
 
 ```text
-Unreal Engine 5.4 の C++ プロジェクト <ProjectRoot> に Hapbeat Unreal SDK を導入してください。
+Unreal Engine 5.6 の C++ プロジェクト <ProjectRoot> に Hapbeat Unreal SDK を導入してください。
 https://github.com/hapbeat/hapbeat-unreal-sdk.git を <ProjectRoot>/Plugins/HapbeatSDK に clone し、project files を再生成して Editor target を build してください。
 Hapbeat SDK を有効化し、Plugin Content の BasicExample マップを開いてください。
 PIE、Test Play、実機への触覚送信は実行しないでください。
@@ -22,13 +22,32 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 
 :::
 
+## 動作環境
+
+-   Unreal Engine 5.3 以上で動作する想定です（動作確認済み: 5.6.1、5.4）。特にこだわりがなければ、Hapbeat のデモ制作で使っている 5.6.1 がおすすめです。
+-   C++ プロジェクトのビルド環境（Windows は Visual Studio）が必要です。Blueprint のみのプロジェクトでも、プラグインのために 1 回ビルドします。
+
 ## 1\. プロジェクトへ追加する
 
-1.  次のいずれかで、このリポジトリの**内容**を C++ プロジェクトの `Plugins/HapbeatSDK/` に置きます。
-    -   Git: `git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git <ProjectRoot>/Plugins/HapbeatSDK`
-    -   ZIP: GitHub から ZIP をダウンロードして解凍し、展開されたフォルダの中身を `<ProjectRoot>/Plugins/HapbeatSDK/` へコピーします。
-2.  `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。ZIP の親フォルダまで入れて、`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` となる配置は誤りです。
+1.  `.uproject` があるフォルダでターミナルを開き、次を実行します（`Plugins/HapbeatSDK` フォルダは自動で作られます）。
+
+    ```
+    git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK
+    ```
+
+2.  `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。
 3.  project files を再生成して、プロジェクトの **Development Editor / Win64** を build します。[ビルド手順](./unreal-build.md)
+
+<details>
+<summary>補足: ZIP で入れる場合・更新・複数プロジェクト</summary>
+
+-   **ZIP で入れる場合**: `Plugins/HapbeatSDK/` フォルダを作成し、ZIP を解凍したフォルダの**中身**をコピーします。`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` のように 1 階層深くなる配置は誤りです。
+-   **パスを指定して clone する場合**: パスにスペースが含まれるときは `"..."` で囲みます。囲まないと `Too many arguments` で失敗します。
+-   **更新**: `Plugins/HapbeatSDK` で `git pull`（リリースに固定するなら `git checkout vX.Y.Z`）を実行し、build し直します。
+-   **複数プロジェクト**: プロジェクトごとに clone します。プロジェクトを Git で管理しているなら `git submodule add` でも構いません。
+-   **1 つの clone をリンクで複数プロジェクトから共有しないでください。** build 成果物がプラグインのフォルダ内に作られるため、プロジェクト間で DLL が上書きされます。
+
+</details>
 
 ## 2\. プラグインを有効にする
 

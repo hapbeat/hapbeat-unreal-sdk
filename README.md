@@ -24,8 +24,8 @@ Two pieces, linked only by event id (the same design as the Hapbeat Unity SDK):
 - A Hapbeat on the same Wi-Fi / LAN. Command (Fire) events need a Kit deployed
   with [Hapbeat Studio](https://devtools.hapbeat.com); StreamClip events need no
   Kit on the device.
-- Streaming to Hapbeat firmware 0.5.0 or later needs the stream session v2
-  support listed under `[Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
+- Streaming to Hapbeat firmware 0.5.0 or later needs this SDK 0.2.0 or later
+  (stream session v2, see [CHANGELOG.md](CHANGELOG.md)).
 
 ## Install
 

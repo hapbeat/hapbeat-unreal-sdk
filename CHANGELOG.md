@@ -9,6 +9,8 @@ Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-17
+
 ### 追加
 - Stream session v2（contracts `specs/stream-session-v2.md`, DEC-074 / DEC-075）: 拡張 PING（timestamp + client incarnation）と PONG の HBS2 tail で、端末ごとに v2 か v2 以前かを判定し、v2 端末には lease + generation 付きの v2 形式で、v2 以前のファームウェアには従来形式で stream する。v2 端末は v1 の stream を受け付けないため、ファームウェア 0.5.0 以降の Hapbeat へ stream するにはこの版が必要（FIRE / PLAY は従来どおり）。
 - `UHapbeatSubsystem::ReacquireStreamOwnership()`（Blueprint: `Reacquire Stream Ownership (Hapbeat)`）: 別のアプリに stream の lease を奪われた端末を、ユーザー操作から明示的に取り戻す。SDK は自分からは取り戻さず、アプリが前面に戻った時だけ自動で呼ぶ（1 秒に 1 回まで）。lease を奪われた時は `LogHapbeat` に一度だけ警告を出す。
@@ -190,4 +192,5 @@ Initial release. Hapbeat Unity SDK の Unreal 版として、wire protocol・Eve
   （`/Content/HapbeatSamples/...` を raw WAV/manifest ごとパッケージに含める）。
 - CI: タグ push (`v*`) から CHANGELOG を抽出して GitHub Release を自動公開。
 
+[0.2.0]: https://github.com/hapbeat/hapbeat-unreal-sdk/releases/tag/v0.2.0
 [0.1.0]: https://github.com/hapbeat/hapbeat-unreal-sdk/releases/tag/v0.1.0

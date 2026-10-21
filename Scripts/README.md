@@ -62,13 +62,18 @@ Install section). `package-release.ps1` is for maintainers:
    `-IncludePdb`), `HapbeatSDK-<ver>-SHA256SUMS.txt`, and `logs/`. The
    packaged `.uplugin` gets `"EngineVersion": "5.x.0"` and `"Installed": true`
    from BuildPlugin. It exits nonzero if any engine fails.
-3. Push the `vX.Y.Z` tag. The Release workflow creates the GitHub Release
-   (notes from CHANGELOG, plus a source ZIP). Then attach the engine ZIPs and
-   the checksum file:
+3. Push the release commit (a work branch is fine), then create the draft:
 
    ```
-   gh release upload vX.Y.Z Saved/ReleasePackages/HapbeatSDK-X.Y.Z-UE5.*.zip Saved/ReleasePackages/HapbeatSDK-X.Y.Z-SHA256SUMS.txt
+   powershell -ExecutionPolicy Bypass -File Scripts/draft-release.ps1
    ```
+
+   It makes a **draft** GitHub Release `vX.Y.Z` (notes from CHANGELOG, target =
+   HEAD) with the engine ZIPs and the checksum file attached. No tag is created
+   and users cannot see it yet.
+4. After verifying the ZIPs on a device, merge the release commit into
+   `master` and publish the draft on GitHub. Publishing creates the tag and the
+   Release workflow attaches `HapbeatSDK-vX.Y.Z-source.zip`.
 
    `Update-HapbeatSDK.ps1` picks `HapbeatSDK-*-UE<engine>.zip` from the latest
    release and verifies it against the `*-SHA256SUMS.txt` asset, so keep those

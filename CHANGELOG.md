@@ -9,6 +9,15 @@ Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-21
+
+### 追加
+- UE 5.4 / 5.5 / 5.6 ごとのビルド済み ZIP（`HapbeatSDK-<version>-UE5.x.zip`）を Releases で配布する。Win64 のエディタ用バイナリを含むため、`Plugins/HapbeatSDK/` に展開するだけでビルドなしで使える（ゲームのパッケージ時は従来どおり `Source/` からビルドされる）。
+- `Scripts/Update-HapbeatSDK.ps1`: エディタを閉じて実行すると、`.uproject` のエンジンに合う最新 ZIP を取得し、SHA256 を確認して入れ替える。古いフォルダは `Saved/HapbeatSDK-backup-*` へ移す（削除しない）。git clone で入れた場合は `git pull` を案内して止まる。
+
+### 変更
+- README / Getting Started の導入手順を「ZIP を展開」を基本にし、git clone はソースから入れる場合の手順にした。
+
 ## [0.2.0] - 2026-10-17
 
 ### 追加

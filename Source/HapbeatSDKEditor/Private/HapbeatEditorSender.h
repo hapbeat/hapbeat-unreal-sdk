@@ -2,11 +2,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HAL/CriticalSection.h"
 #include "HapbeatNetInterfaces.h"   // FHapbeatBroadcastRoute (held by value in a TArray below)
 #include "HapbeatStreamGainMirror.h"
+#include "HapbeatStreamLease.h"     // per-device stream class / lease (Stream Gen 2)
 
 class FSocket;
 class FInternetAddr;
+class FRunnableThread;
+class FHapbeatStreamRunnable;
 
 /**
  * Minimal editor-only UDP sender used by the EventMap "Test Play" detail
@@ -31,10 +35,61 @@ class FInternetAddr;
  * space; devices dedup by (source endpoint, seq), and the editor sender uses
  * its own bound port, so its own seq stream cannot collide with the runtime
  * subsystem's.
+ *
+ * Stream Test Play follows the runtime's stream rules with the same pure parts
+ * (HapbeatStreamSessionContract::EvaluatePongLease, FHapbeatStreamRunnable): one
+ * session per device whose address matches the target, Stream Gen 2 under the
+ * lease the device issued to this sender's incarnation, Stream Gen 1 for firmware
+ * before 0.5.0 (with its 300 ms END->BEGIN guard).
  */
 class FHapbeatEditorSender
 {
 public:
+	/** What the editor knows about one device (keyed by IPv4). */
+	struct FEditorDevice
+	{
+		FString Ip;
+		int32 Port = 0;
+		FString Address;
+		double LastPongSeconds = -1.0e9;
+		/** From matched replies to this sender's own extended PINGs only. */
+		FHapbeatStreamEndpointLeaseState LeaseState;
+		/** Last Stream Gen 1 END to this device (the 300 ms guard). */
+		double LastGen1EndSeconds = -1.0e9;
+	};
+
+	/** One stream session a Test Play will open. */
+	struct FEditorStreamPlan
+	{
+		FString Ip;
+		int32 Port = 0;
+		/** BEGIN target: the device's full address. */
+		FString Address;
+		EHapbeatStreamWireFormat Format = EHapbeatStreamWireFormat::LegacyV1;
+		/** Stream Gen 2 only. */
+		FHapbeatStreamLeaseIdentity Lease;
+	};
+
+	/**
+	 * Which devices a stream Test Play opens a session to, and in which format
+	 * (sdk-multi-stream.md §4): a live device whose address matches the target,
+	 * Stream Gen 1 if classified so, Stream Gen 2 with a usable lease for
+	 * Incarnation. Unknown, lease-less and superseded devices get nothing.
+	 * Pure (no socket), so it can be tested.
+	 */
+	static TArray<FEditorStreamPlan> PlanStreamSessions(const TArray<FEditorDevice>& InDevices,
+		const FString& ResolvedTarget, uint64 Incarnation, double NowSeconds);
+
+	/**
+	 * The session for one plan, not started: BEGIN targets the device's address,
+	 * the only destination is the device's IPv4, Stream Gen 2 begins at the next
+	 * generation of the plan's lease. nullptr when the lease has no generation
+	 * left. Public for the automation test (InSocket may be null there).
+	 */
+	static FHapbeatStreamRunnable* CreateSessionRunnable(const FEditorStreamPlan& Plan, TArray<uint8>&& Pcm16,
+		int32 SampleRate, int32 NumChannels, TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror,
+		FSocket* InSocket, float SendAheadSeconds);
+
 	/**
 	 * Send a PLAY for EventId at Gain (0..1 nominal; already gain x intensity
 	 * composed by the caller). Immediate (target_time = 0). No-op (warns) if
@@ -54,6 +109,12 @@ public:
 
 	/**
 	 * Stream a clip from the editor, without entering PIE.
+	 *
+	 * Each device whose address matches the target gets its own session: Stream
+	 * Gen 2 under the lease it issues to this editor (asked for by unicast right
+	 * before the stream starts, a few hundred ms at most), or Stream Gen 1 for
+	 * firmware before 0.5.0. A device that superseded this editor's lease is
+	 * taken back: Test Play is an explicit request.
 	 *
 	 * Command entries can be sanity-checked with a single PLAY, but a Stream
 	 * Clip only exists as audio the SDK pushes out over time, so without this
@@ -117,17 +178,43 @@ private:
 	static void SendSingleBroadcast(const TArray<uint8>& Packet);
 
 	/**
-	 * Collect any PONGs waiting on the socket.
+	 * Collect any PONGs / ERRORs waiting on the socket.
 	 *
 	 * This sender has no tick, so replies are drained opportunistically just
 	 * before each send. That is enough: every send is preceded by a PING, so by
 	 * the time a designer clicks Test Play a second time the reply from the
-	 * first is already queued.
+	 * first is already queued. PONGs also classify devices (stream class /
+	 * lease); an accepted ERROR is logged once per code and device.
 	 */
 	static void DrainReplies();
 
+	/** An ERROR from a device: accepted ones are logged once per device and code. */
+	static void HandleError(const FString& SenderIp, int32 SenderPort, const FHapbeatProtocol::FErrorInfo& Error);
+
+	/** Unicast extended PING (lease request) to one device. */
+	static void SendLeasePing(const FEditorDevice& Device);
+	/**
+	 * Ask these devices for a lease and wait (bounded) until each has answered
+	 * a request sent now. Returns false if the wait ran out.
+	 */
+	static bool RequestLeases(const TArray<FString>& DeviceIps);
+	static int64 NextPingTimestampUs();
+	static uint32 AllocateGeneration(const FHapbeatStreamLeaseIdentity& Lease);
+
 	/** Devices that replied, and when (FPlatformTime::Seconds). */
 	static TMap<FString, double> DevicePongTimes;
+	/** Devices that replied with an address (the stream side), keyed by IPv4. */
+	static TMap<FString, FEditorDevice> Devices;
+	/** Outstanding PINGs, for matching replies (Stream Gen 2 lease). */
+	static TMap<uint16, FHapbeatPendingPing> PendingPings;
+	/** This sender's client incarnation; renewed to take a superseded device back. */
+	static uint64 ClientIncarnation;
+	static int64 LastPingTimestampUs;
+	/** Next generation per lease, shared with the stream workers (own-gap restart). */
+	static TMap<FHapbeatStreamLeaseIdentity, uint32> NextGenerationByLease;
+	static FCriticalSection GenerationLock;
+	/** "ip|code" of ERRORs already logged. */
+	static TSet<FString> LoggedErrors;
 
 	/**
 	 * Candidate broadcast destinations, one per local IPv4 subnet plus the
@@ -141,21 +228,25 @@ private:
 	static int64 UnixMicros();
 
 	/**
-	 * Blocks briefly for a PONG so the stream can be unicast from its first
-	 * chunk.
-	 *
-	 * The destination list is snapshotted when the stream thread starts, so
-	 * discovering a device a moment later does not help -- the whole stream
-	 * would broadcast, and Wi-Fi access points batch broadcast frames against
-	 * their DTIM interval. A quarter second once, before a test the user just
-	 * asked for, is a fair price for that.
+	 * Blocks briefly for a PONG when no device is known yet, so a stream has
+	 * somewhere to go. Streams are never broadcast: each session is unicast to
+	 * one device chosen when it starts. A quarter second once, before a test
+	 * the user just asked for, is a fair price for that.
 	 */
 	static void WaitForFirstDevice();
 
-	/** Live gain for the running stream; also how the thread is told to stop. */
+	struct FEditorStream
+	{
+		FHapbeatStreamRunnable* Runnable = nullptr;
+		FRunnableThread* Thread = nullptr;
+		FString Ip;
+		EHapbeatStreamWireFormat Format = EHapbeatStreamWireFormat::LegacyV1;
+	};
+
+	/** Live gain for the running stream (shared by every device's session). */
 	static TSharedPtr<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> StreamMirror;
-	static class FHapbeatStreamRunnable* StreamRunnable;
-	static FRunnableThread* StreamThread;
+	/** One session per device of the running Test Play. */
+	static TArray<FEditorStream> Streams;
 
 	static FSocket* Socket;
 	static TSharedPtr<FInternetAddr> BroadcastAddr;

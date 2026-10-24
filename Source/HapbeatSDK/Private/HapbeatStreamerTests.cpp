@@ -343,7 +343,7 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 {
 	// Streams only go to endpoints a matched PONG has classified. These routing
 	// cases are about target/route handling, so their endpoints are marked as
-	// pre-v2 (legacy) receivers, whose sessions carry no identity.
+	// Stream Gen 1 receivers (firmware before 0.5.0), whose sessions carry no identity.
 	auto MarkLegacy = [](UHapbeatSubsystem* Subsystem, const FString& Key)
 	{
 		Subsystem->StreamEndpoints.FindChecked(Key).LeaseState.Class = EHapbeatStreamEndpointClass::Legacy;

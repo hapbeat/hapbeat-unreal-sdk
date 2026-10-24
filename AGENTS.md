@@ -28,7 +28,7 @@ points: `UHapbeatBlueprintLibrary` (play an Event Map entry) and
 - Canonical docs: https://devtools.hapbeat.com/docs/sdk-integration/
 - Event id and wire format are defined by **hapbeat-contracts**
   (`specs/message-format.md`, `specs/device-addressing.md`,
-  `specs/stream-session-v2.md`); follow it, do not redefine here.
+  `specs/stream-session.md`, `specs/sdk-multi-stream.md`); follow it, do not redefine here.
 
 ## What it is
 
@@ -282,10 +282,15 @@ entry picker — see below).
 - Mixer: per-source gain/pan ramped per sample from the previous chunk's
   value, a limiter before final saturation (target 0.9 FS; only acts when the
   mixed peak exceeds 32768), clips resampled to 16 kHz by linear interpolation.
-- **Stream session v2** (contracts `stream-session-v2.md`): the SDK detects
-  per device whether it is v2 and uses lease + generation framing for v2,
-  the legacy form otherwise. **Firmware 0.5.0 and later reject v1 streams** —
+- **Stream Gen 2** (contracts `stream-session.md`): the SDK asks each device
+  it streams to for a lease (unicast extended PING) and streams Stream Gen 2
+  (lease + generation framing) to devices that answer with one, Stream Gen 1
+  to firmware before 0.5.0. **Firmware 0.5.0 and later reject Stream Gen 1** —
   this SDK revision is required to stream to them (FIRE / PLAY unchanged).
+  `UHapbeatSubsystem::GetStreamEndpoints()` lists each device's address, ip,
+  port, `StreamClass` (`Gen1` / `Gen2` / `Unknown`) and `LeaseState`
+  (`Valid` / `Unavailable` / `Superseded` / `None`); `OnStreamEndpointChanged`
+  fires when either changes.
 - `UHapbeatStreamPlayback : UObject` — the handle `StreamClip` /
   `PlayHapbeatEvent` returns, one per source. `BaselineGain` (frozen at start
   = `entry.GetEffectiveGain()`), `ApplyGainModulation(float Modulator)`
@@ -295,7 +300,9 @@ entry picker — see below).
   `GetLoop()`, `Stop()` (this source only), `GetGain()`, `GetPan()`,
   `IsStopped()`, `IsActive()`, `GetStatus()`
   (`EHapbeatStreamPlaybackStatus`: `Deferred` / `Active` / `Stopped`),
-  `GetDeferredReason()` (`None` / `NoResolvedEndpoint`),
+  `GetDeferredReason()` (`None` / `NoResolvedEndpoint` / `UnknownClass` /
+  `LeaseUnavailable` / `Superseded`; with several matching devices the first
+  of Superseded > LeaseUnavailable > UnknownClass > NoResolvedEndpoint),
   `GetStereoChannelGains(float& OutL, float& OutR)`. Pan is **linear
   balance, not equal-power** (`pan=0 → L=R=1.0` passthrough). Use
   `IsStopped()` for "finished"; `IsActive() == false` can also mean

@@ -9,6 +9,26 @@ Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
 
 ## [Unreleased]
 
+Hapbeat 1.0（DEC-096）に合わせた変更。対応する仕様は contracts `46f246e`（1.0 の仕様。release 時に contracts の版へ置き換える）の `specs/stream-session.md`・`specs/sdk-multi-stream.md`・`specs/message-format.md`。
+
+### 追加
+- `EHapbeatStreamDeferredReason` に `UnknownClass`（機体の stream の世代がまだ分からない）・`LeaseUnavailable`（機体が lease を出していない）・`Superseded`（別の送信元が stream を取った）を追加。一致する機体の理由が分かれる時は `Superseded` > `LeaseUnavailable` > `UnknownClass` > `NoResolvedEndpoint` の順で 1 つを返す。Stream Gen 1 の 300 ms の間隔を待つ間は `Active` のまま。
+- `UHapbeatSubsystem::GetStreamEndpoints()`（Blueprint: `Get Stream Endpoints (Hapbeat)`）と `OnStreamEndpointChanged`: 機体ごとの address・ip・port・stream の世代（`Gen1` / `Gen2` / `Unknown`）・lease の状態（`Valid` / `Unavailable` / `Superseded` / `None`）・CAPS の generation を返し、世代か lease が変わると通知する。
+- CAPS_REQ / CAPS: 照合済みの PONG を返した機体に能力の申告を求める（500 ms ごとに 3 回まで。応答が無ければ「申告なし」）。SDK より新しい major の機体には一度だけ警告する。`haptic_channels` が 1 の機体（モーター 1 個）へは pan をかけずに混ぜる。
+- ERROR の受信: 既知の機体の port 7700 から来た ERROR だけを受け付け、stream の ERROR は自分の session の envelope と一致するものだけを扱う。code ごとに 1 回ログに出し、STREAM_NOT_STARTED で BEGIN を送り直し、STREAM_TIMED_OUT・STREAM_LEASE_INVALID で新しい世代を始め、STREAM_SUPERSEDED でその機体を `Superseded` で待たせ、STREAM_STOPPED でその機体から source を外し、STREAM_GEN_UNSUPPORTED・STREAM_TARGET_MISMATCH で機体に問い直す。
+- Stream Gen 2 の BEGIN の再送: 最初の 3 ブロックの前と、以後 50 ブロック（500 ms）ごとに同じ BEGIN を送る。再送する BEGIN の target は、その時点の機体の address。
+- 差し替え（re-splice）: Stream Gen 2 の機体で、送り済みの音が 40 ms 以上残っている時に新しい source が始まったら、送り済みのブロックを新しい世代で作り直し、新しい source を要求した時刻から鳴らす。
+
+### 変更
+- PONG の tail の読み方: tail なしは Stream Gen 1、32 byte 以上で `HBS2`・extension_version 1 は Stream Gen 2（先頭 32 byte を読み、reserved と未知の flag は無視）、それ以外は無視（世代・lease を変えず、照合済みの応答なら機体ごとに 1 回警告）。
+- 拡張 PING（lease の要求）は unicast だけで、stream する機体（再生中・待機中の Playback の target に一致する機体、session がある機体、session の終了から 15 s 以内の機体）へだけ送る。間隔は応答済みの機体で 5 s（lease の TTL の 1/3）、未応答の機体で 1 s。探索の broadcast は 8 byte の PING。8 byte の PING への応答では世代を決めない。
+- superseded の保留は、lease_reissued の付いた照合済みの応答（または `ReacquireStreamOwnership`）でだけ解く。
+- 同じ incarnation のまま lease の ticket・boot・世代が変わった時は、旧い session を END し、新しい session で各 source を続きの位置から送る。
+- 自分の送信が 3 s 以上止まった Stream Gen 2 の session は、END して新しい世代で始め直す（溜まった分を一度に送らない）。旧い識別に戻った session は、送信スレッドでも BEGIN・DATA を止める。
+- 機体の address が変わった PONG では、同じ IP・port の endpoint をすぐ新しい address へ移す（旧い address が 15 s 残らない）。
+- Editor の Test Play の stream を Stream Gen 2 に対応: target の address に一致する機体ごとに session を作り、Stream Gen 2 の機体には lease を unicast で求めてから送る（Stream Gen 1 の機体には従来の形式）。別の送信元に取られた機体は、Test Play が明示の操作なので取り戻す。
+- ログ・コメントの呼び方を Stream Gen 1 / Stream Gen 2 に揃えた（`versioning.md` §4.2）。
+
 ## [0.2.0] - 2026-10-17
 
 ### 追加

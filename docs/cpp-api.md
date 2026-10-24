@@ -231,7 +231,8 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
 
 - `EHapticMode`: `Command` / `StreamClip`。
 - `EHapbeatStreamPlaybackStatus`: `Deferred` / `Active` / `Stopped`。
-- `EHapbeatStreamDeferredReason`: `None` / `NoResolvedEndpoint`。遅延時間や device エラーコードは含みません。
+- `EHapbeatStreamDeferredReason`: `None` / `NoResolvedEndpoint`（target に一致する機体が無い）/ `UnknownClass`（機体の stream の世代がまだ分からない）/ `LeaseUnavailable`（機体が lease を出していない）/ `Superseded`（別の送信元が stream を取った）。一致する機体の理由が分かれる時は `Superseded` > `LeaseUnavailable` > `UnknownClass` > `NoResolvedEndpoint` の順で 1 つを返し、1 台でも再生していれば Playback は `Active` です。遅延時間や device エラーコードは含みません。
+- `EHapbeatStreamClass`: `Unknown` / `Gen1`（ファームウェア 0.5.0 より前）/ `Gen2`。`EHapbeatStreamLeaseState`: `None` / `Valid` / `Unavailable` / `Superseded`。`UHapbeatSubsystem::GetStreamEndpoints()` が機体ごとの `FHapbeatStreamEndpointInfo`（address・ip・port・class・lease・CAPS の generation。CAPS は -1 が未取得、0 が申告なし）を返し、class か lease が変わると `OnStreamEndpointChanged` が呼ばれます。
 - `EHapbeatCollisionEvent`: `Hit` / `BeginOverlap`。`EHapbeatGainMode`: `Fixed` / `VelocityScaled`。速度単位は cm/s、正規化は `clamp((speed - VelocityThreshold) / (MaxVelocity - VelocityThreshold), 0, 1)`、曲線未設定は線形です。
 - `EHapbeatBindingSource`: `LocalPositionX` / `LocalPositionY` / `LocalPositionZ`（cm）、`VelocityMagnitude` / `PositionDeltaMagnitude`（cm/s）、`AngularVelocityMagnitude`（deg/s）、`External`（SetValue 入力）。
 - `EHapbeatBindingCurve`: `Linear` は t、`EaseIn` は t²、`EaseOut` は 1−(1−t)²、`Exponential` は (exp(3t)−1)/(exp(3)−1)、`Custom` は CustomCurve の値（未設定は線形）。t は InputMin..InputMax を 0..1 に制限した入力です。
@@ -823,6 +824,58 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
 
   Blueprint 読み書き可。Editor で設定可能。
 
+### FHapbeatStreamEndpointInfo
+
+ヘッダー: `Source/HapbeatSDK/Public/HapbeatStreamEndpointInfo.h`
+
+- `Address`（プロパティ）
+
+  ```cpp
+  FString Address;
+  ```
+
+  Blueprint 読取専用。
+
+- `Ip`（プロパティ）
+
+  ```cpp
+  FString Ip;
+  ```
+
+  Blueprint 読取専用。
+
+- `Port`（プロパティ）
+
+  ```cpp
+  int32 Port = 0;
+  ```
+
+  Blueprint 読取専用。
+
+- `StreamClass`（プロパティ）
+
+  ```cpp
+  EHapbeatStreamClass StreamClass = EHapbeatStreamClass::Unknown;
+  ```
+
+  Blueprint 読取専用。
+
+- `LeaseState`（プロパティ）
+
+  ```cpp
+  EHapbeatStreamLeaseState LeaseState = EHapbeatStreamLeaseState::None;
+  ```
+
+  Blueprint 読取専用。
+
+- `CapsGeneration`（プロパティ）
+
+  ```cpp
+  int32 CapsGeneration = -1;
+  ```
+
+  Blueprint 読取専用。
+
 ### UHapbeatStreamPlayback
 
 ヘッダー: `Source/HapbeatSDK/Public/HapbeatStreamPlayback.h`
@@ -1031,6 +1084,12 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
   bool IsAlive() const;
   ```
 
+- `GetStreamEndpoints`（関数）
+
+  ```cpp
+  TArray<FHapbeatStreamEndpointInfo> GetStreamEndpoints() const;
+  ```
+
 - `IsStreaming`（関数）
 
   ```cpp
@@ -1063,6 +1122,14 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
 
   ```cpp
   FHapbeatOnError OnError;
+  ```
+
+  
+
+- `OnStreamEndpointChanged`（イベント）
+
+  ```cpp
+  FHapbeatOnStreamEndpointChanged OnStreamEndpointChanged;
   ```
 
   

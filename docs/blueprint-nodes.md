@@ -105,7 +105,7 @@ Collision / Sequence / Tick Emitter は `Hapbeat Trigger Component` を基底に
 | `Is Stream Playback Active (Hapbeat)` | なし | stream chunk を送信中なら true。 |
 | `Is Stream Playback Stopped (Hapbeat)` | なし | 停止要求済み、または one-shot が終了済みなら true。 |
 | `Get Stream Playback Status (Hapbeat)` | なし | `Active`、`Deferred`、`Stopped` などの状態を返す。 |
-| `Get Stream Deferred Reason (Hapbeat)` | なし | `None` または `NoResolvedEndpoint` を返す。遅延秒数を返すものではない。 |
+| `Get Stream Deferred Reason (Hapbeat)` | なし | 送信先待ちの理由（`None` / `NoResolvedEndpoint` / `UnknownClass` / `LeaseUnavailable` / `Superseded`）を返す。遅延秒数を返すものではない。 |
 
 複数 source を同時再生する場合は、戻り値を source ごとに別変数へ保存します。Z4 は一つの loop handle を保存し、slider でその handle の Gain / Pan を更新します。
 
@@ -606,6 +606,14 @@ int32 GetAliveDeviceCount() const;
 
 ```cpp
 bool IsAlive() const;
+```
+
+### Get Stream Endpoints (Hapbeat) — UHapbeatSubsystem.GetStreamEndpoints
+
+所有: `HapbeatSDK / HapbeatSubsystem.h`。Pure（実行ピンなし）。
+
+```cpp
+TArray<FHapbeatStreamEndpointInfo> GetStreamEndpoints() const;
 ```
 
 ### Is Streaming (Hapbeat) — UHapbeatSubsystem.IsStreaming

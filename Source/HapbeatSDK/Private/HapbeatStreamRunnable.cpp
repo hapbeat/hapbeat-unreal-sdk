@@ -94,8 +94,97 @@ FHapbeatStreamRunnable::FHapbeatStreamRunnable(
 	, InitialMirror(InMirror)
 	, WireFormat(InWireFormat)
 	, SessionIdentity(InIdentity)
+	, PublishedIdentity(InIdentity)
 {
 	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), InMirror);
+}
+
+void FHapbeatStreamRunnable::SetGenerationAllocator(TFunction<uint32()> InAllocateGeneration)
+{
+	FScopeLock Lock(&StreamerMutex);
+	AllocateGenerationFn = MoveTemp(InAllocateGeneration);
+}
+
+void FHapbeatStreamRunnable::SetSourceStartFrame(const FGuid& SourceId, double StartFrame)
+{
+	FScopeLock Lock(&SourceMutex);
+	for (FPendingSource& Pending : PendingSources)
+	{
+		if (Pending.SourceId == SourceId)
+		{
+			Pending.StartFrame = StartFrame;
+		}
+	}
+}
+
+void FHapbeatStreamRunnable::UpdateTarget(const FString& InTarget)
+{
+	FScopeLock Lock(&StreamerMutex);
+	SessionTarget = InTarget;
+	if (Streamer.IsValid())
+	{
+		Streamer->SetTarget(InTarget);
+	}
+}
+
+void FHapbeatStreamRunnable::SetIgnorePan(bool bInIgnorePan)
+{
+	bIgnorePan.store(bInIgnorePan, std::memory_order_release);
+}
+
+FHapbeatStreamSessionIdentity FHapbeatStreamRunnable::GetCurrentIdentity() const
+{
+	FScopeLock Lock(&IdentityMutex);
+	return PublishedIdentity;
+}
+
+FHapbeatStreamSessionIdentity FHapbeatStreamRunnable::GetPreviousIdentity() const
+{
+	FScopeLock Lock(&IdentityMutex);
+	return PublishedPreviousIdentity;
+}
+
+void FHapbeatStreamRunnable::PublishIdentity()
+{
+	if (!Streamer.IsValid() || WireFormat != EHapbeatStreamWireFormat::SessionV2)
+	{
+		return;
+	}
+	FScopeLock Lock(&IdentityMutex);
+	PublishedIdentity = Streamer->GetIdentity();
+	PublishedPreviousIdentity = Streamer->GetPreviousIdentity();
+}
+
+void FHapbeatStreamRunnable::GetFinalCursors(TMap<FGuid, double>& OutCursors) const
+{
+	{
+		FScopeLock Lock(&StreamerMutex);
+		if (Streamer.IsValid())
+		{
+			Streamer->GetCursors(OutCursors);
+		}
+	}
+	// Sources the worker never drained still begin where they were asked to.
+	FScopeLock Lock(&SourceMutex);
+	for (const FPendingSource& Pending : PendingSources)
+	{
+		if (!DetachedSourceIds.Contains(Pending.SourceId))
+		{
+			OutCursors.FindOrAdd(Pending.SourceId, Pending.StartFrame);
+		}
+	}
+}
+
+void FHapbeatStreamRunnable::SendFromStreamer(const TArray<uint8>& Packet)
+{
+	// stream-session.md "Incarnation and takeover": nothing but the END may go
+	// out under an identity a reboot / lease renewal / supersession retired.
+	if (bRetired.load(std::memory_order_acquire) && Packet.Num() >= FHapbeatProtocol::HeaderSize
+		&& Packet[3] != FHapbeatProtocol::CmdStreamEnd)
+	{
+		return;
+	}
+	SendRaw(Packet);
 }
 
 FHapbeatStreamRunnable::~FHapbeatStreamRunnable() = default;
@@ -144,10 +233,11 @@ bool FHapbeatStreamRunnable::Init()
 		SessionTarget,
 		InitialMirror,
 		NextSeqFn,
-		[this](const TArray<uint8>& Packet) { SendRaw(Packet); },
+		[this](const TArray<uint8>& Packet) { SendFromStreamer(Packet); },
 		SendAheadSeconds,
 		WireFormat,
-		SessionIdentity);
+		SessionIdentity,
+		[this]() { return AllocateGenerationFn ? AllocateGenerationFn() : 0u; });
 	{
 		// Keep SourceMutex -> StreamerMutex everywhere structural source state and
 		// the mixer meet. A detach can arrive before Init() has made Streamer;
@@ -155,6 +245,7 @@ bool FHapbeatStreamRunnable::Init()
 		FScopeLock SourceLock(&SourceMutex);
 		FScopeLock StreamerLock(&StreamerMutex);
 		Streamer = MoveTemp(NewStreamer);
+		Streamer->SetTarget(SessionTarget);
 		for (const FGuid& SourceId : DetachedSourceIds)
 		{
 			Streamer->RemoveSource(SourceId);
@@ -213,8 +304,21 @@ uint32 FHapbeatStreamRunnable::Run()
 		const double IterationStart = FPlatformTime::Seconds();
 		{
 			FScopeLock Lock(&StreamerMutex);
-			Streamer->Tick(IterationStart);
+			Streamer->SetIgnorePan(bIgnorePan.load(std::memory_order_acquire));
+			if (bNewGenerationRequested.exchange(false, std::memory_order_acq_rel))
+			{
+				Streamer->RestartGeneration(IterationStart);
+			}
+			if (bResendBeginRequested.exchange(false, std::memory_order_acq_rel))
+			{
+				Streamer->RequestBeginResend();
+			}
+			if (!Streamer->IsDone())
+			{
+				Streamer->Tick(IterationStart);
+			}
 			Streamer->DrainFinishedSourceIds(Finished);
+			PublishIdentity();
 		}
 		if (Finished.Num() > 0)
 		{
@@ -302,7 +406,9 @@ bool FHapbeatStreamRunnable::IsCompatible(
 bool FHapbeatStreamRunnable::AddSource(
 	const FGuid& InSourceId,
 	TArray<uint8>&& InPcm16,
-	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
+	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror,
+	double StartFrame,
+	bool bNewSource)
 {
 	FScopeLock Lock(&SourceMutex);
 	if (!bAcceptingSources || bStopRequested.load(std::memory_order_relaxed))
@@ -312,7 +418,9 @@ bool FHapbeatStreamRunnable::AddSource(
 	// A later explicit AddSource is a real endpoint rejoin, not the stale
 	// constructor source which DetachSource tombstoned before Init().
 	DetachedSourceIds.Remove(InSourceId);
-	PendingSources.Emplace(InSourceId, MoveTemp(InPcm16), InMirror);
+	FPendingSource& Pending = PendingSources.Emplace_GetRef(InSourceId, MoveTemp(InPcm16), InMirror);
+	Pending.StartFrame = StartFrame;
+	Pending.RequestedAtSeconds = bNewSource ? FPlatformTime::Seconds() : -1.0;
 	return true;
 }
 
@@ -348,14 +456,17 @@ bool FHapbeatStreamRunnable::DrainPendingSourcesOrClose()
 {
 	FScopeLock SourceLock(&SourceMutex);
 	FScopeLock StreamerLock(&StreamerMutex);
+	const double DrainNow = FPlatformTime::Seconds();
 	for (FPendingSource& Pending : PendingSources)
 	{
 		if (!DetachedSourceIds.Contains(Pending.SourceId))
 		{
-			Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.Mirror);
+			Streamer->AddSource(Pending.SourceId, MoveTemp(Pending.Pcm16), Pending.Mirror,
+				Pending.StartFrame, Pending.RequestedAtSeconds, DrainNow);
 		}
 	}
 	PendingSources.Reset();
+	PublishIdentity();
 
 	if (Streamer->HasSources())
 	{

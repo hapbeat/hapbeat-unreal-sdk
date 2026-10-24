@@ -356,11 +356,16 @@ bool FHapbeatStreamSubsystemRoutingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("live exact endpoints sharing IP/address remain distinct"),
 		Live->StreamEndpoints.Num(), 3);
 
+	// The same route reporting another address is the same device after an
+	// address change: it moves to the new key at once, even while alive
+	// (sdk-multi-stream.md §4.1 / §4.6), so no old key keeps streaming to it.
 	UHapbeatSubsystem* SameRoute = NewTestSubsystem();
 	SameRoute->RegisterStreamEndpoint(TEXT("192.0.2.20"), 7700, TEXT("player_1/pos_l_arm"), 100.0);
 	SameRoute->RegisterStreamEndpoint(TEXT("192.0.2.20"), 7700, TEXT("player_2/pos_l_arm"), 101.0);
-	TestEqual(TEXT("live same-route exact tuples remain distinct"),
-		SameRoute->StreamEndpoints.Num(), 2);
+	TestEqual(TEXT("a live same-route address change leaves one endpoint"),
+		SameRoute->StreamEndpoints.Num(), 1);
+	TestTrue(TEXT("... under the new address"),
+		SameRoute->StreamEndpoints.Contains(TEXT("192.0.2.20:7700|player_2/pos_l_arm")));
 
 	UHapbeatSubsystem* Expired = NewTestSubsystem();
 	Expired->RegisterStreamEndpoint(TEXT("192.0.2.30"), 7700, TEXT("player_3/pos_l_arm"), 100.0);

@@ -4,7 +4,7 @@
 #include "CoreMinimal.h"
 
 /**
- * Device-issued stream lease (stream-session-v2.md "Discovery lease"): the
+ * Device-issued stream lease (stream-session.md "Discovery lease"): the
  * device boot id plus the monotonic ticket the device handed to this SDK
  * incarnation. Both halves are nonzero when valid.
  */
@@ -32,7 +32,7 @@ struct FHapbeatStreamLeaseIdentity
 };
 
 /**
- * The 16-byte v2 stream envelope carried by every v2 BEGIN/DATA/END:
+ * The 16-byte Stream Gen 2 envelope carried by every Stream Gen 2 BEGIN/DATA/END:
  * device_boot_id(u64) + lease_ticket(u32) + generation(u32). Fixed for the
  * lifetime of one wire session; a new session under the same lease uses a
  * strictly greater generation.
@@ -61,25 +61,36 @@ struct FHapbeatStreamSessionIdentity
 /**
  * Wire format of one endpoint stream session. Chosen once per session from the
  * endpoint's classification and never changed while that session lives
- * (stream-session-v2.md "Legacy receiver fallback (SDK)").
+ * (stream-session.md "Legacy receiver fallback (SDK)"). The value names predate
+ * the Stream Gen 1 / Stream Gen 2 naming (versioning.md §4.2) and are kept.
  */
 enum class EHapbeatStreamWireFormat : uint8
 {
-	/** Pre-v2 firmware: header version 1, no envelope, END with an empty payload. */
+	/** Stream Gen 1 (firmware before 0.5.0): header version 1, no envelope, END with an empty payload. */
 	LegacyV1,
-	/** Stream session v2: header version 2 and the 16-byte envelope on BEGIN/DATA/END. */
+	/** Stream Gen 2: header version 2 and the 16-byte envelope on BEGIN/DATA/END. */
 	SessionV2,
 };
 
-/** Tri-state result of looking for the 32-byte HBS2 lease tail after the ordinary PONG fields. */
+/**
+ * What the bytes after volume_wiper say (stream-session.md "Receiver
+ * classification", the [1.x] table).
+ */
 enum class EHapbeatPongLeaseTail : uint8
 {
-	/** No HBS2 marker after volume_wiper (PONG ends there, or other bytes follow). */
+	/** Nothing after volume_wiper (the PONG ends there or before it): Stream Gen 1. */
 	Absent,
-	/** Exactly 32 bytes, marker HBS2, extension_version 1, only known flag bits, reserved 0. */
+	/**
+	 * At least 32 bytes starting with HBS2 and extension_version 1: Stream Gen 2.
+	 * Only the first 32 bytes are read; bytes after them, the reserved field and
+	 * flag bits other than 0-2 are ignored (a later major may use them).
+	 */
 	Valid,
-	/** HBS2 marker present but length / version / reserved / flags are wrong. Never classifies. */
-	Malformed,
+	/**
+	 * Anything else (fewer than 32 bytes, another extension_version, bytes not
+	 * starting with HBS2): no class or lease change, the endpoint stays as it was.
+	 */
+	Ignored,
 };
 
 /**
@@ -94,11 +105,19 @@ class HAPBEATSDK_API FHapbeatProtocol
 public:
 	static constexpr uint16 Magic = 0x4842; // "HB"
 	static constexpr uint8 Version = 0x01;
-	/** Header protocol_version for v2 STREAM_BEGIN/DATA/END only (stream-session-v2.md). */
+	/** Header protocol_version for Stream Gen 2 STREAM_BEGIN/DATA/END only (stream-session.md). */
 	static constexpr uint8 StreamProtocolVersion = 0x02;
+	/**
+	 * Major version of this SDK (versioning.md §3.2). Keep equal to the major of
+	 * HapbeatSDK.uplugin VersionName: a device whose CAPS generation is larger
+	 * gets a one-time "update the SDK" warning (versioning.md §3.3).
+	 */
+	static constexpr int32 SdkMajorVersion = 1;
+	/** CAPS format this SDK reads (message-format.md 0x12 caps_version). */
+	static constexpr uint8 CapsVersion = 1;
 	/** device_boot_id(8) + lease_ticket(4) + generation(4). */
 	static constexpr int32 StreamSessionEnvelopeSize = 16;
-	/** Exact size of the HBS2 PONG lease tail. */
+	/** Minimum size of the HBS2 PONG lease tail; only these first 32 bytes are read. */
 	static constexpr int32 StreamLeasePongTailSize = 32;
 	static constexpr int32 HeaderSize = 8;
 	static constexpr int32 MaxPacketSize = 512;
@@ -113,6 +132,7 @@ public:
 	static constexpr uint8 CmdStop = 0x02;
 	static constexpr uint8 CmdStopAll = 0x03;
 	static constexpr uint8 CmdPing = 0x10;
+	static constexpr uint8 CmdCapsReq = 0x12;
 	static constexpr uint8 CmdConnectStatus = 0x20;
 	static constexpr uint8 CmdStreamBegin = 0x30;
 	static constexpr uint8 CmdStreamData = 0x31;
@@ -120,7 +140,21 @@ public:
 
 	// Response types (device -> SDK).
 	static constexpr uint8 CmdPong = 0x11;
+	static constexpr uint8 CmdCaps = 0x13;
 	static constexpr uint8 CmdError = 0xFF;
+
+	// ERROR codes (message-format.md 0xFF).
+	static constexpr uint16 ErrorUnsupportedVersion = 0x0001;
+	static constexpr uint16 ErrorUnknownCommand = 0x0002;
+	static constexpr uint16 ErrorMalformed = 0x0003;
+	static constexpr uint16 ErrorStreamGenUnsupported = 0x0010;
+	static constexpr uint16 ErrorStreamLeaseInvalid = 0x0011;
+	static constexpr uint16 ErrorStreamSuperseded = 0x0012;
+	static constexpr uint16 ErrorStreamNotStarted = 0x0013;
+	static constexpr uint16 ErrorStreamTimedOut = 0x0014;
+	static constexpr uint16 ErrorStreamStopped = 0x0015;
+	static constexpr uint16 ErrorStreamEnded = 0x0016;
+	static constexpr uint16 ErrorStreamTargetMismatch = 0x0017;
 
 	// Audio format ids (STREAM_BEGIN.format).
 	static constexpr uint8 AudioFormatPcm16 = 0;
@@ -147,11 +181,14 @@ public:
 	static TArray<uint8> BuildPing(uint16 Seq, int64 TimestampUs);
 	/**
 	 * Extended PING (still header version 1): timestamp(i64) + client_incarnation(u64),
-	 * 16-byte payload. Requests a stream lease from v2 receivers; pre-v2 firmware
-	 * ignores the extra 8 bytes and answers with an ordinary PONG. ClientIncarnation
-	 * must be nonzero.
+	 * 16-byte payload. Requests a stream lease from Stream Gen 2 receivers; firmware
+	 * before 0.5.0 ignores the extra 8 bytes and answers with an ordinary PONG.
+	 * ClientIncarnation must be nonzero. Sent by exact unicast only, never
+	 * broadcast (stream-session.md "[1.x] How SDKs send extended PINGs").
 	 */
 	static TArray<uint8> BuildPing(uint16 Seq, int64 TimestampUs, uint64 ClientIncarnation);
+	/** CAPS_REQ (0x12): caps_version(u8). Exact unicast only (message-format.md 0x12). */
+	static TArray<uint8> BuildCapsRequest(uint16 Seq);
 	/** CONNECT_STATUS: connected(u8) + group(u8) + app_name\0 + device_name\0. */
 	static TArray<uint8> BuildConnectStatus(uint16 Seq, bool bConnected, uint8 Group, const FString& AppName, const FString& DeviceName);
 
@@ -171,21 +208,21 @@ public:
 	/** STREAM_END (0x32): empty payload. */
 	static TArray<uint8> BuildStreamEnd(uint16 Seq);
 
-	// The three builders above are the LEGACY (pre-v2, header version 1) stream
-	// format and must stay byte-identical: they are what devices on firmware
-	// predating stream session v2 receive (message-format.md "v1 stream").
+	// The three builders above are the Stream Gen 1 format (header version 1)
+	// and must stay byte-identical: they are what devices on firmware before
+	// 0.5.0 receive (message-format.md "Stream Gen 1").
 
 	/**
-	 * v2 STREAM_BEGIN: header version 2, payload = 16-byte envelope + the same
+	 * Stream Gen 2 STREAM_BEGIN: header version 2, payload = 16-byte envelope + the same
 	 * 12-byte body + optional target\0 as BuildStreamBegin. Identity must be valid.
 	 */
 	static TArray<uint8> BuildStreamBeginV2(uint16 Seq, const FHapbeatStreamSessionIdentity& Identity,
 		uint16 SampleRate, uint8 Channels, uint8 Format, uint32 TotalSamples, float Gain,
 		const FString& Target = FString());
-	/** v2 STREAM_DATA: header version 2, payload = envelope + offset(u32) + audio bytes. */
+	/** Stream Gen 2 STREAM_DATA: header version 2, payload = envelope + offset(u32) + audio bytes. */
 	static TArray<uint8> BuildStreamDataV2(uint16 Seq, const FHapbeatStreamSessionIdentity& Identity,
 		uint32 Offset, const uint8* Data, int32 NumBytes);
-	/** v2 STREAM_END: header version 2, payload = exactly the 16-byte envelope. */
+	/** Stream Gen 2 STREAM_END: header version 2, payload = exactly the 16-byte envelope. */
 	static TArray<uint8> BuildStreamEndV2(uint16 Seq, const FHapbeatStreamSessionIdentity& Identity);
 
 	// ---- Parsers (device -> SDK) ----
@@ -231,6 +268,8 @@ public:
 		bool bLeaseValid = false;
 		/** flags bit 1. */
 		bool bLeaseSuperseded = false;
+		/** flags bit 2 [1.x]: the device re-issued this key a fresh ticket (stream-session.md "Re-issue rule"). */
+		bool bLeaseReissued = false;
 		uint64 EchoedClientIncarnation = 0;
 		FHapbeatStreamLeaseIdentity Lease;
 		uint32 HighWaterTicket = 0;
@@ -243,14 +282,64 @@ public:
 	 * AvailLen is FParsedPacket::PayloadAvail (NOT the header's declared length).
 	 *
 	 * After firmware_version the optional volume_level / volume_wiper bytes are
-	 * read, then the remaining bytes are checked for the 32-byte HBS2 lease tail
-	 * (stream-session-v2.md), exactly like Unity ParsePongExtendedInfo. A partial
-	 * marker (1..3 trailing bytes that are a prefix of "HBS2") is reported as
-	 * Malformed rather than Absent, so a truncated v2 reply can never be taken as
-	 * a pre-v2 device.
+	 * read, then the remaining bytes are classified by the [1.x] rule of
+	 * stream-session.md "Receiver classification" (see EHapbeatPongLeaseTail):
+	 * nothing = Absent, at least 32 bytes of HBS2 / extension_version 1 = Valid,
+	 * anything else (a truncated "HB" marker included) = Ignored.
 	 */
 	static bool ParsePong(const uint8* Payload, int32 AvailLen, FPongInfo& Out);
 
 	/** Parse an ERROR payload: error_code(u16) + message\0. Returns false if < 2 bytes. */
 	static bool ParseError(const uint8* Payload, int32 AvailLen, uint16& OutErrorCode, FString& OutMessage);
+
+	/** Decoded ERROR (message-format.md 0xFF), including the fields 1.x firmware appends. */
+	struct FErrorInfo
+	{
+		uint16 ErrorCode = 0;
+		FString Message;
+		/** False for the 0.x form (error_code + message only): the fields below are then unset. */
+		bool bHasReference = false;
+		uint8 RefCommand = 0;
+		uint16 RefSeq = 0;
+		/** detail as received (cut to what arrived); 16 bytes = an envelope for 0x0011-0x0017. */
+		TArray<uint8> Detail;
+	};
+
+	/**
+	 * Parse an ERROR payload with the appended ref_command / ref_seq /
+	 * detail_length / detail fields. An ERROR without them (0.x firmware) is
+	 * accepted with bHasReference false. Returns false if < 2 bytes.
+	 */
+	static bool ParseErrorExtended(const uint8* Payload, int32 AvailLen, FErrorInfo& Out);
+
+	/**
+	 * Decoded CAPS (message-format.md 0x13). -1 means the entry was absent (or
+	 * ignored by the TLV rules); FirmwareVersion is empty when absent.
+	 */
+	struct FCapsInfo
+	{
+		int32 CapsVersion = -1;
+		int32 Generation = -1;
+		FString FirmwareVersion;
+		/** bit 0 = Stream Gen 1, bit 1 = Stream Gen 2. */
+		int32 StreamGens = -1;
+		/** bit 0 = PCM16, bit 1 = IMA ADPCM, bit 2 = Opus. */
+		int32 StreamFormats = -1;
+		int32 LeaseTtlSeconds = -1;
+		int32 LeaseSlots = -1;
+		int32 InactivityTimeoutSeconds = -1;
+		int32 HapticChannels = -1;
+		int32 AddressMaxLen = -1;
+		/** bit 0 = play_pan, bit 1 = error_reply. -1 when absent. */
+		int64 Features = -1;
+	};
+
+	/**
+	 * Parse a CAPS payload: caps_version(u8) + reserved(u8) + TLV entries. Unknown
+	 * types are skipped by length, a known type longer than defined is read from
+	 * its start, a shorter one is ignored, the first long-enough entry of a type
+	 * wins and an entry cut by the end of the payload is ignored (message-format.md
+	 * 0x13). Returns false if < 2 bytes.
+	 */
+	static bool ParseCaps(const uint8* Payload, int32 AvailLen, FCapsInfo& Out);
 };

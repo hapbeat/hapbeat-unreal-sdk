@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
 //
-// Stream session v2 + per-endpoint legacy fallback (contracts
-// specs/stream-session-v2.md, DEC-074 / DEC-075). Every test here is
+// Stream Gen 2 + per-endpoint Stream Gen 1 fallback (contracts
+// specs/stream-session.md, DEC-074 / DEC-075 / DEC-096). Every test here is
 // in-memory: no socket is opened and nothing is sent on the network.
 #include "HapbeatProtocol.h"
 #include "HapbeatStreamer.h"
@@ -120,19 +120,37 @@ namespace HapbeatStreamSessionV2Test
 		return Parse(Payload);
 	}
 
-	FHapbeatProtocol::FPongInfo MalformedPong(int64 TimestampUs, const char* Address, uint64 Incarnation)
+	/** A tail of a later major (extension_version 2): Ignored by the [1.x] rule. */
+	FHapbeatProtocol::FPongInfo IgnoredPong(int64 TimestampUs, const char* Address, uint64 Incarnation)
 	{
 		TArray<uint8> Payload = MakePongPayload(TimestampUs, Address);
 		AppendLeaseTail(Payload, 0x01, Incarnation, 0x11, 3, 0, /*Version=*/2);
 		return Parse(Payload);
 	}
 
-	FHapbeatPendingPing Pending(int64 TimestampUs, uint64 Incarnation)
+	/**
+	 * A pending lease request (extended PING). TargetIp empty = not bound to one
+	 * device, which lets one request stand for the unicast PINGs to several
+	 * devices in the subsystem tests; the IP binding itself is covered in
+	 * Hapbeat.Streaming.SessionV2.Classification.
+	 */
+	FHapbeatPendingPing Pending(int64 TimestampUs, uint64 Incarnation, const TCHAR* TargetIp = TEXT(""))
 	{
 		FHapbeatPendingPing Result;
-		Result.SentMonotonicUs = 1;
+		// Sent "now", so the subsystem's own pruning (15 s) keeps it.
+		Result.SentMonotonicUs = static_cast<int64>(FPlatformTime::Seconds() * 1'000'000.0);
 		Result.TimestampUs = TimestampUs;
 		Result.ClientIncarnation = Incarnation;
+		Result.bLeaseRequest = true;
+		Result.TargetIp = TargetIp;
+		return Result;
+	}
+
+	/** A pending 8-byte discovery PING (broadcast, never a lease request). */
+	FHapbeatPendingPing DiscoveryPending(int64 TimestampUs, uint64 Incarnation)
+	{
+		FHapbeatPendingPing Result = Pending(TimestampUs, Incarnation);
+		Result.bLeaseRequest = false;
 		return Result;
 	}
 
@@ -239,7 +257,7 @@ namespace HapbeatStreamSessionV2Test
 		return Log.Count(Endpoint, Cmd) >= AtLeast;
 	}
 
-	/** Envelope of a v2 packet (header version 2); invalid identity for anything else. */
+	/** Envelope of a Stream Gen 2 packet (header version 2); invalid identity for anything else. */
 	FHapbeatStreamSessionIdentity EnvelopeOf(const TArray<uint8>& Packet)
 	{
 		if (Packet.Num() < FHapbeatProtocol::HeaderSize + FHapbeatProtocol::StreamSessionEnvelopeSize
@@ -342,7 +360,7 @@ bool FHapbeatStreamSessionV2WireTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------
-// PONG HBS2 tail: Absent / Valid / Malformed
+// PONG HBS2 tail: Absent / Valid / Ignored ([1.x] rule)
 // ---------------------------------------------------------------------------
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatStreamSessionV2PongTailTest,
@@ -367,7 +385,8 @@ bool FHapbeatStreamSessionV2PongTailTest::RunTest(const FString& Parameters)
 
 	TArray<uint8> OtherBytes = MakePongPayload(1000, "player_1");
 	OtherBytes.Append(FromHex(TEXT("0102030405060708")));
-	TestEqual(TEXT("non-HBS2 bytes after volume_wiper are not a marker"), Parse(OtherBytes).LeaseTail, EHapbeatPongLeaseTail::Absent);
+	TestEqual(TEXT("non-HBS2 bytes after volume_wiper are ignored, not Stream Gen 1"),
+		Parse(OtherBytes).LeaseTail, EHapbeatPongLeaseTail::Ignored);
 
 	TArray<uint8> ValidPayload = MakePongPayload(1000, "player_1");
 	AppendLeaseTail(ValidPayload, 0x01, 0xA1A2A3A4A5A6A7A8ULL, 0x0102030405060708ULL, 7, 6);
@@ -379,55 +398,63 @@ bool FHapbeatStreamSessionV2PongTailTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("high water"), Valid.HighWaterTicket, 6u);
 	TestTrue(TEXT("lease_valid flag"), Valid.bLeaseValid);
 	TestFalse(TEXT("not superseded"), Valid.bLeaseSuperseded);
+	TestFalse(TEXT("not re-issued"), Valid.bLeaseReissued);
 
 	TArray<uint8> ZeroBoot = MakePongPayload(1000, "player_1");
 	AppendLeaseTail(ZeroBoot, 0x01, 1, 0, 7);
 	TestFalse(TEXT("lease_valid with a zero boot id is not a valid lease"), Parse(ZeroBoot).bLeaseValid);
 
-	struct FMalformedCase
+	struct FTailCase
 	{
 		const TCHAR* Name;
 		TArray<uint8> Payload;
+		EHapbeatPongLeaseTail Expected;
 	};
-	TArray<FMalformedCase> Cases;
+	TArray<FTailCase> Cases;
 	{
 		TArray<uint8> P = MakePongPayload(1000, "player_1");
 		AppendLeaseTail(P, 0x01, 1, 2, 3, 0, /*Version=*/2);
-		Cases.Add({ TEXT("wrong extension version"), P });
+		Cases.Add({ TEXT("another extension version is ignored"), P, EHapbeatPongLeaseTail::Ignored });
 	}
 	{
 		TArray<uint8> P = MakePongPayload(1000, "player_1");
-		AppendLeaseTail(P, 0x05, 1, 2, 3);
-		Cases.Add({ TEXT("unknown flag bit"), P });
+		AppendLeaseTail(P, 0x09, 1, 2, 3);
+		Cases.Add({ TEXT("an unknown flag bit (3) is ignored, the tail stays valid"), P, EHapbeatPongLeaseTail::Valid });
 	}
 	{
 		TArray<uint8> P = MakePongPayload(1000, "player_1");
 		AppendLeaseTail(P, 0x01, 1, 2, 3, 0, 1, /*Reserved=*/1);
-		Cases.Add({ TEXT("nonzero reserved"), P });
+		Cases.Add({ TEXT("a nonzero reserved field is ignored, the tail stays valid"), P, EHapbeatPongLeaseTail::Valid });
 	}
 	{
 		TArray<uint8> P = MakePongPayload(1000, "player_1");
 		AppendLeaseTail(P, 0x01, 1, 2, 3);
 		P.Pop();
-		Cases.Add({ TEXT("31-byte tail"), P });
+		Cases.Add({ TEXT("a 31-byte tail is ignored"), P, EHapbeatPongLeaseTail::Ignored });
 	}
 	{
 		TArray<uint8> P = MakePongPayload(1000, "player_1");
 		AppendLeaseTail(P, 0x01, 1, 2, 3);
 		P.Add(0);
-		Cases.Add({ TEXT("33-byte tail"), P });
+		Cases.Add({ TEXT("a 33-byte tail is read from its first 32 bytes"), P, EHapbeatPongLeaseTail::Valid });
 	}
 	{
 		TArray<uint8> P = MakePongPayload(1000, "player_1");
 		P.Add('H');
 		P.Add('B');
-		Cases.Add({ TEXT("truncated marker prefix"), P });
+		Cases.Add({ TEXT("a truncated marker prefix is ignored"), P, EHapbeatPongLeaseTail::Ignored });
 	}
-	for (const FMalformedCase& Case : Cases)
+	for (const FTailCase& Case : Cases)
 	{
-		TestEqual(FString::Printf(TEXT("malformed HBS2: %s"), Case.Name),
-			Parse(Case.Payload).LeaseTail, EHapbeatPongLeaseTail::Malformed);
+		TestEqual(Case.Name, Parse(Case.Payload).LeaseTail, Case.Expected);
 	}
+
+	TArray<uint8> Reissued = MakePongPayload(1000, "player_1");
+	AppendLeaseTail(Reissued, 0x05, 1, 2, 3); // bit 0 lease_valid + bit 2 lease_reissued
+	const FHapbeatProtocol::FPongInfo ReissuedInfo = Parse(Reissued);
+	TestEqual(TEXT("flags 0x05 is a valid tail"), ReissuedInfo.LeaseTail, EHapbeatPongLeaseTail::Valid);
+	TestTrue(TEXT("... with lease_reissued"), ReissuedInfo.bLeaseReissued);
+	TestTrue(TEXT("... and lease_valid"), ReissuedInfo.bLeaseValid);
 	return true;
 }
 
@@ -445,66 +472,80 @@ bool FHapbeatStreamSessionV2ClassificationTest::RunTest(const FString& Parameter
 	using HapbeatStreamSessionContract::EvaluatePongLease;
 	const uint64 Inc = 0xAAAA0000BBBB1111ULL;
 	const char* Address = "player_1/pos_l_arm";
+	const FString Ip = TEXT("192.0.2.30");
 	TMap<uint16, FHapbeatPendingPing> Pings;
-	Pings.Add(10, Pending(1000, Inc));
-	Pings.Add(11, Pending(2000, Inc));
-	Pings.Add(12, Pending(3000, 0x1234ULL)); // issued by a previous incarnation
+	Pings.Add(10, Pending(1000, Inc, TEXT("192.0.2.30")));
+	Pings.Add(11, Pending(2000, Inc, TEXT("192.0.2.30")));
+	Pings.Add(12, Pending(3000, 0x1234ULL, TEXT("192.0.2.30"))); // issued by a previous incarnation
+	Pings.Add(13, DiscoveryPending(4000, Inc));                  // 8-byte discovery PING (broadcast)
 	FHapbeatStreamEndpointLeaseState Next;
 
 	TestEqual(TEXT("matched HBS2 reply is accepted"),
-		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Accept);
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3), 10, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::Accept);
 	TestEqual(TEXT("... as v2"), Next.Class, EHapbeatStreamEndpointClass::V2);
 	TestTrue(TEXT("... with a usable lease"), Next.IsUsableV2Lease(Inc));
 	TestEqual(TEXT("... recording the accepted request"), Next.LastAcceptedTimestampUs, 1000LL);
 	const FHapbeatStreamEndpointLeaseState AcceptedV2 = Next;
 
 	TestEqual(TEXT("matched reply without a tail is accepted"),
-		EvaluatePongLease(LegacyPong(1000, Address), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Accept);
+		EvaluatePongLease(LegacyPong(1000, Address), 10, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::Accept);
 	TestEqual(TEXT("... as legacy"), Next.Class, EHapbeatStreamEndpointClass::Legacy);
 	TestTrue(TEXT("legacy endpoints are streamable"), Next.IsStreamable(Inc));
 
 	FHapbeatStreamEndpointLeaseState Untouched;
-	TestEqual(TEXT("malformed HBS2 tail never classifies"),
-		EvaluatePongLease(MalformedPong(1000, Address, Inc), 10, Pings, Inc, nullptr, Untouched), EPongLeaseDecision::NoChange);
-	TestEqual(TEXT("malformed tail leaves the class unknown"), Untouched.Class, EHapbeatStreamEndpointClass::Unknown);
+	TestEqual(TEXT("a matched reply with an ignored tail is reported for the one-time warning"),
+		EvaluatePongLease(IgnoredPong(1000, Address, Inc), 10, Pings, Inc, nullptr, Untouched, Ip), EPongLeaseDecision::IgnoredMatched);
+	TestEqual(TEXT("an ignored tail leaves the class unknown"), Untouched.Class, EHapbeatStreamEndpointClass::Unknown);
 	TestFalse(TEXT("unknown endpoints defer"), Untouched.IsStreamable(Inc));
+	TestEqual(TEXT("an unmatched reply with an ignored tail is plain discovery"),
+		EvaluatePongLease(IgnoredPong(1000, Address, Inc), 99, Pings, Inc, nullptr, Untouched, Ip), EPongLeaseDecision::NoChange);
+
+	// [1.x] Every firmware answers the 8-byte discovery PING without a tail:
+	// that reply must never make a device Stream Gen 1.
+	TestEqual(TEXT("a tail-less reply to an 8-byte discovery PING never selects Stream Gen 1"),
+		EvaluatePongLease(LegacyPong(4000, Address), 13, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::NoChange);
+	// Lease requests are unicast: a reply from another IPv4 address is not theirs.
+	TestEqual(TEXT("a tail-less reply from another IP to a unicast lease request is not matched"),
+		EvaluatePongLease(LegacyPong(1000, Address), 10, Pings, Inc, nullptr, Next, TEXT("192.0.2.31")), EPongLeaseDecision::NoChange);
+	TestEqual(TEXT("an HBS2 reply from another IP to a unicast lease request is discarded"),
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3), 10, Pings, Inc, nullptr, Next, TEXT("192.0.2.31")), EPongLeaseDecision::Discard);
 
 	TestEqual(TEXT("unsolicited (timestamp 0) PONG never selects legacy"),
-		EvaluatePongLease(LegacyPong(0, Address), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::NoChange);
+		EvaluatePongLease(LegacyPong(0, Address), 10, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::NoChange);
 	TestEqual(TEXT("reply to an unknown seq never selects legacy"),
-		EvaluatePongLease(LegacyPong(1000, Address), 99, Pings, Inc, nullptr, Next), EPongLeaseDecision::NoChange);
+		EvaluatePongLease(LegacyPong(1000, Address), 99, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::NoChange);
 	TestEqual(TEXT("reply echoing another request's timestamp never selects legacy"),
-		EvaluatePongLease(LegacyPong(2000, Address), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::NoChange);
+		EvaluatePongLease(LegacyPong(2000, Address), 10, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::NoChange);
 	TestEqual(TEXT("reply to a previous incarnation's request never selects legacy"),
-		EvaluatePongLease(LegacyPong(3000, Address), 12, Pings, Inc, nullptr, Next), EPongLeaseDecision::NoChange);
+		EvaluatePongLease(LegacyPong(3000, Address), 12, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::NoChange);
 	TestEqual(TEXT("late tail-less reply cannot demote an accepted v2 endpoint"),
-		EvaluatePongLease(LegacyPong(1000, Address), 10, Pings, Inc, &AcceptedV2, Next), EPongLeaseDecision::NoChange);
+		EvaluatePongLease(LegacyPong(1000, Address), 10, Pings, Inc, &AcceptedV2, Next, Ip), EPongLeaseDecision::NoChange);
 	TestEqual(TEXT("newer matched tail-less reply demotes v2 to legacy (firmware rollback)"),
-		EvaluatePongLease(LegacyPong(2000, Address), 11, Pings, Inc, &AcceptedV2, Next), EPongLeaseDecision::Accept);
+		EvaluatePongLease(LegacyPong(2000, Address), 11, Pings, Inc, &AcceptedV2, Next, Ip), EPongLeaseDecision::Accept);
 	TestEqual(TEXT("... to legacy"), Next.Class, EHapbeatStreamEndpointClass::Legacy);
 
 	TestEqual(TEXT("HBS2 echoing another incarnation is discarded"),
-		EvaluatePongLease(V2Pong(1000, Address, Inc + 1, 0x11, 3), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Discard);
+		EvaluatePongLease(V2Pong(1000, Address, Inc + 1, 0x11, 3), 10, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::Discard);
 	TestEqual(TEXT("unsolicited HBS2 is discarded"),
-		EvaluatePongLease(V2Pong(0, Address, Inc, 0x11, 3), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Discard);
+		EvaluatePongLease(V2Pong(0, Address, Inc, 0x11, 3), 10, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::Discard);
 	TestEqual(TEXT("unmatched HBS2 is discarded"),
-		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3), 99, Pings, Inc, nullptr, Next), EPongLeaseDecision::Discard);
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3), 99, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::Discard);
 	FHapbeatStreamEndpointLeaseState NewerV2 = AcceptedV2;
 	NewerV2.LastAcceptedTimestampUs = 2000;
 	TestEqual(TEXT("late old-boot HBS2 cannot revert a newer lease"),
-		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x99, 1), 10, Pings, Inc, &NewerV2, Next), EPongLeaseDecision::Discard);
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x99, 1), 10, Pings, Inc, &NewerV2, Next, Ip), EPongLeaseDecision::Discard);
 
 	TestEqual(TEXT("lease_valid=0 is still v2"),
-		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 0, /*Flags=*/0x00), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Accept);
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 0, /*Flags=*/0x00), 10, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::Accept);
 	TestEqual(TEXT("... class v2, never legacy"), Next.Class, EHapbeatStreamEndpointClass::V2);
 	TestFalse(TEXT("... and defers"), Next.IsStreamable(Inc));
 
 	TestEqual(TEXT("superseded reply is accepted"),
-		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3, 0x03), 10, Pings, Inc, nullptr, Next), EPongLeaseDecision::Accept);
+		EvaluatePongLease(V2Pong(1000, Address, Inc, 0x11, 3, 0x03), 10, Pings, Inc, nullptr, Next, Ip), EPongLeaseDecision::Accept);
 	TestFalse(TEXT("superseded v2 defers"), Next.IsStreamable(Inc));
 	const FHapbeatStreamEndpointLeaseState Superseded = Next;
 	TestEqual(TEXT("later discovery reply is accepted"),
-		EvaluatePongLease(V2Pong(2000, Address, Inc, 0x11, 4), 11, Pings, Inc, &Superseded, Next), EPongLeaseDecision::Accept);
+		EvaluatePongLease(V2Pong(2000, Address, Inc, 0x11, 4), 11, Pings, Inc, &Superseded, Next, Ip), EPongLeaseDecision::Accept);
 	TestTrue(TEXT("... but does not take the lease back automatically"), Next.bLeaseSuperseded);
 	TestFalse(TEXT("... and keeps deferring"), Next.IsStreamable(Inc));
 	TestEqual(TEXT("... and keeps the superseded lease"), Next.Lease.LeaseTicket, 3u);
@@ -543,8 +584,9 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 	const uint64 BootB = 0x00000000000B0071ULL;
 	int64 NextTs = 5000;
 	uint16 NextSeq = 100;
-	// One broadcast PING, answered by both devices: the pending entry must
-	// survive the first reply so the second can correlate too.
+	// One pending lease request answered by both devices (not bound to an IP,
+	// see Pending()): the entry must survive the first reply so the second can
+	// correlate too.
 	auto IssuePing = [&]() -> TPair<uint16, int64>
 	{
 		const TPair<uint16, int64> Issued(NextSeq++, NextTs);
@@ -582,7 +624,7 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 	Deliver(TEXT("192.0.2.80"), First.Key, LegacyPong(First.Value, "player_1/pos_l_arm"));
 	Deliver(TEXT("192.0.2.81"), First.Key, V2Pong(First.Value, "player_1/pos_r_arm", Inc, BootB, 3));
 	TestEqual(TEXT("A is legacy"), ClassOf(KeyA), EHapbeatStreamEndpointClass::Legacy);
-	TestEqual(TEXT("B is v2 from the same broadcast PING"), ClassOf(KeyB), EHapbeatStreamEndpointClass::V2);
+	TestEqual(TEXT("B is v2 from the same request"), ClassOf(KeyB), EHapbeatStreamEndpointClass::V2);
 	TestTrue(TEXT("legacy and v2 endpoints stream concurrently"),
 		Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions.Contains(KeyB));
 	if (!Sub->StreamSessions.Contains(KeyA) || !Sub->StreamSessions.Contains(KeyB))
@@ -640,7 +682,9 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 		{
 			bAllV2 &= Entry.Packet[2] == FHapbeatProtocol::StreamProtocolVersion
 				&& EnvelopeOf(Entry.Packet).GetLease() == FHapbeatStreamLeaseIdentity(BootB, 3);
-			if (Entry.Packet[3] == FHapbeatProtocol::CmdStreamBegin)
+			// The same BEGIN is repeated (Sender requirements 2): count each generation once.
+			if (Entry.Packet[3] == FHapbeatProtocol::CmdStreamBegin
+				&& (BeginGenerations.Num() == 0 || BeginGenerations.Last() != EnvelopeOf(Entry.Packet).Generation))
 			{
 				BeginGenerations.Add(EnvelopeOf(Entry.Packet).Generation);
 			}
@@ -659,9 +703,11 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 	Deliver(TEXT("192.0.2.81"), 0, LegacyPong(0, "player_1/pos_r_arm"));
 	Deliver(TEXT("192.0.2.81"), First.Key, LegacyPong(First.Value, "player_1/pos_r_arm")); // late
 	Deliver(TEXT("192.0.2.81"), 999, LegacyPong(Newer.Value, "player_1/pos_r_arm"));    // unmatched seq
-	const TPair<uint16, int64> ForMalformed = IssuePing();
-	Deliver(TEXT("192.0.2.81"), ForMalformed.Key, MalformedPong(ForMalformed.Value, "player_1/pos_r_arm", Inc));
-	TestEqual(TEXT("unsolicited / late / unmatched / malformed replies keep B v2"), ClassOf(KeyB), EHapbeatStreamEndpointClass::V2);
+	const TPair<uint16, int64> ForIgnored = IssuePing();
+	AddExpectedMessage(TEXT("answered the lease request with a reply this SDK cannot read"), ELogVerbosity::Warning,
+		EAutomationExpectedMessageFlags::Contains, 2, /*IsRegex=*/false);
+	Deliver(TEXT("192.0.2.81"), ForIgnored.Key, IgnoredPong(ForIgnored.Value, "player_1/pos_r_arm", Inc));
+	TestEqual(TEXT("unsolicited / late / unmatched / ignored-tail replies keep B v2"), ClassOf(KeyB), EHapbeatStreamEndpointClass::V2);
 	TestEqual(TEXT("... and do not advance its accepted request"),
 		Sub->StreamEndpoints.FindChecked(KeyB).LeaseState.LastAcceptedTimestampUs, AcceptedTs);
 	TestTrue(TEXT("... and leave its session running untouched"),
@@ -669,8 +715,8 @@ bool FHapbeatStreamLegacyFallbackSubsystemTest::RunTest(const FString& Parameter
 
 	const FString KeyC = TEXT("192.0.2.82:7700|player_1/pos_chest");
 	const TPair<uint16, int64> ForC = IssuePing();
-	Deliver(TEXT("192.0.2.82"), ForC.Key, MalformedPong(ForC.Value, "player_1/pos_chest", Inc));
-	TestEqual(TEXT("a malformed tail leaves a new endpoint unknown"), ClassOf(KeyC), EHapbeatStreamEndpointClass::Unknown);
+	Deliver(TEXT("192.0.2.82"), ForC.Key, IgnoredPong(ForC.Value, "player_1/pos_chest", Inc));
+	TestEqual(TEXT("an ignored tail leaves a new endpoint unknown"), ClassOf(KeyC), EHapbeatStreamEndpointClass::Unknown);
 	TestFalse(TEXT("... and deferred"), Sub->StreamSessions.Contains(KeyC));
 
 	const FString KeyE = TEXT("192.0.2.84:7700|player_1/pos_back");
@@ -870,17 +916,13 @@ bool FHapbeatStreamReacquireOwnershipTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("B BEGIN sent"), WaitForCount(*Log, AddrB, FHapbeatProtocol::CmdStreamBegin, 1));
 
-	// --- v2 lease-refresh cadence: PingInterval above the device's 15 s lease
-	// TTL is capped while a v2 endpoint is known, and only then.
-	TestTrue(TEXT("a v2 endpoint is known"), Sub->HasV2StreamEndpoint());
-	TestTrue(TEXT("a v2 endpoint caps the PING cadence below the 15 s lease TTL"),
-		UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(2, true, 30.0f) <= UHapbeatSubsystem::V2LeaseRefreshSeconds
-		&& UHapbeatSubsystem::V2LeaseRefreshSeconds < 15.0f);
-	TestEqual(TEXT("a shorter PingInterval is kept"), UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(2, true, 2.0f), 2.0f);
-	TestEqual(TEXT("without v2 endpoints PingInterval is used as is"),
-		UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(2, false, 30.0f), 30.0f);
+	// --- Cadences: the discovery broadcast no longer refreshes leases (it is the
+	// 8-byte PING), so it keeps PingInterval; leases are refreshed by unicast at
+	// TTL/3 (Hapbeat.Streaming.Gen2.LeasePing covers the schedule itself).
+	TestEqual(TEXT("discovery keeps PingInterval once a device answered"),
+		UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(2, 30.0f), 30.0f);
 	TestEqual(TEXT("nothing alive keeps the fast discovery cadence"),
-		UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(0, true, 30.0f), UHapbeatSubsystem::DiscoveryTickSeconds);
+		UHapbeatSubsystem::ComputeKeepAliveIntervalSeconds(0, 30.0f), UHapbeatSubsystem::DiscoveryTickSeconds);
 
 	// --- Superseded: logged once, deferred, and periodic discovery keeps it so.
 	AddExpectedMessage(TEXT("was superseded by another writer"), ELogVerbosity::Warning,
@@ -903,7 +945,21 @@ bool FHapbeatStreamReacquireOwnershipTest::RunTest(const FString& Parameters)
 	const uint64 NewInc = Sub->ClientIncarnation;
 	TestTrue(TEXT("foreground resume issues a fresh nonzero incarnation"), NewInc != 0 && NewInc != Inc);
 	TestEqual(TEXT("... sends one discovery PING"), Sub->StreamDiscoveryRequestCount, DiscoveryBefore + 1);
-	TestEqual(TEXT("... drops the old incarnation's outstanding requests"), Sub->PendingPings.Num(), 0);
+	{
+		bool bOnlyNewIncarnation = true;
+		for (const TPair<uint16, FHapbeatPendingPing>& Pair : Sub->PendingPings)
+		{
+			bOnlyNewIncarnation &= Pair.Value.ClientIncarnation == NewInc;
+		}
+		TestTrue(TEXT("... drops the old incarnation's outstanding requests"), bOnlyNewIncarnation);
+		bool bAskedB = false;
+		for (const UHapbeatSubsystem::FAutomationUnicastRecord& Record : Sub->LeasePingsForAutomationTest)
+		{
+			const FHapbeatPendingPing* Request = Sub->PendingPings.Find(Record.Seq);
+			bAskedB |= Record.Key == KeyB && Request != nullptr && Request->ClientIncarnation == NewInc;
+		}
+		TestTrue(TEXT("... and asks the lease target for a lease under the new incarnation at once"), bAskedB);
+	}
 	Sub->HandleApplicationForeground();
 	TestEqual(TEXT("a duplicate lifecycle event within 1 s does not reacquire again"), Sub->ClientIncarnation, NewInc);
 	Sub->UnbindApplicationLifecycle();
@@ -1007,43 +1063,82 @@ bool FHapbeatStreamIdentityUpdateDiscoveryTest::RunTest(const FString& Parameter
 
 	const FString OldKey = TEXT("192.0.2.95:7700|player_1/pos_chest");
 	const FString NewKey = TEXT("192.0.2.95:7700|player_2/pos_chest");
+	const uint64 Boot = 0x00000000000B0095ULL;
 
-	// A source that targets only the device's NEW address.
-	UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(Sub);
-	Playback->Init(1.0f, 1.0f);
-	Playback->SetLoop(true);
-	UHapbeatSubsystem::FStreamSource& Source = Sub->StreamSources.Add(Playback->Id);
-	Source.CanonicalPcm16 = MakeSessionTestPcm(1000, 160);
-	Source.Playback = Playback;
-	Source.ResolvedTarget = TEXT("player_2");
-	Sub->ActivePlaybacks.Add(Playback);
+	// One source on the device's OLD address, one on its NEW address.
+	auto AddLoop = [&](const TCHAR* Target)
+	{
+		UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(Sub);
+		Playback->Init(1.0f, 1.0f);
+		Playback->SetLoop(true);
+		UHapbeatSubsystem::FStreamSource& Source = Sub->StreamSources.Add(Playback->Id);
+		Source.CanonicalPcm16 = MakeSessionTestPcm(1000, 160);
+		Source.Playback = Playback;
+		Source.ResolvedTarget = Target;
+		Sub->ActivePlaybacks.Add(Playback);
+		return Playback;
+	};
+	UHapbeatStreamPlayback* OldAddressPlayback = AddLoop(TEXT("player_1"));
+	UHapbeatStreamPlayback* NewAddressPlayback = AddLoop(TEXT("player_2"));
 
-	// A device that was never classified: its unsolicited PONG asks for nothing.
-	Deliver(TEXT("192.0.2.96"), 0, LegacyPong(0, "player_3/pos_chest"));
-	TestEqual(TEXT("an unknown device's identity PONG sends no extra PING"), Sub->StreamDiscoveryRequestCount, 0);
-
-	// Classify the device under its old address.
-	Sub->PendingPings.Add(400, Pending(20000, Inc));
-	Deliver(TEXT("192.0.2.95"), 400, LegacyPong(20000, "player_1/pos_chest"));
-	TestEqual(TEXT("old key legacy"), Sub->StreamEndpoints.FindChecked(OldKey).LeaseState.Class,
-		EHapbeatStreamEndpointClass::Legacy);
-	TestEqual(TEXT("source does not match the old address"), Playback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
+	// Classify the device (Stream Gen 2) under its old address: the old-address source streams.
+	Sub->PendingPings.Add(400, Pending(20000, Inc, TEXT("192.0.2.95")));
+	Deliver(TEXT("192.0.2.95"), 400, V2Pong(20000, "player_1/pos_chest", Inc, Boot, 3));
+	TestTrue(TEXT("old key streams"), Sub->StreamSessions.Contains(OldKey));
+	TestEqual(TEXT("new-address source waits"), NewAddressPlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
+	TestTrue(TEXT("old-key BEGIN sent"), WaitForCount(*Log, TEXT("player_1/pos_chest"), FHapbeatProtocol::CmdStreamBegin, 1));
+	FHapbeatStreamRunnable* const Runner = Sub->StreamSessions.Contains(OldKey) ? Sub->StreamSessions[OldKey].Runnable : nullptr;
 
 	// Address change: the device's unsolicited identity PONG (seq 0, timestamp 0).
+	// The same route moves to the new key at once, alive or not, with its class,
+	// lease and session: no old key is left streaming the old address's source.
 	Deliver(TEXT("192.0.2.95"), 0, LegacyPong(0, "player_2/pos_chest"));
-	TestEqual(TEXT("identity update registers the new key unclassified"),
-		Sub->StreamEndpoints.FindChecked(NewKey).LeaseState.Class, EHapbeatStreamEndpointClass::Unknown);
-	TestEqual(TEXT("... and requests one matched reply immediately"), Sub->StreamDiscoveryRequestCount, 1);
-	Deliver(TEXT("192.0.2.95"), 0, LegacyPong(0, "player_2/pos_chest"));
-	TestEqual(TEXT("a repeated identity PONG within 1 s is rate limited"), Sub->StreamDiscoveryRequestCount, 1);
+	TestFalse(TEXT("the old key is gone at once"), Sub->StreamEndpoints.Contains(OldKey));
+	TestTrue(TEXT("the new key exists"), Sub->StreamEndpoints.Contains(NewKey));
+	TestEqual(TEXT("... with the class carried over (no new round trip)"),
+		Sub->StreamEndpoints.FindChecked(NewKey).LeaseState.Class, EHapbeatStreamEndpointClass::V2);
+	TestTrue(TEXT("the session moved with the device (same runner, same lease)"),
+		Sub->StreamSessions.Contains(NewKey) && Sub->StreamSessions[NewKey].Runnable == Runner
+		&& !Sub->StreamSessions.Contains(OldKey));
+	TestEqual(TEXT("the old-address source no longer matches and waits"),
+		OldAddressPlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Deferred);
+	TestEqual(TEXT("... with no endpoint"), Sub->StreamSources.FindChecked(OldAddressPlayback->Id).EndpointKeys.Num(), 0);
+	TestEqual(TEXT("the new-address source joins the moved session"),
+		NewAddressPlayback->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
+	TestTrue(TEXT("... on the new key"), Sub->StreamSources.FindChecked(NewAddressPlayback->Id).EndpointKeys.Contains(NewKey));
 
-	// The matched reply to that PING classifies the new key; the source starts.
-	Sub->PendingPings.Add(401, Pending(21000, Inc));
-	Deliver(TEXT("192.0.2.95"), 401, LegacyPong(21000, "player_2/pos_chest"));
-	TestEqual(TEXT("matched reply classifies the new key"),
-		Sub->StreamEndpoints.FindChecked(NewKey).LeaseState.Class, EHapbeatStreamEndpointClass::Legacy);
-	TestTrue(TEXT("the source streams to the new address"), Sub->StreamSessions.Contains(NewKey));
-	TestEqual(TEXT("... and is active"), Playback->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
+	// The repeated BEGIN now carries the new address (stream-session.md Sender requirements 2).
+	{
+		// The runner logs under the target it was built with; the periodic repeat
+		// (every 50 blocks = 500 ms) is the first BEGIN after the move.
+		auto HasNewTargetBegin = [&Log]()
+		{
+			for (const FStreamPacketLog::FEntry& Entry : Log->Snapshot(TEXT("player_1/pos_chest")))
+			{
+				if (Entry.Packet[3] != FHapbeatProtocol::CmdStreamBegin)
+				{
+					continue;
+				}
+				const int32 TargetOffset = FHapbeatProtocol::HeaderSize + FHapbeatProtocol::StreamSessionEnvelopeSize + 12;
+				FString Target;
+				for (int32 Index = TargetOffset; Index < Entry.Packet.Num() && Entry.Packet[Index] != 0; ++Index)
+				{
+					Target.AppendChar(static_cast<TCHAR>(Entry.Packet[Index]));
+				}
+				if (Target == TEXT("player_2/pos_chest"))
+				{
+					return true;
+				}
+			}
+			return false;
+		};
+		const double Deadline = FPlatformTime::Seconds() + 2.0;
+		while (!HasNewTargetBegin() && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Sleep(0.01f);
+		}
+		TestTrue(TEXT("a repeated BEGIN carries the new target player_2/pos_chest"), HasNewTargetBegin());
+	}
 
 	Sub->StopStream();
 	return true;

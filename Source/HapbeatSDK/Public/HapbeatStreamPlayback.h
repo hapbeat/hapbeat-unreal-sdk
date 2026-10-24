@@ -16,11 +16,24 @@ enum class EHapbeatStreamPlaybackStatus : uint8
 	Stopped
 };
 
+/**
+ * Why a Playback is Deferred (sdk-multi-stream.md §3). When the matching
+ * devices differ, the first of Superseded > LeaseUnavailable > UnknownClass >
+ * NoResolvedEndpoint is reported; one playing device makes the Playback Active.
+ * Values are only ever appended (Blueprint stores them by index).
+ */
 UENUM(BlueprintType)
 enum class EHapbeatStreamDeferredReason : uint8
 {
 	None,
-	NoResolvedEndpoint
+	/** No known device matches the target. */
+	NoResolvedEndpoint,
+	/** A matching device has not answered this SDK's lease request yet. */
+	UnknownClass,
+	/** A matching Stream Gen 2 device gave this SDK no usable lease (none issued, or it expired). */
+	LeaseUnavailable,
+	/** Another application streamed to a matching device after this one (no automatic takeover). */
+	Superseded
 };
 
 /**
@@ -196,7 +209,7 @@ UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Stream 
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> GetMirror();
 
 	/** StreamHub game-thread state transitions. */
-	void SetDeferredNoEndpoint();
+	void SetDeferred(EHapbeatStreamDeferredReason Reason);
 	void SetActive();
 
 private:

@@ -69,11 +69,11 @@ namespace
 		return P;
 	}
 
-	/** v2 stream packet: header version 2, MTU-safe stream cap (not the 512-byte command cap). */
+	/** Stream Gen 2 packet: header version 2, MTU-safe stream cap (not the 512-byte command cap). */
 	TArray<uint8> MakeStreamV2Packet(uint8 Cmd, uint16 Seq, const TArray<uint8>& Payload)
 	{
 		checkf(FHapbeatProtocol::HeaderSize + Payload.Num() <= FHapbeatProtocol::MaxStreamPacketSize,
-			TEXT("Hapbeat: v2 stream packet exceeds %d bytes"), FHapbeatProtocol::MaxStreamPacketSize);
+			TEXT("Hapbeat: Stream Gen 2 packet exceeds %d bytes"), FHapbeatProtocol::MaxStreamPacketSize);
 		TArray<uint8> P;
 		P.Reserve(FHapbeatProtocol::HeaderSize + Payload.Num());
 		WriteHeader(P, Cmd, Seq, static_cast<uint16>(Payload.Num()), FHapbeatProtocol::StreamProtocolVersion);
@@ -84,7 +84,7 @@ namespace
 	void AppendStreamIdentity(TArray<uint8>& B, const FHapbeatStreamSessionIdentity& Identity)
 	{
 		checkf(Identity.IsValid(),
-			TEXT("Hapbeat: a v2 stream packet requires a valid boot id, lease ticket and generation"));
+			TEXT("Hapbeat: a Stream Gen 2 packet requires a valid boot id, lease ticket and generation"));
 		AppendU64(B, Identity.DeviceBootId);
 		AppendU32(B, Identity.LeaseTicket);
 		AppendU32(B, Identity.Generation);
@@ -119,9 +119,11 @@ namespace
 	}
 
 	/**
-	 * Classify the bytes after volume_wiper (stream-session-v2.md "Legacy receiver
-	 * fallback"). Mirrors Unity ParseStreamLeasePongTail for the Valid case; the
-	 * Absent / Malformed split is the SDK legacy-fallback rule.
+	 * Classify the bytes after volume_wiper by the [1.x] table of
+	 * stream-session.md "Receiver classification" (reference: contracts
+	 * tests/test_wire_compat.py classify_1x). Only the first 32 bytes of a Stream
+	 * Gen 2 tail are read: bytes after them, the reserved field and flag bits
+	 * other than 0-2 belong to a later major and are ignored here.
 	 */
 	void ParseStreamLeaseTail(const uint8* Payload, int32 AvailLen, int32 Off, FHapbeatProtocol::FPongInfo& Out)
 	{
@@ -130,23 +132,15 @@ namespace
 		Out.LeaseTail = EHapbeatPongLeaseTail::Absent;
 		if (Remaining <= 0)
 		{
-			return; // PONG ends at/before volume_wiper: no marker
+			return; // PONG ends at/before volume_wiper: Stream Gen 1
 		}
-		const int32 MarkerBytes = FMath::Min(Remaining, 4);
-		if (FMemory::Memcmp(Payload + Off, Marker, MarkerBytes) != 0)
+		if (Remaining < FHapbeatProtocol::StreamLeasePongTailSize
+			|| FMemory::Memcmp(Payload + Off, Marker, 4) != 0
+			|| Payload[Off + 4] != 1)
 		{
-			return; // other (non-HBS2) bytes follow: no marker
-		}
-		if (Remaining < 4
-			|| Remaining != FHapbeatProtocol::StreamLeasePongTailSize
-			|| Payload[Off + 4] != 1
-			|| (Payload[Off + 5] & ~0x03) != 0
-			|| ReadU16(Payload + Off + 6) != 0)
-		{
-			// A marker (or a truncated prefix of one) with a wrong length, version,
-			// reserved field or unknown flag: not a lease reply, and not proof of
-			// a pre-v2 device either.
-			Out.LeaseTail = EHapbeatPongLeaseTail::Malformed;
+			// Too short, another extension_version, or bytes that are not HBS2:
+			// neither a lease reply nor proof of firmware before 0.5.0.
+			Out.LeaseTail = EHapbeatPongLeaseTail::Ignored;
 			return;
 		}
 
@@ -157,6 +151,7 @@ namespace
 		Out.HighWaterTicket = ReadU32(Payload + Off + 28);
 		Out.bLeaseValid = (Flags & 0x01) != 0 && Out.Lease.IsValid();
 		Out.bLeaseSuperseded = (Flags & 0x02) != 0;
+		Out.bLeaseReissued = (Flags & 0x04) != 0;
 	}
 
 	/**
@@ -236,6 +231,13 @@ TArray<uint8> FHapbeatProtocol::BuildPing(uint16 Seq, int64 TimestampUs, uint64 
 	AppendI64(Payload, TimestampUs);
 	AppendU64(Payload, ClientIncarnation);
 	return MakePacket(CmdPing, Seq, Payload);
+}
+
+TArray<uint8> FHapbeatProtocol::BuildCapsRequest(uint16 Seq)
+{
+	TArray<uint8> Payload;
+	Payload.Add(CapsVersion);
+	return MakePacket(CmdCapsReq, Seq, Payload);
 }
 
 TArray<uint8> FHapbeatProtocol::BuildConnectStatus(uint16 Seq, bool bConnected, uint8 Group, const FString& AppName, const FString& DeviceName)
@@ -407,6 +409,92 @@ bool FHapbeatProtocol::ParseError(const uint8* Payload, int32 AvailLen, uint16& 
 	{
 		int32 Off = 2;
 		OutMessage = ReadCStr(Payload, AvailLen, Off);
+	}
+	return true;
+}
+
+bool FHapbeatProtocol::ParseErrorExtended(const uint8* Payload, int32 AvailLen, FErrorInfo& Out)
+{
+	Out = FErrorInfo();
+	if (Payload == nullptr || AvailLen < 2)
+	{
+		return false;
+	}
+	Out.ErrorCode = ReadU16(Payload + 0);
+	int32 Off = 2;
+	Out.Message = ReadCStr(Payload, AvailLen, Off);
+	// ref_command(u8) + ref_seq(u16) + detail_length(u8), then detail. Absent in
+	// the 0.x form, which ends after the message (contracts parse_error).
+	if (AvailLen >= Off + 4)
+	{
+		Out.bHasReference = true;
+		Out.RefCommand = Payload[Off];
+		Out.RefSeq = ReadU16(Payload + Off + 1);
+		const int32 DetailLength = Payload[Off + 3];
+		const int32 DetailAvail = FMath::Clamp(AvailLen - (Off + 4), 0, DetailLength);
+		Out.Detail.Append(Payload + Off + 4, DetailAvail);
+	}
+	return true;
+}
+
+bool FHapbeatProtocol::ParseCaps(const uint8* Payload, int32 AvailLen, FCapsInfo& Out)
+{
+	Out = FCapsInfo();
+	if (Payload == nullptr || AvailLen < 2)
+	{
+		return false;
+	}
+	Out.CapsVersion = Payload[0];
+	// Defined value sizes of caps_version 1; 0 = variable (firmware_version).
+	auto DefinedSize = [](uint8 Type) -> int32
+	{
+		switch (Type)
+		{
+		case 0x01: case 0x03: case 0x04: case 0x06: case 0x07: return 1;
+		case 0x05: case 0x08: return 4;
+		case 0x02: return 0;
+		default: return -1;
+		}
+	};
+	TSet<uint8> Seen;
+	int32 Off = 2;
+	while (Off + 2 <= AvailLen)
+	{
+		const uint8 Type = Payload[Off];
+		const int32 Size = Payload[Off + 1];
+		const uint8* Value = Payload + Off + 2;
+		const bool bComplete = Off + 2 + Size <= AvailLen;
+		Off += 2 + Size;
+		const int32 Defined = DefinedSize(Type);
+		// Cut by the end of the payload, unknown, already taken or too short: skip.
+		if (!bComplete || Defined < 0 || Seen.Contains(Type) || Size < Defined)
+		{
+			continue;
+		}
+		Seen.Add(Type);
+		switch (Type)
+		{
+		case 0x01: Out.Generation = Value[0]; break;
+		case 0x02:
+		{
+			TArray<ANSICHAR> Text;
+			Text.Append(reinterpret_cast<const ANSICHAR*>(Value), Size);
+			Text.Add('\0');
+			Out.FirmwareVersion = FString(UTF8_TO_TCHAR(Text.GetData()));
+			break;
+		}
+		case 0x03: Out.StreamGens = Value[0]; break;
+		case 0x04: Out.StreamFormats = Value[0]; break;
+		case 0x05:
+			Out.LeaseTtlSeconds = Value[0];
+			Out.LeaseSlots = Value[1];
+			Out.InactivityTimeoutSeconds = Value[2];
+			break;
+		case 0x06: Out.HapticChannels = Value[0]; break;
+		case 0x07: Out.AddressMaxLen = Value[0]; break;
+		case 0x08: Out.Features = static_cast<int64>(ReadU32(Value)); break;
+		default: break;
+		}
 	}
 	return true;
 }

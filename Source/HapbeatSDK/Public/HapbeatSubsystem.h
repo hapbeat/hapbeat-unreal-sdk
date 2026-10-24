@@ -7,7 +7,9 @@
 #include "Engine/TimerHandle.h"               // FTimerHandle (held by the pending-send record below)
 #include "HAL/CriticalSection.h"              // FCriticalSection (SeqLock — shared with the stream thread)
 #include "HapbeatNetInterfaces.h"             // FHapbeatBroadcastRoute (held by value in a TArray below)
-#include "HapbeatStreamLease.h"               // per-endpoint stream class / lease state (stream session v2)
+#include "HapbeatStreamEndpointInfo.h"        // FHapbeatStreamEndpointInfo (GetStreamEndpoints / OnStreamEndpointChanged)
+#include "HapbeatStreamLease.h"               // per-endpoint stream class / lease state (Stream Gen 2)
+#include "HapbeatStreamPlayback.h"            // EHapbeatStreamDeferredReason (ComputeDeferredReason)
 #include "Interfaces/IPv4/IPv4Endpoint.h"     // FIPv4Endpoint
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "HapbeatSubsystem.generated.h"
@@ -24,6 +26,14 @@ struct FHapbeatEventEntry;
 class FHapbeatStreamLegacyFallbackSubsystemTest;
 class FHapbeatStreamReacquireOwnershipTest;
 class FHapbeatStreamIdentityUpdateDiscoveryTest;
+class FHapbeatGen2LeasePingTest;
+class FHapbeatGen2CapsTest;
+class FHapbeatGen2ErrorTest;
+class FHapbeatGen2CursorCarryTest;
+class FHapbeatGen2StreamStoppedTest;
+class FHapbeatGen2DeferredReasonTest;
+class FHapbeatGen2SupersededReissueTest;
+class FHapbeatGen2IgnoredTailWarningTest;
 struct FHapbeatStreamGainMirror;
 
 /** What a deferred (haptic-delay) send does once its timer fires. See FHapbeatPendingSend. */
@@ -85,8 +95,10 @@ struct HAPBEATSDK_API FHapbeatPendingSend
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FHapbeatOnConnected);
 /** Raised on the game thread when the device set goes positive -> 0. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FHapbeatOnDisconnected);
-/** Raised on the game thread when a device returns an ERROR (0xFF) packet. */
+/** Raised on the game thread for an ERROR (0xFF) packet the SDK accepted (message-format.md 0xFF "receiving rules"). */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHapbeatOnError, const FString&, Message);
+/** Raised on the game thread when a device endpoint's stream class or lease state changes. */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FHapbeatOnStreamEndpointChanged, const FHapbeatStreamEndpointInfo&, Info);
 /** Raised on the game thread for every PONG. RttUs is microseconds; the string fields are empty for bridge-form PONGs. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_FiveParams(FHapbeatOnPong, const FString&, Endpoint, int64, RttUs, const FString&, DeviceName, const FString&, Address, const FString&, Firmware);
 
@@ -236,18 +248,27 @@ public:
 	 */
 	void StopEntry(UHapbeatEventMap* Map, FGuid EntryId);
 
+	/**
+	 * Broadcast one discovery PING (the 8-byte form, which never allocates a
+	 * stream lease). Lease requests (extended PINGs) go only by unicast to the
+	 * devices this SDK streams to or is about to (stream-session.md "[1.x] How
+	 * SDKs send extended PINGs"); the subsystem sends those itself.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Ping (Hapbeat)"))
 	void Ping();
 
 	/**
-	 * Explicitly request fresh stream-lease ownership (stream-session-v2.md
-	 * "Discovery lease"). Required after another writer superseded this SDK on a
-	 * v2 device: periodic discovery never takes the stream back on its own.
-	 * Issues a new client incarnation, forgets every v2 / unknown lease (running
-	 * v2 sessions END under their old identity immediately) and PINGs; legacy
-	 * endpoints keep their class and their streams. Also runs automatically when
-	 * the application returns to the foreground / is reactivated. Unlike
-	 * Connect() it keeps device knowledge, so legacy streams are not interrupted.
+	 * Explicitly request fresh stream-lease ownership (stream-session.md
+	 * "Incarnation and takeover"). Required after another writer superseded this
+	 * SDK on a Stream Gen 2 device, unless that device re-issues a lease on its
+	 * own once the other writer has left: periodic discovery never takes the
+	 * stream back. Issues a new client incarnation, forgets every Stream Gen 2 /
+	 * unknown lease (running Stream Gen 2 sessions END under their old identity
+	 * immediately) and asks the devices it streams to for a new lease; Stream Gen
+	 * 1 endpoints keep their class and their streams. Also runs automatically
+	 * when the application returns to the foreground / is reactivated. Unlike
+	 * Connect() it keeps device knowledge, so Stream Gen 1 streams are not
+	 * interrupted.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Reacquire Stream Ownership (Hapbeat)"))
 	void ReacquireStreamOwnership();
@@ -391,6 +412,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Device Alive (Hapbeat)"))
 	bool IsAlive() const { return GetAliveDeviceCount() > 0; }
 
+	/**
+	 * Every device endpoint the stream side knows, with its stream class, lease
+	 * state and reported firmware major (sdk-multi-stream.md §3). Use it, with a
+	 * Playback's DeferredReason, to explain why a stream is silent.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Get Stream Endpoints (Hapbeat)"))
+	TArray<FHapbeatStreamEndpointInfo> GetStreamEndpoints() const;
+
 	/** True while at least one endpoint-scoped clip stream session is active. */
 	UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Streaming (Hapbeat)"))
 	bool IsStreaming() const { return StreamSessions.Num() > 0; }
@@ -407,9 +436,16 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Disconnected (Hapbeat)"))
 	FHapbeatOnDisconnected OnDisconnected;
 
-	/** Fires when a device returns an ERROR packet. */
+	/**
+	 * Fires for an ERROR packet the SDK accepted: from a known device's port, and
+	 * for stream errors only when it names a session this SDK runs there.
+	 */
 	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Error (Hapbeat)"))
 	FHapbeatOnError OnError;
+
+	/** Fires when a device endpoint's stream class or lease state changes (see GetStreamEndpoints). */
+	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Stream Endpoint Changed (Hapbeat)"))
+	FHapbeatOnStreamEndpointChanged OnStreamEndpointChanged;
 
 	/** Fires for every PONG (one per responsive device per ping on broadcast). */
 	UPROPERTY(BlueprintAssignable, Category = "Hapbeat", meta = (DisplayName = "On Pong (Hapbeat)"))
@@ -421,7 +457,17 @@ private:
 	friend class FHapbeatStreamReacquireOwnershipTest;
 	friend class FHapbeatStreamIdentityUpdateDiscoveryTest;
 	friend class FHapbeatClipResampleTest;
+	friend class FHapbeatGen2LeasePingTest;
+	friend class FHapbeatGen2CapsTest;
+	friend class FHapbeatGen2ErrorTest;
+	friend class FHapbeatGen2CursorCarryTest;
+	friend class FHapbeatGen2StreamStoppedTest;
+	friend class FHapbeatGen2DeferredReasonTest;
+	friend class FHapbeatGen2SupersededReissueTest;
+	friend class FHapbeatGen2IgnoredTailWarningTest;
 	void SendPacket(const TArray<uint8>& Packet);
+	/** Exact unicast to one device (lease PING, CAPS_REQ). Never opens a socket. */
+	void SendUnicastPacket(const FString& Ip, int32 InPort, const TArray<uint8>& Packet);
 
 	// ---- Haptic delay (PlayEntry / StopEntry only) ----
 
@@ -479,7 +525,12 @@ private:
 	/** Request immediate discovery only while an active source has no matching exact endpoint. */
 	void RequestStreamDiscoveryForDeferredSources();
 	void ReconcileStreamSources();
-	void StopStreamSession(const FString& EndpointKey);
+	/**
+	 * END the endpoint's session and join its thread. bCarryCursors keeps each
+	 * source's cursor for the next session on the same device (a retired lease or
+	 * class, stream-session.md Sender requirements 8); a stop or a removal does not.
+	 */
+	void StopStreamSession(const FString& EndpointKey, bool bCarryCursors = false);
 	void AbandonStreamSession(const FString& EndpointKey);
 	void StartEndpointSession(const FString& EndpointKey);
 	bool NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const;
@@ -545,8 +596,7 @@ private:
 	 * has no clock sample, so it intentionally reports 0 rather than treating
 	 * the Unix epoch as a multi-decade round trip. The pending entry is NOT
 	 * consumed: a broadcast PING is answered by every device, and each reply has
-	 * to be able to correlate its stream class / lease (stream-session-v2.md).
-	 * Entries age out in Ping().
+	 * to be able to correlate. Entries age out in PrunePendingPings().
 	 */
 	static int64 ResolvePongRttUs(const TMap<uint16, FHapbeatPendingPing>& InPendingPings,
 		uint16 PongSeq, int64 NowMonotonicUs, int64 EchoedTimestampUs, int64 NowUnixUs);
@@ -559,12 +609,23 @@ private:
 	void HandlePongGameThread(const FString& SenderIp, int32 SenderPort, uint16 PongSeq, int64 NowMonotonicUs,
 		const FHapbeatProtocol::FPongInfo& Pong);
 
-	/** Fresh nonzero random client incarnation (stream-session-v2.md "Discovery lease"). */
+	/** Fresh nonzero random client incarnation (stream-session.md "Discovery lease"). */
 	static uint64 CreateClientIncarnation();
 
-	/** Apply a parsed PONG/ERROR result on the game thread (marshalled from the worker thread). */
+	/** Apply a parsed PONG result on the game thread (marshalled from the worker thread). */
 	void OnPongGameThread(const FString& Endpoint, int64 RttUs, const FString& DeviceName, const FString& Address, const FString& Firmware);
-	void OnErrorGameThread(const FString& Message);
+
+	/**
+	 * Game-thread half of ERROR handling (message-format.md 0xFF "receiving
+	 * rules", stream-session.md Sender requirements 5): accept only from a known
+	 * device's IP and the device port, stream errors only for a session this SDK
+	 * tracks there, and act per endpoint.
+	 */
+	void HandleErrorGameThread(const FString& SenderIp, int32 SenderPort, const FHapbeatProtocol::FErrorInfo& Error);
+
+	/** Game-thread half of CAPS handling: match the request by route and seq, then record. */
+	void HandleCapsGameThread(const FString& SenderIp, int32 SenderPort, uint16 CapsSeq,
+		const FHapbeatProtocol::FCapsInfo& Caps);
 
 	/** Re-evaluate the alive set and fire OnConnected/OnDisconnected on a 0<->positive change. Game thread only. */
 	void EvaluateLivenessTransition();
@@ -583,40 +644,76 @@ private:
 	 */
 	static constexpr float DiscoveryTickSeconds = 0.25f;
 
-	/**
-	 * Upper bound on the extended-PING cadence while any endpoint is v2. A v2
-	 * receiver expires a non-active lease slot 15 s after the last PING
-	 * (stream-session-v2.md "Discovery lease"); a longer PingInterval would let
-	 * the next BEGIN go out under a ticket the device has already dropped.
-	 */
-	static constexpr float V2LeaseRefreshSeconds = 5.0f;
+	/** Stream lease TTL of the receivers (stream-session.md "Lease table"). */
+	static constexpr double LeaseTtlSeconds = 15.0;
 
 	/**
-	 * How often to actually send PING + CONNECT_STATUS: fast until a device
-	 * answers, then PingInterval (capped at V2LeaseRefreshSeconds while a v2
-	 * endpoint is known).
+	 * Unicast extended-PING interval for an endpoint with a matched reply (any
+	 * class): one third of the lease TTL (stream-session.md "[1.x] How SDKs send
+	 * extended PINGs").
+	 */
+	static constexpr double LeaseRefreshSeconds = 5.0;
+
+	/** Retry interval of the extended PING to an endpoint that has not answered one yet. */
+	static constexpr double UnknownLeasePingSeconds = 1.0;
+
+	/** Interval of the next unicast extended PING to an endpoint of this class. */
+	static double ComputeLeasePingIntervalSeconds(EHapbeatStreamEndpointClass Class)
+	{
+		return Class == EHapbeatStreamEndpointClass::Unknown ? UnknownLeasePingSeconds : LeaseRefreshSeconds;
+	}
+
+	/**
+	 * How often to actually send the discovery PING + CONNECT_STATUS: fast until
+	 * a device answers, then PingInterval. Lease refresh has its own unicast
+	 * cadence (PumpLeasePings), so the broadcast no longer needs a cap.
 	 */
 	float KeepAliveIntervalSeconds() const
 	{
-		return ComputeKeepAliveIntervalSeconds(GetAliveDeviceCount(), HasV2StreamEndpoint(), PingInterval);
+		return ComputeKeepAliveIntervalSeconds(GetAliveDeviceCount(), PingInterval);
 	}
-	static float ComputeKeepAliveIntervalSeconds(int32 AliveDeviceCount, bool bHasV2Endpoint, float InPingInterval)
+	static float ComputeKeepAliveIntervalSeconds(int32 AliveDeviceCount, float InPingInterval)
 	{
-		if (AliveDeviceCount <= 0)
-		{
-			return DiscoveryTickSeconds;
-		}
-		return bHasV2Endpoint ? FMath::Min(InPingInterval, V2LeaseRefreshSeconds) : InPingInterval;
+		return AliveDeviceCount <= 0 ? DiscoveryTickSeconds : InPingInterval;
 	}
-
-	/** Any known endpoint classified v2 (usable or not). */
-	bool HasV2StreamEndpoint() const;
 
 	/**
 	 * Send one discovery PING if a socket is open (never opens one). The
 	 * automation seam records the request instead of sending.
 	 */
 	void RequestDiscoveryPing();
+
+	/** Strictly increasing PING wire timestamp (lease adoption is ordered by the echoed one). */
+	int64 NextPingTimestampUs();
+	/** Drop pending PINGs older than one lease TTL. */
+	void PrunePendingPings(int64 NowMonotonicUs);
+
+	/**
+	 * The endpoints this SDK streams to or is about to: a live endpoint whose
+	 * address matches the target of a Deferred / Active source, one with a
+	 * session, or one whose last session ended less than one TTL ago.
+	 */
+	bool IsLeaseTarget(const FString& EndpointKey, double NowSeconds) const;
+	/** Send the unicast extended PINGs that are due (a new lease target at once). */
+	void PumpLeasePings(double NowSeconds);
+	/** Make every lease target due now (reacquisition, re-resolution), then pump. */
+	void RequestLeasePingsNow();
+	/** One unicast extended PING (lease request) to this endpoint. */
+	void SendLeasePing(const FString& EndpointKey);
+
+	/** Ask this route for CAPS if it is new to us or its firmware / boot changed (message-format.md 0x12). */
+	void MaybeRequestCaps(const FString& Ip, int32 InPort, const FString& Firmware, uint64 DeviceBootId);
+	void SendCapsRequest(const FString& RouteKey);
+	/** Retry CAPS_REQ every 500 ms, three times in all; then the device reports none. */
+	void TickCapsRequests(double NowSeconds);
+
+	/** Next generation under this lease, or 0 when exhausted. Thread-safe (stream workers re-splice / restart). */
+	uint32 AllocateGeneration(const FHapbeatStreamLeaseIdentity& Lease);
+
+	/** sdk-multi-stream.md §3: why a source with no endpoint waits. */
+	EHapbeatStreamDeferredReason ComputeDeferredReason(const FGuid& SourceId, double NowSeconds) const;
+	/** Raise OnStreamEndpointChanged for every endpoint whose class or lease state changed. */
+	void NotifyEndpointChanges();
 
 	/** Foreground / reactivation hook: ReacquireStreamOwnership, debounced, on the game thread. */
 	void HandleApplicationForeground();
@@ -627,8 +724,6 @@ private:
 	FDelegateHandle SlateActivationHandle;
 	/** FPlatformTime::Seconds() of the last ReacquireStreamOwnership (debounces duplicate lifecycle events). */
 	double LastReacquireSeconds = -1.0e9;
-	/** Rate limit for the PING sent when an identity update leaves a known device's new key unclassified. */
-	double LastIdentityDiscoveryPingSeconds = -1.0e9;
 
 	/** FPlatformTime::Seconds() of the last keep-alive send (gates the tick above). */
 	double LastKeepAliveSendTime = 0.0;
@@ -754,6 +849,19 @@ private:
 		TWeakObjectPtr<UHapbeatStreamPlayback> Playback;
 		TSet<FString> EndpointKeys;
 		TSet<FString> CompletedEndpointKeys;
+		/**
+		 * Endpoint key -> cursor (source frames) to continue from when this device's
+		 * next session starts (a lease / ticket / class change retired the previous
+		 * one; stream-session.md Sender requirements 8). Consumed when used.
+		 */
+		TMap<FString, double> CarriedCursors;
+		/**
+		 * Endpoints whose session STOP_ALL ended (ERROR STREAM_STOPPED): this
+		 * Playback never rejoins them (sdk-multi-stream.md §6.13).
+		 */
+		TSet<FString> StoppedEndpointKeys;
+		/** Registered by the application since the last reconcile: may re-splice a running session (§6.14). */
+		bool bNew = true;
 	};
 
 	struct FStreamEndpoint
@@ -762,8 +870,18 @@ private:
 		int32 Port = 0;
 		FString Address;
 		double LastPongSeconds = 0.0;
-		/** Unknown until a matched reply to this SDK's extended PING classifies it (v2 or legacy). */
+		/** Unknown until a matched reply to this SDK's extended PING classifies it (Stream Gen 2 or 1). */
 		FHapbeatStreamEndpointLeaseState LeaseState;
+		/** When the next unicast extended PING is due (FPlatformTime::Seconds()). */
+		double NextLeasePingSeconds = 0.0;
+		/** When a matched reply last confirmed the class / lease (FPlatformTime::Seconds()). */
+		double LeaseConfirmedSeconds = -1.0e9;
+		/** Was a lease target at the last pump (a new target is asked at once). */
+		bool bLeaseTarget = false;
+		/** When the last session to it ended; keeps the lease refreshed for one TTL after. */
+		double LastSessionEndedSeconds = -1.0e9;
+		/** STREAM_LEASE_INVALID: the next matched reply with the same lease begins a new generation. */
+		bool bRestartOnLeaseReply = false;
 	};
 
 	struct FStreamSession
@@ -773,9 +891,41 @@ private:
 		TSet<FGuid> SourceIds;
 		/** Immutable for the session: the END goes out in this format even after a class change. */
 		EHapbeatStreamWireFormat Format = EHapbeatStreamWireFormat::LegacyV1;
-		/** SessionV2 only. */
+		/**
+		 * SessionV2 only: the identity the session began with. The worker may move
+		 * it to later generations of the same lease (Runnable->GetCurrentIdentity()).
+		 */
 		FHapbeatStreamSessionIdentity Identity;
 	};
+
+	/** CAPS exchange state per device route "ip:port" (message-format.md 0x12 / 0x13). */
+	struct FCapsState
+	{
+		enum class EStatus : uint8 { Requesting, Received, None };
+		EStatus Status = EStatus::Requesting;
+		FString Ip;
+		int32 Port = 0;
+		/** The firmware_version / boot the request was made for; a change asks again. */
+		FString Firmware;
+		uint64 DeviceBootId = 0;
+		/** seq of every CAPS_REQ sent in this round; a CAPS must echo one of them. */
+		TArray<uint16> RequestSeqs;
+		int32 RequestsSent = 0;
+		double NextRequestSeconds = 0.0;
+		FHapbeatProtocol::FCapsInfo Info;
+	};
+
+	/**
+	 * Old key the PONG of (Ip, Port, Address) moves from, or empty: the same
+	 * route under another address (the device's address changed), else exactly
+	 * one expired route / address match.
+	 */
+	FString FindMigrationSourceKey(const FString& Ip, int32 InPort, const FString& Address, double NowSeconds) const;
+	FHapbeatStreamEndpointInfo MakeEndpointInfo(const FStreamEndpoint& Endpoint) const;
+	/** CAPS haptic_channels is 1 for this route: mix without pan (sdk-multi-stream.md §6.15). */
+	bool IsSingleMotorRoute(const FString& Ip, int32 InPort) const;
+	/** Bookkeeping when an endpoint's session goes away: last identity (for ERROR) and end time (lease refresh). */
+	void RecordEndedSession(const FString& EndpointKey, const FStreamSession& Session);
 
 	/**
 	 * The endpoint state a PONG from (Ip, Port, Address) will be registered into:
@@ -785,17 +935,34 @@ private:
 	const FStreamEndpoint* FindEndpointForRegistration(
 		const FString& Ip, int32 InPort, const FString& Address, double NowSeconds) const;
 
-	/** Sources may be assigned to this endpoint: Legacy, or a usable v2 lease for the current incarnation. */
+	/** Sources may be assigned to this endpoint: Stream Gen 1, or a usable Stream Gen 2 lease for the current incarnation. */
 	bool IsEndpointStreamable(const FStreamEndpoint& Endpoint) const;
+	/** A Stream Gen 2 lease was confirmed within one TTL, or its session is running. */
+	bool IsLeaseConfirmed(const FStreamEndpoint& Endpoint) const;
 
-	/** The running session still matches its endpoint's class (and, for v2, its lease). */
+	/** The running session still matches its endpoint's class (and, for Stream Gen 2, its lease). */
 	bool IsSessionCurrentForEndpoint(const FStreamSession& Session, const FStreamEndpoint& Endpoint) const;
 
 	/**
 	 * Next generation per lease (Unity HapbeatEndpointStreamMixer._nextGenerationByLease).
 	 * Never reset while the subsystem lives, so a generation is never reused under a lease.
+	 * Guarded by GenerationLock: stream workers allocate too (re-splice, own gap).
 	 */
 	TMap<FHapbeatStreamLeaseIdentity, uint32> NextGenerationByLease;
+	FCriticalSection GenerationLock;
+
+	/** Endpoint key -> identity of the session that ended there last (an ERROR may still name it). */
+	TMap<FString, FHapbeatStreamSessionIdentity> LastEndedIdentityByEndpoint;
+	/** Route "ip:port" -> CAPS exchange. */
+	TMap<FString, FCapsState> CapsByRoute;
+	/** versioning.md §3.3: the "newer device major" warning is given once per subsystem. */
+	bool bWarnedNewerDeviceMajor = false;
+	/** Endpoint keys already warned about a matched reply whose tail was ignored. */
+	TSet<FString> WarnedIgnoredTailEndpoints;
+	/** "ip:port|code" of ERRORs already logged (one log line per code and endpoint). */
+	TSet<FString> LoggedErrorKeys;
+	/** Endpoint key -> class / lease state last published through OnStreamEndpointChanged. */
+	TMap<FString, TPair<EHapbeatStreamClass, EHapbeatStreamLeaseState>> PublishedEndpointStates;
 
 	/** PONG-confirmed exact endpoints; STREAM packets are never broadcast. */
 	TMap<FString, FStreamEndpoint> StreamEndpoints;
@@ -804,9 +971,9 @@ private:
 	/** One runnable/thread per exact PONG endpoint. */
 	TMap<FString, FStreamSession> StreamSessions;
 	/**
-	 * Last LEGACY END time per endpoint / route+address; enforces the 300 ms
-	 * END->BEGIN guard for pre-v2 receivers only. v2 sessions never record here
-	 * and never wait (stream-session-v2.md "Legacy receiver fallback (SDK)").
+	 * Last Stream Gen 1 END time per endpoint / route+address; enforces the 300 ms
+	 * END->BEGIN guard for Stream Gen 1 receivers only. Stream Gen 2 sessions never
+	 * record here and never wait (stream-session.md "Legacy receiver fallback (SDK)").
 	 */
 	TMap<FString, double> StreamSessionEndedAt;
 	TMap<FString, double> StreamRouteEndedAt;
@@ -832,9 +999,21 @@ private:
 	TMap<FString, FString> DeviceAddresses;
 
 #if WITH_DEV_AUTOMATION_TESTS
-	/** Test-only discovery seam: records a request without opening or sending on a UDP socket. */
+	/**
+	 * Test-only network seam: discovery PINGs are counted, lease PINGs and
+	 * CAPS_REQs recorded (with their pending request), and nothing is sent.
+	 */
 	bool bSuppressStreamDiscoveryForAutomationTest = false;
 	int32 StreamDiscoveryRequestCount = 0;
+	struct FAutomationUnicastRecord
+	{
+		/** Endpoint key (lease PING) or route "ip:port" (CAPS_REQ). */
+		FString Key;
+		uint16 Seq = 0;
+		int64 TimestampUs = 0;
+	};
+	TArray<FAutomationUnicastRecord> LeasePingsForAutomationTest;
+	TArray<FAutomationUnicastRecord> CapsRequestsForAutomationTest;
 	/**
 	 * Test-only session seam: when bound, StartEndpointSession builds its runnable
 	 * here (a recording runner whose SendRaw never touches a socket) and no socket

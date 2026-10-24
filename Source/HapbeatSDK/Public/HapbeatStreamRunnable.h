@@ -50,6 +50,13 @@ class FInternetAddr;
  *     sends it once; Abandon suppresses it on every stop branch because route
  *     retirement must never send END across a migrated/expired path. Run()
  *     publishes bFinished only after that decision is complete.
+ *   - Game-thread requests that the worker carries out at its next packet
+ *     boundary are atomic flags: Retire (no more BEGIN / DATA under this
+ *     identity, END still allowed), RequestBeginResend (STREAM_NOT_STARTED) and
+ *     RequestNewGeneration (STREAM_TIMED_OUT / STREAM_LEASE_INVALID). The worker
+ *     may move the session to a new generation of its lease on its own (own
+ *     send gap, re-splice); GetCurrentIdentity / GetPreviousIdentity read the
+ *     result under IdentityMutex so the game thread can match ERROR envelopes.
  */
 class HAPBEATSDK_API FHapbeatStreamRunnable : public FRunnable
 {
@@ -66,8 +73,8 @@ public:
 	 * @param InPort               UDP port for the exact endpoint.
 	 * @param InUnicastTargetIps   Exact PONG endpoint IP (plain string), captured for this session.
 	 * @param InSendAheadSeconds   FHapbeatStreamer pacing lead (UHapbeatConfig::StreamSendAheadSeconds).
-	 * @param InWireFormat         Immutable per session: LegacyV1 for pre-v2 firmware, SessionV2 otherwise.
-	 * @param InIdentity           SessionV2 only: the envelope stamped on every BEGIN/DATA/END of this session.
+	 * @param InWireFormat         Immutable per session: LegacyV1 (Stream Gen 1) for firmware before 0.5.0, SessionV2 (Stream Gen 2) otherwise.
+	 * @param InIdentity           SessionV2 only: the envelope of the session's first generation.
 	 */
 	FHapbeatStreamRunnable(
 		const FGuid& InSourceId,
@@ -86,7 +93,43 @@ public:
 	virtual ~FHapbeatStreamRunnable() override;
 
 	EHapbeatStreamWireFormat GetWireFormat() const { return WireFormat; }
+	/** Identity the session began with (its first generation). */
 	const FHapbeatStreamSessionIdentity& GetSessionIdentity() const { return SessionIdentity; }
+	/** Stream Gen 2: the generation currently on the wire (thread-safe). */
+	FHapbeatStreamSessionIdentity GetCurrentIdentity() const;
+	/** Stream Gen 2: the generation the session ended last, or invalid (thread-safe). */
+	FHapbeatStreamSessionIdentity GetPreviousIdentity() const;
+
+	/**
+	 * Game thread, before the thread starts: how the session gets the next
+	 * generation of its lease (0 = none left). Without it the session cannot
+	 * move to a new generation and ends instead.
+	 */
+	void SetGenerationAllocator(TFunction<uint32()> InAllocateGeneration);
+	/** Game thread, before the thread starts: where a queued source begins (a carried cursor). */
+	void SetSourceStartFrame(const FGuid& SourceId, double StartFrame);
+	/** Target of later (repeated) BEGINs: the endpoint's current device address. */
+	void UpdateTarget(const FString& InTarget);
+	/** Mix without pan for a receiver with one motor (sdk-multi-stream.md §6.15). */
+	void SetIgnorePan(bool bInIgnorePan);
+
+	/**
+	 * This session's identity was retired (lease / class / boot change, superseded):
+	 * from the next packet on, no BEGIN or DATA goes out under it; END still does.
+	 * Closes the window until the game thread stops the runnable.
+	 */
+	void Retire() { bRetired.store(true, std::memory_order_release); }
+	bool IsRetired() const { return bRetired.load(std::memory_order_acquire); }
+	/** Send the identical BEGIN again before the next DATA (STREAM_NOT_STARTED). */
+	void RequestBeginResend() { bResendBeginRequested.store(true, std::memory_order_release); }
+	/** END the current generation and BEGIN the next one, keeping the cursors (Stream Gen 2 only). */
+	void RequestNewGeneration() { bNewGenerationRequested.store(true, std::memory_order_release); }
+
+	/**
+	 * After the thread has been joined: the cursor of every source this session
+	 * still had, in source frames (stream-session.md Sender requirements 8).
+	 */
+	void GetFinalCursors(TMap<FGuid, double>& OutCursors) const;
 
 	// FRunnable
 	virtual bool Init() override;
@@ -105,11 +148,17 @@ public:
 	/**
 	 * Queue a compatible source from the game thread. Returns false once the
 	 * worker has atomically closed admission for natural session completion.
+	 *
+	 * @param StartFrame  Cursor to start from (a cursor carried from this device's previous session), 0 otherwise.
+	 * @param bNewSource  The application just started this source: it may re-splice a
+	 *                    running Stream Gen 2 session (sdk-multi-stream.md §6.14).
 	 */
 	bool AddSource(
 		const FGuid& InSourceId,
 		TArray<uint8>&& InPcm16,
-		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror);
+		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror,
+		double StartFrame = 0.0,
+		bool bNewSource = false);
 	/** Detach one source cursor from this endpoint without stopping its Playback. */
 	void DetachSource(const FGuid& SourceId);
 
@@ -128,6 +177,9 @@ private:
 		TArray<uint8> Pcm16;
 		FGuid SourceId;
 		TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror;
+		double StartFrame = 0.0;
+		/** FPlatformTime::Seconds() of the request for a new source, < 0 otherwise. */
+		double RequestedAtSeconds = -1.0;
 
 		FPendingSource(const FGuid& InSourceId, TArray<uint8>&& InPcm16,
 			TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InMirror)
@@ -138,6 +190,10 @@ private:
 
 	/** Worker-thread: drain game-thread additions, or close admission if the session is empty. */
 	bool DrainPendingSourcesOrClose();
+	/** Worker-thread, under StreamerMutex: publish the streamer's identities for the game thread. */
+	void PublishIdentity();
+	/** Packet boundary of the streamer: drops BEGIN / DATA once retired, then SendRaw. */
+	void SendFromStreamer(const TArray<uint8>& Packet);
 
 	// --- construction-time immutable inputs (never written after the ctor) ---
 	FSocket* Socket = nullptr;
@@ -159,15 +215,25 @@ private:
 	std::atomic<bool> bAbandonRequested{false};
 	/** Set by Run() as its last statement; polled by the game-thread watchdog. */
 	std::atomic<bool> bFinished{false};
+	std::atomic<bool> bRetired{false};
+	std::atomic<bool> bResendBeginRequested{false};
+	std::atomic<bool> bNewGenerationRequested{false};
+	std::atomic<bool> bIgnorePan{false};
 
 	// Session compatibility values. Immutable after construction.
 	TFunction<uint16()> NextSeqFn;
 	int32 SessionSampleRate = 0;
 	int32 SessionChannels = 0;
+	/** Target of the first BEGIN; later ones follow UpdateTarget (under StreamerMutex). */
 	FString SessionTarget;
 	TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> InitialMirror;
 	EHapbeatStreamWireFormat WireFormat = EHapbeatStreamWireFormat::LegacyV1;
 	FHapbeatStreamSessionIdentity SessionIdentity;
+	TFunction<uint32()> AllocateGenerationFn;
+
+	mutable FCriticalSection IdentityMutex;
+	FHapbeatStreamSessionIdentity PublishedIdentity;
+	FHapbeatStreamSessionIdentity PublishedPreviousIdentity;
 
 	/**
 	 * The only cross-thread structural state. AddSource and the worker's final

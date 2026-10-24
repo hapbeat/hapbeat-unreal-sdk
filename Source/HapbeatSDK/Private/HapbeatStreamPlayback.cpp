@@ -60,12 +60,12 @@ void UHapbeatStreamPlayback::Stop()
 	GetMirror()->bStopped.store(true, std::memory_order_relaxed);
 }
 
-void UHapbeatStreamPlayback::SetDeferredNoEndpoint()
+void UHapbeatStreamPlayback::SetDeferred(EHapbeatStreamDeferredReason Reason)
 {
 	if (!IsStopped())
 	{
 		Status = EHapbeatStreamPlaybackStatus::Deferred;
-		DeferredReason = EHapbeatStreamDeferredReason::NoResolvedEndpoint;
+		DeferredReason = Reason;
 	}
 }
 

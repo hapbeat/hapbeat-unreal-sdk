@@ -160,6 +160,13 @@ struct HAPBEATSDK_API FHapbeatEventEntry
 	 */
 	float GetEffectiveGain() const
 	{
+		// A non-finite cache (NaN / Inf) is not the -1 "unresolved" sentinel --
+		// and a NaN would fail the < 0 test either way -- so keep it in the
+		// product, which ClampSendGain then sends as 0.
+		if (!FMath::IsFinite(CachedManifestClipGain))
+		{
+			return Gain * CachedManifestClipGain;
+		}
 		return CachedManifestClipGain < 0.0f
 			? Gain
 			: Gain * CachedManifestClipGain;
@@ -171,10 +178,15 @@ struct HAPBEATSDK_API FHapbeatEventEntry
 	 * clamp(clip_gain x app_gain, 0, 1) (contracts kit-format.md, the strength
 	 * formula). Only this final product is capped: the parts of app_gain (entry
 	 * Gain, binding output, call-site gain) are never limited to 0..1, so a
-	 * clip_gain of 0.5 reaches 1.0 at an app_gain of 2.
+	 * clip_gain of 0.5 reaches 1.0 at an app_gain of 2. A product that is not
+	 * finite (NaN, +/-Inf) sends 0 (contracts kit-format.md, the value sent).
 	 */
 	static float ClampSendGain(float ClipGainTimesAppGain)
 	{
+		if (!FMath::IsFinite(ClipGainTimesAppGain))
+		{
+			return 0.0f;
+		}
 		return FMath::Clamp(ClipGainTimesAppGain, 0.0f, 1.0f);
 	}
 

@@ -4,9 +4,14 @@
 
 #include "Misc/AutomationTest.h"
 
+#include <limits>
+
 #if WITH_DEV_AUTOMATION_TESTS
 namespace
 {
+	const float NaN = std::numeric_limits<float>::quiet_NaN();
+	const float Inf = std::numeric_limits<float>::infinity();
+
 	/** An entry with the given Gain and baked clip gain (negative = unresolved / no Kit). */
 	FHapbeatEventEntry MakeEntry(float Gain, float ClipGain)
 	{
@@ -44,6 +49,10 @@ bool FHapbeatSendGainTest::RunTest(const FString& Parameters)
 		{TEXT("no Kit (clip_gain unknown) x gain 1.5"), 1.0f, -1.0f, 1.5f, 1.0f},
 		{TEXT("entry gain 1.5 x call gain 0.5 x clip_gain 0.8"), 1.5f, 0.8f, 0.5f, 0.6f},
 		{TEXT("negative call gain floors at 0"), 1.0f, 0.5f, -1.0f, 0.0f},
+		{TEXT("NaN call gain sends 0"), 1.0f, 0.5f, NaN, 0.0f},
+		{TEXT("+Inf call gain sends 0"), 1.0f, 0.5f, Inf, 0.0f},
+		{TEXT("-Inf call gain sends 0"), 1.0f, 0.5f, -Inf, 0.0f},
+		{TEXT("NaN clip_gain sends 0"), 1.0f, NaN, 1.0f, 0.0f},
 	};
 
 	for (const FCase& Case : Cases)
@@ -73,6 +82,9 @@ bool FHapbeatSendGainTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("raw gain 1.5 caps at 1"), FHapbeatEventEntry::ClampSendGain(1.5f), 1.0f);
 	TestEqual(TEXT("raw gain 0.25 passes"), FHapbeatEventEntry::ClampSendGain(0.25f), 0.25f);
 	TestEqual(TEXT("raw negative gain floors at 0"), FHapbeatEventEntry::ClampSendGain(-0.5f), 0.0f);
+	TestEqual(TEXT("raw NaN sends 0"), FHapbeatEventEntry::ClampSendGain(NaN), 0.0f);
+	TestEqual(TEXT("raw +Inf sends 0"), FHapbeatEventEntry::ClampSendGain(Inf), 0.0f);
+	TestEqual(TEXT("raw -Inf sends 0"), FHapbeatEventEntry::ClampSendGain(-Inf), 0.0f);
 	return true;
 }
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -30,7 +30,7 @@ TMap<FHapbeatManifestEventKey, float> FHapbeatManifestClipGainBaker::ScanProject
 	}
 
 	// Scan *.json and filter by "manifest" in the filename — the same leniency as
-	// Unity (HapbeatEventMapAutoIntensityRefresher.IsManifestPath), so a bare
+	// Unity (HapbeatEventMapAutoClipGainRefresher.IsManifestPath), so a bare
 	// "manifest.json" (kit-format.md §3 diagram) is found, not only
 	// "<kit>-manifest.json".
 	TArray<FString> ManifestFiles;

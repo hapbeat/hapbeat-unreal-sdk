@@ -191,15 +191,15 @@ void FHapbeatEditorTools::ExportEventMapToMarkdown(UHapbeatEventMap* Map)
 
 	FString Out;
 	Out += FString::Printf(TEXT("# %s\n\n"), *Map->GetName());
-	Out += TEXT("| # | Name | Event Id | Mode | Gain | Intensity | Effective | Pan | Target | Loop | Notes |\n");
+	Out += TEXT("| # | Name | Event Id | Mode | Gain | Clip Gain | Effective | Pan | Target | Loop | Notes |\n");
 	Out += TEXT("|---|---|---|---|---|---|---|---|---|---|---|\n");
 
 	int32 Index = 0;
 	for (const FHapbeatEventEntry& Entry : Map->Entries)
 	{
-		const FString Intensity = Entry.CachedManifestIntensity < 0.0f
+		const FString ClipGain = Entry.CachedManifestClipGain < 0.0f
 			? TEXT("unresolved")
-			: FString::SanitizeFloat(Entry.CachedManifestIntensity);
+			: FString::SanitizeFloat(Entry.CachedManifestClipGain);
 
 		// Pipes inside a cell would break the table.
 		FString Notes = Entry.Notes.Replace(TEXT("|"), TEXT("\\|"));
@@ -211,7 +211,7 @@ void FHapbeatEditorTools::ExportEventMapToMarkdown(UHapbeatEventMap* Map)
 			*Entry.GetEventId(),
 			Entry.Mode == EHapticMode::StreamClip ? TEXT("StreamClip") : TEXT("Command"),
 			*FString::SanitizeFloat(Entry.Gain),
-			*Intensity,
+			*ClipGain,
 			*FString::SanitizeFloat(Entry.GetEffectiveGain()),
 			*FString::SanitizeFloat(Entry.Pan),
 			Entry.Target.IsEmpty() ? TEXT("(broadcast)") : *Entry.Target,

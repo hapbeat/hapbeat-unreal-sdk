@@ -225,7 +225,7 @@ static UHapbeatClip* CreateFromWavBytes(UObject* Outer, const TArray<uint8>& Wav
 
 RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutError、CreateFromWavBytes は失敗時 nullptr を返します。生成 Clip は transient です。`Pcm16` は little-endian / interleaved の全チャネルデータ、`NumSamples()` は全 sample 数、`NumFrames()` はチャネル数で割った frame 数です。
 
-`FHapbeatEventEntry::GetEventId()` は Category と EventName を結合し、`GetEffectiveGain()` は保存された manifest intensity を Gain に掛けます（intensity 未解決なら Gain を使用）。`UHapbeatStreamPlayback::GetStereoChannelGains(float& OutL, float& OutR)` は Pan から左右係数を返します。中央は左右とも 1、左端は 1/0、右端は 0/1 の linear balance です。
+`FHapbeatEventEntry::GetEventId()` は Category と EventName を結合し、`GetEffectiveGain()` は保存された manifest clip gain を Gain に掛けます（clip gain 未解決なら Gain を使用）。`UHapbeatStreamPlayback::GetStereoChannelGains(float& OutL, float& OutR)` は Pan から左右係数を返します。中央は左右とも 1、左端は 1/0、右端は 0/1 の linear balance です。
 
 ## 列挙型と値の変換
 
@@ -662,10 +662,10 @@ RIFF/WAVE の PCM16 を読み込みます。ParseWav は失敗時 false と OutE
 
   Blueprint 読み書き可。Editor で設定可能。
 
-- `CachedManifestIntensity`（プロパティ）
+- `CachedManifestClipGain`（プロパティ）
 
   ```cpp
-  float CachedManifestIntensity = -1.0f;
+  float CachedManifestClipGain = -1.0f;
   ```
 
   Blueprint 読取専用。

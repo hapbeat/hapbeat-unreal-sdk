@@ -61,7 +61,7 @@ public:
 	 * nullptr for EHapticMode::Command.
 	 */
 	static FHapbeatEventEntry MakeEntry(EHapticMode Mode, const FString& Category, const FString& EventName,
-		float Gain, bool bLoop, float CachedIntensity, UHapbeatClip* Clip = nullptr,
+		float Gain, bool bLoop, float CachedClipGain, UHapbeatClip* Clip = nullptr,
 		const FString& DisplayName = FString());
 
 	/**

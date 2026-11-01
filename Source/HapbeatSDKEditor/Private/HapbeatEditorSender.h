@@ -91,10 +91,11 @@ public:
 		FSocket* InSocket, float SendAheadSeconds);
 
 	/**
-	 * Send a PLAY for EventId at Gain (0..1 nominal; already gain x intensity
-	 * composed by the caller). Immediate (target_time = 0). No-op (warns) if
-	 * EventId is empty. Pan is the entry's authored balance (-1..+1); a device on
-	 * firmware older than DEC-055 ignores it and plays centred.
+	 * Send a PLAY for EventId at Gain (already gain x clip gain composed by the
+	 * caller; capped here to clamp(Gain, 0, 1)). Immediate (target_time = 0).
+	 * No-op (warns) if EventId is empty. Pan is the entry's authored balance
+	 * (-1..+1); a device on firmware older than DEC-055 ignores it and plays
+	 * centred.
 	 */
 	static void SendPlay(const FString& EventId, float Gain, const FString& Target = TEXT(""), float Pan = 0.0f);
 

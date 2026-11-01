@@ -270,7 +270,7 @@ void UHapbeatSubsystem::Play(const FString& EventId, float Gain, const FString& 
 {
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
 	SendCommandPacket(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolvedTarget, 0,
-		FMath::Clamp(Gain, 0.0f, 1.0f), FMath::Clamp(Pan, -1.0f, 1.0f)), ResolvedTarget);
+		FHapbeatEventEntry::ClampSendGain(Gain), FMath::Clamp(Pan, -1.0f, 1.0f)), ResolvedTarget);
 }
 
 void UHapbeatSubsystem::Stop(const FString& EventId, const FString& Target)
@@ -297,7 +297,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		return nullptr;
 	}
 
-	// Author intent. GetEffectiveGain() already folds in the manifest intensity,
+	// Author intent. GetEffectiveGain() already folds in the manifest clip gain,
 	// because the device plays req.gain verbatim and never reads the manifest
 	// itself. For a Stream Clip this is the BASELINE and GainMultiplier stays
 	// separate as the initial modulator (see the header); for a Command there is
@@ -377,7 +377,7 @@ UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGui
 		return nullptr;
 	}
 
-	const float Gain = Baseline * GainMultiplier;
+	const float Gain = Entry.GetSendGain(GainMultiplier);
 
 	if (bDeferred)
 	{

@@ -124,14 +124,14 @@ void UHapbeatTriggerComponent::DispatchEntry(UHapbeatSubsystem* Subsystem, const
 		}
 
 		// Device is a pure executor (plays req.gain verbatim, never reads the
-		// manifest), so the SDK pre-multiplies intensity here. GetEffectiveGain()
-		// = entry.Gain x CachedManifestIntensity (or plain Gain when unresolved).
-		if (Entry.CachedManifestIntensity < 0.0f && !bWarnedMissingIntensity)
+		// manifest), so the SDK pre-multiplies the clip gain here. GetEffectiveGain()
+		// = entry.Gain x CachedManifestClipGain (or plain Gain when unresolved).
+		if (Entry.CachedManifestClipGain < 0.0f && !bWarnedMissingClipGain)
 		{
 			UE_LOG(LogHapbeat, Warning,
-				TEXT("Command entry on %s has no cached manifest intensity; firing at plain gain=%.2f (intensity factor skipped). Run 'Refresh Intensities' on the EventMap and confirm the Kit is deployed."),
+				TEXT("Command entry on %s has no cached manifest clip gain; firing at plain gain=%.2f (clip gain factor skipped). Run 'Refresh Clip Gains' on the EventMap and confirm the Kit is deployed."),
 				*GetNameSafe(GetOwner()), Entry.Gain);
-			bWarnedMissingIntensity = true;
+			bWarnedMissingClipGain = true;
 		}
 
 		if (bVerboseLog)
@@ -164,15 +164,15 @@ void UHapbeatTriggerComponent::DispatchEntry(UHapbeatSubsystem* Subsystem, const
 			return;
 		}
 
-		if (Entry.CachedManifestIntensity < 0.0f && !bWarnedMissingIntensity)
+		if (Entry.CachedManifestClipGain < 0.0f && !bWarnedMissingClipGain)
 		{
 			UE_LOG(LogHapbeat, Warning,
-				TEXT("StreamClip entry on %s has no cached manifest intensity; baseline uses plain gain=%.2f (intensity factor skipped). Run 'Refresh Intensities' on the EventMap."),
+				TEXT("StreamClip entry on %s has no cached manifest clip gain; baseline uses plain gain=%.2f (clip gain factor skipped). Run 'Refresh Clip Gains' on the EventMap."),
 				*GetNameSafe(GetOwner()), Entry.Gain);
-			bWarnedMissingIntensity = true;
+			bWarnedMissingClipGain = true;
 		}
 
-		// baseline = author intent (entry.gain x manifest.intensity), frozen at
+		// baseline = author intent (entry.gain x manifest.clip_gain), frozen at
 		// stream start. The per-trigger multiplier x call multiplier is the
 		// INITIAL MODULATOR (not baked into baseline) so a ParameterBinding can
 		// modulate further: playback.Gain = baseline x modulator. PlayEntry keeps

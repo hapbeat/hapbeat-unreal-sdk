@@ -495,22 +495,22 @@ UHapbeatEventMap* AHapbeatShowcaseZ3FishingActor::BuildFallbackEventMap()
 	HookReleaseClip = FHapbeatSampleLibrary::LoadSampleClip(this,
 		TEXT("Showcase/Kit/showcase-kit/stream-clips/z3_hook_release.wav"));
 
-	// Gains + manifest intensities verbatim from ShowcaseEventMap.md /
+	// Gains + manifest clip gains verbatim from ShowcaseEventMap.md /
 	// showcase-kit-manifest.json: all 3 are StreamClip mode, gain (authored) =
-	// 1.00; intensities 0.60 / 0.50 / 0.55 respectively. z3_hook_loop is the only
+	// 1.00; clip_gains 0.60 / 0.50 / 0.55 respectively. z3_hook_loop is the only
 	// one with a Parameter Binding (VelocityMagnitude -> StreamGain, input
 	// 0..3 m/s, Linear, output 0..1.5) -- that binding lives on the shark and is
 	// configured there, so it applies with the shipped asset too.
 	Fallback->Entries.Reset(3);
 	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_start"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.60f, HookStartClip, TEXT("Z3_hook_start")));
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedClipGain=*/0.60f, HookStartClip, TEXT("Z3_hook_start")));
 	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_loop"),
-		/*Gain=*/1.0f, /*bLoop=*/true, /*CachedIntensity=*/0.50f, HookLoopClip, TEXT("Z3_hook_loop")));
+		/*Gain=*/1.0f, /*bLoop=*/true, /*CachedClipGain=*/0.50f, HookLoopClip, TEXT("Z3_hook_loop")));
 	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z3_hook_release"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.55f, HookReleaseClip, TEXT("Z3_hook_release")));
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedClipGain=*/0.55f, HookReleaseClip, TEXT("Z3_hook_release")));
 	return Fallback;
 }
 

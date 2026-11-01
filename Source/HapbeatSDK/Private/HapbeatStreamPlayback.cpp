@@ -2,12 +2,13 @@
 #include "HapbeatStreamPlayback.h"
 
 #include "GameFramework/Actor.h" // AActor: the playback's origin (SetOwnerActor)
+#include "HapbeatEventEntry.h"     // FHapbeatEventEntry::ClampSendGain
 
 void UHapbeatStreamPlayback::Init(float Baseline, float InitialModulator)
 {
 	Id = FGuid::NewGuid();
 	BaselineGain = Baseline;
-	Gain = FMath::Clamp(Baseline * InitialModulator, 0.0f, 2.0f);
+	Gain = FHapbeatEventEntry::ClampSendGain(Baseline * InitialModulator);
 	Pan = 0.0f;
 	PlaybackRate = 1.0f;
 	bLoop = false;
@@ -29,8 +30,9 @@ void UHapbeatStreamPlayback::Init(float Baseline, float InitialModulator)
 void UHapbeatStreamPlayback::ApplyGainModulation(float Modulator)
 {
 	// Single source of truth for the gain formula (imperative + declarative
-	// callers both route here). Result clamped to the [0, 2] boost ceiling.
-	Gain = FMath::Clamp(BaselineGain * Modulator, 0.0f, 2.0f);
+	// callers both route here). Only the final product is capped, to [0, 1]
+	// (clamp(clip_gain x app_gain, 0, 1)); the modulator itself is not.
+	Gain = FHapbeatEventEntry::ClampSendGain(BaselineGain * Modulator);
 	GetMirror()->Gain.store(Gain, std::memory_order_relaxed);
 }
 

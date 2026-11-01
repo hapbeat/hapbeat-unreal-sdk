@@ -201,7 +201,7 @@ public:
 	 * default 0 s nothing is scheduled and this behaves exactly as before.
 	 *
 	 * Gain semantics for a Stream Clip entry: the authored gain
-	 * (entry.Gain x manifest intensity) is the BASELINE, frozen at stream start,
+	 * (entry.Gain x manifest clip gain) is the BASELINE, frozen at stream start,
 	 * and GainMultiplier is the INITIAL MODULATOR — not baked into the baseline.
 	 * The handle starts at baseline x multiplier, and a ParameterBinding (or
 	 * SetGainMultiplier) replaces the modulator afterwards via
@@ -290,7 +290,7 @@ public:
 	 * (GC / render / physics) cannot starve the device's ring buffer.
 	 *
 	 * @param Clip         The PCM16 clip (mono or stereo). Null / empty => warn + nullptr.
-	 * @param BaselineGain Frozen author gain (entry.gain x manifest.intensity). 0..2.
+	 * @param BaselineGain Frozen author gain (entry.gain x manifest.clip_gain). 0..2.
 	 * @param InitialGain  Initial modulator; Gain starts at Baseline x InitialGain.
 	 * @param Target       Address filter ("" = broadcast).
 	 * @param bLoop        Loop the clip until StopStream() / handle Stop().

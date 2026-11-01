@@ -1,6 +1,6 @@
 # EM_BasicExample
 
-| # | Name | Event Id | Mode | Gain | Intensity | Effective | Pan | Target | Loop | Notes |
+| # | Name | Event Id | Mode | Gain | Clip Gain | Effective | Pan | Target | Loop | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 0 | demo_stream_sine_100hz | basic-exam-kit.sine_100hz_1s | StreamClip | 1.0 | 0.5 | 0.5 | 0.0 | (broadcast) |  |  |
 | 1 | demo_stream_loop_100hz | basic-exam-kit.sine_100hz_1s | StreamClip | 1.0 | 0.5 | 0.5 | 0.0 | (broadcast) | yes |  |

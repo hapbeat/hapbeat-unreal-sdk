@@ -76,17 +76,17 @@ def load_or_create(package_path, asset_name, asset_class, factory):
     return asset
 
 
-def manifest_intensities(kit_rel):
+def manifest_clip_gains(kit_rel):
     """
-    (event id, mode) -> parameters.intensity, straight from the Kit manifest.
+    (event id, mode) -> parameters.clip_gain, straight from the Kit manifest.
 
-    Mirrors what the editor's Refresh Intensities does
-    (FHapbeatManifestIntensityBaker::ParseBucket): "events" is Command,
+    Mirrors what the editor's Refresh Clip Gains does
+    (FHapbeatManifestClipGainBaker::ParseBucket): "events" is Command,
     "stream_events" is Stream Clip, keys are already full event ids, and a
-    missing intensity defaults to 1.0. Reading the manifest here rather than
+    missing clip_gain defaults to 1.0. Reading the manifest here rather than
     hardcoding a constant is what stops a generated asset from going stale the
     moment somebody presses Refresh on it -- the Showcase Kit alone authors
-    eight different intensities between 0.14 and 0.60.
+    eight different clip_gains between 0.14 and 0.60.
 
     The filename match is the baker's lenient one (any *.json with "manifest"
     in the name), so a bare manifest.json is found too.
@@ -104,16 +104,16 @@ def manifest_intensities(kit_rel):
         for bucket, mode in (('events', 'COMMAND'), ('stream_events', 'STREAM_CLIP')):
             for event_id, body in (root.get(bucket) or {}).items():
                 params = (body or {}).get('parameters') or {}
-                table[(event_id, mode)] = float(params.get('intensity', 1.0))
+                table[(event_id, mode)] = float(params.get('clip_gain', 1.0))
     return table
 
 
-def intensity_of(table, mode_name, category, event_name):
+def clip_gain_of(table, mode_name, category, event_name):
     """
     Fail loudly on a manifest/entry mismatch instead of baking a wrong value.
 
     An entry the manifest does not carry is exactly what makes Refresh
-    Intensities report "unresolved" later, so it is better caught here, while
+    Clip Gains report "unresolved" later, so it is better caught here, while
     the asset is being written, than shipped.
     """
     key = ('{}.{}'.format(category, event_name), mode_name)
@@ -184,7 +184,7 @@ def make_clip(package, asset_name, wav_rel_path):
 
 def build_basic_example():
     pkg = PLUGIN_CONTENT + '/BasicExample'
-    intensities = manifest_intensities(BASIC_KIT)
+    clip_gains = manifest_clip_gains(BASIC_KIT)
     clip = make_clip(pkg, 'HC_sine_100hz_1s', BASIC_KIT + '/stream-clips/sine_100hz_1s.wav')
 
     event_map = load_or_create(pkg, 'EM_BasicExample',
@@ -194,13 +194,13 @@ def build_basic_example():
     api.clear_entries(event_map)
     # ORDER IS THE CONTRACT: [0] Space, [1] R, [2] F.
     api.add_entry(event_map, unreal.HapticMode.STREAM_CLIP, 'basic-exam-kit', 'sine_100hz_1s',
-                  1.0, False, intensity_of(intensities, 'STREAM_CLIP', 'basic-exam-kit', 'sine_100hz_1s'),
+                  1.0, False, clip_gain_of(clip_gains, 'STREAM_CLIP', 'basic-exam-kit', 'sine_100hz_1s'),
                   clip, 'demo_stream_sine_100hz')
     api.add_entry(event_map, unreal.HapticMode.STREAM_CLIP, 'basic-exam-kit', 'sine_100hz_1s',
-                  1.0, True, intensity_of(intensities, 'STREAM_CLIP', 'basic-exam-kit', 'sine_100hz_1s'),
+                  1.0, True, clip_gain_of(clip_gains, 'STREAM_CLIP', 'basic-exam-kit', 'sine_100hz_1s'),
                   clip, 'demo_stream_loop_100hz')
     api.add_entry(event_map, unreal.HapticMode.COMMAND, 'basic-exam-kit', 'sine_200hz_1s',
-                  1.0, False, intensity_of(intensities, 'COMMAND', 'basic-exam-kit', 'sine_200hz_1s'),
+                  1.0, False, clip_gain_of(clip_gains, 'COMMAND', 'basic-exam-kit', 'sine_200hz_1s'),
                   None, 'demo_command_sine_200hz')
     unreal.EditorAssetLibrary.save_loaded_asset(event_map)
     unreal.log('[Hapbeat] Generated EM_BasicExample with 3 entries.')
@@ -232,7 +232,7 @@ SHOWCASE_ENTRIES = [
 
 def build_showcase():
     pkg = PLUGIN_CONTENT + '/Showcase'
-    intensities = manifest_intensities(SHOWCASE_KIT)
+    clip_gains = manifest_clip_gains(SHOWCASE_KIT)
     event_map = load_or_create(pkg, 'EM_Showcase',
                                unreal.HapbeatEventMap, unreal.HapbeatEventMapFactory())
     api = unreal.HapbeatEventMapScripting
@@ -246,7 +246,7 @@ def build_showcase():
                 raise RuntimeError('no wav for ' + event_name)
             clip = make_clip(pkg, 'HC_' + event_name, rel)
         api.add_entry(event_map, getattr(unreal.HapticMode, mode_name), 'showcase-kit', event_name,
-                      1.0, loop, intensity_of(intensities, mode_name, 'showcase-kit', event_name),
+                      1.0, loop, clip_gain_of(clip_gains, mode_name, 'showcase-kit', event_name),
                       clip, event_name)
 
     unreal.EditorAssetLibrary.save_loaded_asset(event_map)

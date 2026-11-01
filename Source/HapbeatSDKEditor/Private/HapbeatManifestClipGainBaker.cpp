@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Hapbeat. MIT License.
-#include "HapbeatManifestIntensityBaker.h"
+#include "HapbeatManifestClipGainBaker.h"
 
 #include "HapbeatEventMap.h"
 #include "Dom/JsonObject.h"
@@ -13,14 +13,14 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogHapbeatEditor, Log, All);
 
-TMap<FHapbeatManifestEventKey, float> FHapbeatManifestIntensityBaker::ScanProjectManifests(int32* OutNumManifestsScanned)
+TMap<FHapbeatManifestEventKey, float> FHapbeatManifestClipGainBaker::ScanProjectManifests(int32* OutNumManifestsScanned)
 {
 	TMap<FHapbeatManifestEventKey, float> Result;
 
 	// Where to look. The project's own Content is the obvious place, but a Kit
 	// can equally ship inside a plugin -- this SDK's own sample Kits do, under
 	// HapbeatSDK/Content/HapbeatSamples/. Scanning only the project directory
-	// made Refresh Intensities report "0 manifests" on a stock install, with
+	// made Refresh Clip Gains report "0 manifests" on a stock install, with
 	// every bundled sample sitting right there but out of reach.
 	TArray<FString> SearchRoots;
 	SearchRoots.Add(FPaths::ProjectContentDir());
@@ -62,7 +62,7 @@ TMap<FHapbeatManifestEventKey, float> FHapbeatManifestIntensityBaker::ScanProjec
 	return Result;
 }
 
-FHapbeatManifestIntensityBaker::FBakeResult FHapbeatManifestIntensityBaker::BakeIntoEventMap(UHapbeatEventMap* Map)
+FHapbeatManifestClipGainBaker::FBakeResult FHapbeatManifestClipGainBaker::BakeIntoEventMap(UHapbeatEventMap* Map)
 {
 	FBakeResult Result;
 	if (Map == nullptr)
@@ -70,7 +70,7 @@ FHapbeatManifestIntensityBaker::FBakeResult FHapbeatManifestIntensityBaker::Bake
 		return Result;
 	}
 
-	const TMap<FHapbeatManifestEventKey, float> ManifestIntensities = ScanProjectManifests(&Result.NumManifestsScanned);
+	const TMap<FHapbeatManifestEventKey, float> ManifestClipGains = ScanProjectManifests(&Result.NumManifestsScanned);
 
 	Map->Modify();
 	for (FHapbeatEventEntry& Entry : Map->Entries)
@@ -78,29 +78,29 @@ FHapbeatManifestIntensityBaker::FBakeResult FHapbeatManifestIntensityBaker::Bake
 		const FString EventId = Entry.GetEventId();
 		const float* Found = EventId.IsEmpty()
 			? nullptr
-			: ManifestIntensities.Find(FHapbeatManifestEventKey{EventId, Entry.Mode});
+			: ManifestClipGains.Find(FHapbeatManifestEventKey{EventId, Entry.Mode});
 
 		if (Found != nullptr)
 		{
-			Entry.CachedManifestIntensity = *Found;
+			Entry.CachedManifestClipGain = *Found;
 			++Result.NumResolved;
 		}
 		else
 		{
-			Entry.CachedManifestIntensity = -1.0f;
+			Entry.CachedManifestClipGain = -1.0f;
 			++Result.NumUnresolved;
 		}
 	}
 	Map->MarkPackageDirty();
 
 	UE_LOG(LogHapbeatEditor, Log,
-		TEXT("[Hapbeat] Refresh Intensities on '%s': scanned %d manifest(s), resolved %d / unresolved %d."),
+		TEXT("[Hapbeat] Refresh Clip Gains on '%s': scanned %d manifest(s), resolved %d / unresolved %d."),
 		*Map->GetName(), Result.NumManifestsScanned, Result.NumResolved, Result.NumUnresolved);
 
 	return Result;
 }
 
-void FHapbeatManifestIntensityBaker::ParseManifestFile(const FString& FilePath, TMap<FHapbeatManifestEventKey, float>& OutMap)
+void FHapbeatManifestClipGainBaker::ParseManifestFile(const FString& FilePath, TMap<FHapbeatManifestEventKey, float>& OutMap)
 {
 	FString JsonText;
 	if (!FFileHelper::LoadFileToString(JsonText, *FilePath))
@@ -123,7 +123,7 @@ void FHapbeatManifestIntensityBaker::ParseManifestFile(const FString& FilePath, 
 	ParseBucket(Root, TEXT("stream_events"), EHapticMode::StreamClip, OutMap);
 }
 
-void FHapbeatManifestIntensityBaker::ParseBucket(const TSharedPtr<FJsonObject>& Root, const TCHAR* BucketName,
+void FHapbeatManifestClipGainBaker::ParseBucket(const TSharedPtr<FJsonObject>& Root, const TCHAR* BucketName,
 	EHapticMode Mode, TMap<FHapbeatManifestEventKey, float>& OutMap)
 {
 	const TSharedPtr<FJsonObject>* BucketObj = nullptr;
@@ -144,17 +144,17 @@ void FHapbeatManifestIntensityBaker::ParseBucket(const TSharedPtr<FJsonObject>& 
 			continue;
 		}
 
-		// parameters.intensity: default 1.0 if parameters or intensity is absent;
-		// TryGetNumberField leaves Intensity untouched on a missing field, so the
+		// parameters.clip_gain: default 1.0 if parameters or clip_gain is absent;
+		// TryGetNumberField leaves ClipGain untouched on a missing field, so the
 		// default survives both "no parameters object" and "parameters present
-		// but no intensity key". An authored 0 is honoured (valid silence).
-		float Intensity = 1.0f;
+		// but no clip_gain key". An authored 0 is honoured (valid silence).
+		float ClipGain = 1.0f;
 		const TSharedPtr<FJsonObject>* ParamsObj = nullptr;
 		if (EventBody->TryGetObjectField(TEXT("parameters"), ParamsObj) && ParamsObj != nullptr && ParamsObj->IsValid())
 		{
-			(*ParamsObj)->TryGetNumberField(TEXT("intensity"), Intensity);
+			(*ParamsObj)->TryGetNumberField(TEXT("clip_gain"), ClipGain);
 		}
 
-		OutMap.Add(FHapbeatManifestEventKey{Pair.Key, Mode}, Intensity);
+		OutMap.Add(FHapbeatManifestEventKey{Pair.Key, Mode}, ClipGain);
 	}
 }

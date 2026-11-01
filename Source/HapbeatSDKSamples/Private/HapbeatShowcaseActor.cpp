@@ -50,7 +50,7 @@ namespace
 	const TCHAR* ManualFireCategory = TEXT("showcase-kit");
 	const TCHAR* ManualFireEventName = TEXT("z5_tar_hit_light");
 	/** From showcase-kit-manifest.json, same value Z5 hardcodes for this event. */
-	constexpr float ManualFireIntensity = 0.45f;
+	constexpr float ManualFireClipGain = 0.45f;
 
 	/** Rows shown in every zone; the zone's own rows follow them. */
 	TArray<FHapbeatShowcaseHudCommand> MakeGlobalHudCommands()
@@ -578,7 +578,7 @@ void AHapbeatShowcaseActor::BuildManualFireEventMap()
 		Fallback->Entries.Reset(1);
 		Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
 			EHapticMode::StreamClip, ManualFireCategory, ManualFireEventName,
-			1.0f, /*bLoop=*/false, ManualFireIntensity, ManualFireClip, ManualFireEventName));
+			1.0f, /*bLoop=*/false, ManualFireClipGain, ManualFireClip, ManualFireEventName));
 		ManualFireEventMap = Fallback;
 	}
 

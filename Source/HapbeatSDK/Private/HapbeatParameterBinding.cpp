@@ -161,8 +161,8 @@ void UHapbeatParameterBinding::WriteToActivePlayback(float Out)
 	switch (OutputParameter)
 	{
 	case EHapbeatBindingOutput::StreamGain:
-		// Multiplicative on the playback baseline (entry.gain x manifest.intensity):
-		//   final = baseline x Out. ApplyGainModulation clamps Gain to [0, 2].
+		// Multiplicative on the playback baseline (entry.gain x manifest.clip_gain):
+		//   final = baseline x Out. ApplyGainModulation clamps Gain to [0, 1].
 		Pb->ApplyGainModulation(Out);
 		break;
 	case EHapbeatBindingOutput::StreamPan:

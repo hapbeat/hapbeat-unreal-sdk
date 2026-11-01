@@ -82,7 +82,7 @@ private:
 
 	FString GetEventMapPath() const;
 	void OnEventMapChanged(const FAssetData& AssetData);
-	FReply OnRefreshIntensitiesClicked();
+	FReply OnRefreshClipGainsClicked();
 	FText GetRefreshSummary() const;
 
 	// ---- entry list ----

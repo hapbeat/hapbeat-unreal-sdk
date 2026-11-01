@@ -591,15 +591,15 @@ UHapbeatEventMap* AHapbeatShowcaseZ5ChargeShotActor::BuildFallbackEventMap()
 		return Clip;
 	};
 
-	// Intensities hardcoded from Content/HapbeatSamples/Showcase/Kit/showcase-kit/
+	// Clip gains hardcoded from Content/HapbeatSamples/Showcase/Kit/showcase-kit/
 	// showcase-kit-manifest.json (schema 2.0.0) stream_events section, matching
 	// Samples~/Showcase/EventMaps/ShowcaseEventMap.md verbatim (all gain 1.00):
-	//   z5_charge_loop    intensity 0.14 (loop)
-	//   z5_charge_thd     intensity 0.30 (one-shot, threshold cross)
-	//   z5_shot_light     intensity 0.30 (one-shot)
-	//   z5_shot_heavy     intensity 0.40 (one-shot)
-	//   z5_tar_hit_light  intensity 0.45 (one-shot)
-	//   z5_tar_hit_heavy  intensity 0.40 (one-shot)
+	//   z5_charge_loop    clip_gain 0.14 (loop)
+	//   z5_charge_thd     clip_gain 0.30 (one-shot, threshold cross)
+	//   z5_shot_light     clip_gain 0.30 (one-shot)
+	//   z5_shot_heavy     clip_gain 0.40 (one-shot)
+	//   z5_tar_hit_light  clip_gain 0.45 (one-shot)
+	//   z5_tar_hit_heavy  clip_gain 0.40 (one-shot)
 	const FHapbeatEventEntry ChargeLoopEntry = FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z5_charge_loop"),
 		1.0f, /*bLoop=*/true, 0.14f, LoadAndKeep(TEXT("z5_charge_loop.wav")), TEXT("z5_charge_loop"));
@@ -763,7 +763,7 @@ void AHapbeatShowcaseZ5ChargeShotActor::HandleChargeBegin()
 	// chargeT = 0 at press time -> curve(0) = 0 -> silent, race-free start.
 	const float InitialMod = EvaluateChargeLoopGain(0.0f);
 	// Through PlayEntry (the single runtime play path) rather than StreamClip:
-	// baseline (entry gain x manifest intensity), target and the authored loop
+	// baseline (entry gain x manifest clip gain), target and the authored loop
 	// flag all come off the entry, and the haptic delay applies like anywhere
 	// else. InitialMod stays the initial modulator, which Tick() then replaces
 	// via the handle's ApplyGainModulation.

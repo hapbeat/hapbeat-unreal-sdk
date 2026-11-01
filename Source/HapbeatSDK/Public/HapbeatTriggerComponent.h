@@ -102,7 +102,7 @@ public:
 
 	/**
 	 * Per-trigger gain multiplier. Composes on top of the entry gain so the same
-	 * EventMap entry can drive different intensities across actors without
+	 * EventMap entry can drive different strengths across actors without
 	 * authoring extra entries. Final command gain = entry.GetEffectiveGain() x
 	 * GainMultiplier (x any FireWithGain / scaled override). Range [0, 2].
 	 *
@@ -284,6 +284,6 @@ protected:
 	bool bWarnedNoSubsystem = false;
 	bool bWarnedNoEventMap = false;
 	bool bWarnedStaleId = false;
-	bool bWarnedMissingIntensity = false;
+	bool bWarnedMissingClipGain = false;
 	bool bWarnedNullClip = false;
 };

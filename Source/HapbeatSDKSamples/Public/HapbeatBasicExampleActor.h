@@ -17,9 +17,9 @@ class UHapbeatTriggerComponent;
  * -- and wires 5 keys through 3 UHapbeatTriggerComponents plus the raw
  * subsystem API:
  *
- *   Space - stream one-shot  (StreamClip, sine_100hz_1s.wav,      gain 1 x intensity 0.5)
+ *   Space - stream one-shot  (StreamClip, sine_100hz_1s.wav,      gain 1 x clip_gain 0.5)
  *   R     - stream loop      (same clip, looping)
- *   F     - command play     ("basic-exam-kit.sine_200hz_1s",     gain 1 x intensity 0.5)
+ *   F     - command play     ("basic-exam-kit.sine_200hz_1s",     gain 1 x clip_gain 0.5)
  *   S     - stop everything  (UHapbeatSubsystem::StopStream() + StopAll())
  *   C     - ping             (UHapbeatSubsystem::Ping())
  *

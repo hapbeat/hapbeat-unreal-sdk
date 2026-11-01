@@ -4,7 +4,7 @@
 #include "HapbeatClip.h"
 #include "HapbeatEditorSender.h"
 #include "HapbeatEventMap.h"
-#include "HapbeatManifestIntensityBaker.h"
+#include "HapbeatManifestClipGainBaker.h"
 #include "HapbeatTargetLibrary.h"
 #include "HapbeatTriggerComponent.h"
 
@@ -216,11 +216,11 @@ void SHapbeatEventMapWindow::Construct(const FArguments& InArgs)
 					.Padding(6.0f, 0.0f, 0.0f, 0.0f)
 					[
 						SNew(SButton)
-						.Text(LOCTEXT("RefreshIntensities", "Refresh Intensities"))
-						.ToolTipText(LOCTEXT("RefreshIntensitiesTooltip",
+						.Text(LOCTEXT("RefreshClipGains", "Refresh Clip Gains"))
+						.ToolTipText(LOCTEXT("RefreshClipGainsTooltip",
 							"Re-scan every *-manifest.json under the project and enabled plugins, and bake "
-							"each entry's parameters.intensity into CachedManifestIntensity. Run after (re)deploying a Kit."))
-						.OnClicked(this, &SHapbeatEventMapWindow::OnRefreshIntensitiesClicked)
+							"each entry's parameters.clip_gain into CachedManifestClipGain. Run after (re)deploying a Kit."))
+						.OnClicked(this, &SHapbeatEventMapWindow::OnRefreshClipGainsClicked)
 					]
 			]
 
@@ -413,11 +413,11 @@ void SHapbeatEventMapWindow::OnEventMapChanged(const FAssetData& AssetData)
 	SetEventMap(Cast<UHapbeatEventMap>(AssetData.GetAsset()));
 }
 
-FReply SHapbeatEventMapWindow::OnRefreshIntensitiesClicked()
+FReply SHapbeatEventMapWindow::OnRefreshClipGainsClicked()
 {
 	if (UHapbeatEventMap* Map = WeakEventMap.Get())
 	{
-		const FHapbeatManifestIntensityBaker::FBakeResult Result = FHapbeatManifestIntensityBaker::BakeIntoEventMap(Map);
+		const FHapbeatManifestClipGainBaker::FBakeResult Result = FHapbeatManifestClipGainBaker::BakeIntoEventMap(Map);
 		RefreshSummary = FText::Format(
 			LOCTEXT("RefreshResult", "Scanned {0} manifest(s): {1} resolved, {2} unresolved."),
 			FText::AsNumber(Result.NumManifestsScanned),
@@ -1016,7 +1016,7 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildPlaybackSection()
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)
 			[
 				MakeRow(LOCTEXT("Gain", "Gain"),
-					LOCTEXT("GainTooltip", "Gain multiplier (0.0 - 2.0). Multiplied by the baked manifest intensity before it goes on the wire."),
+					LOCTEXT("GainTooltip", "Gain multiplier (0.0 - 2.0). Multiplied by the baked manifest clip gain before it goes on the wire."),
 					SNew(SSpinBox<float>)
 					.MinValue(0.0f).MaxValue(2.0f)
 					.MinSliderValue(0.0f).MaxSliderValue(2.0f)
@@ -1057,8 +1057,8 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildPlaybackSection()
 			[
 				MakeRow(LOCTEXT("EffectiveGain", "Effective Gain"),
 					LOCTEXT("EffectiveGainTooltip",
-						"Gain x baked manifest intensity -- the value actually sent. "
-						"Shows plain Gain while the intensity is unresolved (-1); run Refresh Intensities."),
+						"Gain x baked manifest clip gain -- the value actually sent. "
+						"Shows plain Gain while the clip gain is unresolved (-1); run Refresh Clip Gains."),
 					SNew(STextBlock)
 					.ColorAndOpacity(FSlateColor::UseSubduedForeground())
 					.Text_Lambda([this]
@@ -1068,15 +1068,15 @@ TSharedRef<SWidget> SHapbeatEventMapWindow::BuildPlaybackSection()
 						{
 							return FText::GetEmpty();
 						}
-						if (Entry->CachedManifestIntensity < 0.0f)
+						if (Entry->CachedManifestClipGain < 0.0f)
 						{
-							return FText::Format(LOCTEXT("EffectiveGainUnresolved", "{0} (manifest intensity unresolved)"),
+							return FText::Format(LOCTEXT("EffectiveGainUnresolved", "{0} (manifest clip gain unresolved)"),
 								FText::AsNumber(Entry->GetEffectiveGain()));
 						}
 						return FText::Format(LOCTEXT("EffectiveGainResolved", "{0}  =  {1} x {2}"),
 							FText::AsNumber(Entry->GetEffectiveGain()),
 							FText::AsNumber(Entry->Gain),
-							FText::AsNumber(Entry->CachedManifestIntensity));
+							FText::AsNumber(Entry->CachedManifestClipGain));
 					}))
 			]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.0f, 2.0f)

@@ -243,7 +243,7 @@ void UHapbeatCollisionTriggerComponent::HandleCollision(AActor* OtherActor, floa
 	}
 
 	// FireWithGain folds the multiplier into the base composition exactly as Unity
-	// folds curveValue into entry.gain x intensity x trigger-multiplier:
+	// folds curveValue into entry.gain x clip gain x trigger-multiplier:
 	//   Command    -> wire = entry.GetEffectiveGain() x GainMultiplier x Multiplier
 	//   StreamClip -> initialMod = GainMultiplier x Multiplier (baseline kept).
 	FireWithGain(Multiplier);

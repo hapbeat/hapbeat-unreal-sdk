@@ -82,7 +82,7 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Hapbeat")
 	EHapbeatStreamDeferredReason DeferredReason = EHapbeatStreamDeferredReason::NoResolvedEndpoint;
 	/**
-	 * The gain the entry authored (entry.gain x manifest.intensity), captured at
+	 * The gain the entry authored (entry.gain x manifest.clip_gain), captured at
 	 * stream start. A bound stream is BaselineGain x bindingOutput so author
 	 * intent ("full press = authored strength") is preserved regardless of which
 	 * bindings are attached.
@@ -92,16 +92,17 @@ public:
 
 	/**
 	 * Initialise the handle for a fresh stream. BaselineGain is frozen here;
-	 * Gain starts at clamp(Baseline x InitialModulator, 0, 2); Pan resets to 0
+	 * Gain starts at clamp(Baseline x InitialModulator, 0, 1); Pan resets to 0
 	 * (center / passthrough); the stopped flag is cleared.
 	 */
 	void Init(float Baseline, float InitialModulator);
 
 	/**
-	 * Apply an external gain modulator: Gain = clamp(BaselineGain x Modulator, 0, 2).
+	 * Apply an external gain modulator: Gain = clamp(BaselineGain x Modulator, 0, 1).
 	 * Single shared entry point for both the imperative trigger path and the
 	 * declarative Phase-4 ParameterBinding so the formula lives in one place.
-	 * Typical modulator range is [0, 1] (= 0..authored); up to [0, 2] for boost.
+	 * Typical modulator range is [0, 1] (= 0..authored); above 1 boosts a clip
+	 * whose clip_gain is below 1, up to the final cap of 1.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Apply Stream Gain Modulation (Hapbeat)"))
 	void ApplyGainModulation(float Modulator);
@@ -213,7 +214,7 @@ UFUNCTION(BlueprintPure, Category = "Hapbeat", meta = (DisplayName = "Is Stream 
 	void SetActive();
 
 private:
-	/** Live gain (= BaselineGain x modulator), clamped to [0, 2]. */
+	/** Live gain (= BaselineGain x modulator), clamped to [0, 1]: the factor the source PCM is scaled by. */
 	float Gain = 1.0f;
 	/** Live pan, clamped to [-1, 1]. */
 	float Pan = 0.0f;

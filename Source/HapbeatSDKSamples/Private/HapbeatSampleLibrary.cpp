@@ -57,7 +57,7 @@ UHapbeatClip* FHapbeatSampleLibrary::LoadSampleClip(UObject* Outer, const FStrin
 }
 
 FHapbeatEventEntry FHapbeatSampleLibrary::MakeEntry(EHapticMode Mode, const FString& Category, const FString& EventName,
-	float Gain, bool bLoop, float CachedIntensity, UHapbeatClip* Clip, const FString& DisplayName)
+	float Gain, bool bLoop, float CachedClipGain, UHapbeatClip* Clip, const FString& DisplayName)
 {
 	FHapbeatEventEntry Entry;
 	Entry.Id = FGuid::NewGuid();
@@ -66,7 +66,7 @@ FHapbeatEventEntry FHapbeatSampleLibrary::MakeEntry(EHapticMode Mode, const FStr
 	Entry.EventName = EventName;
 	Entry.Gain = Gain;
 	Entry.bLoop = bLoop;
-	Entry.CachedManifestIntensity = CachedIntensity;
+	Entry.CachedManifestClipGain = CachedClipGain;
 	if (Mode == EHapticMode::StreamClip)
 	{
 		Entry.StreamClip = Clip; // TSoftObjectPtr from a live UObject* caches a resolvable weak ptr immediately

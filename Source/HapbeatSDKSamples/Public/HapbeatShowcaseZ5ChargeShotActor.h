@@ -35,7 +35,7 @@ class AHapbeatShowcaseZ5ProjectileActor;
  * straight from script so both patterns are shown side by side." Reuses
  * showcase-kit verbatim (6 events -- see
  * Samples~/Showcase/EventMaps/ShowcaseEventMap.md for the authoritative
- * gain/intensity table).
+ * gain/clip gain table).
  *
  * When the possessed pawn is an AHapbeatShowcaseCharacter the blaster is put in
  * its hand mount at Unity's CameraFollowMount offset and shots leave from the

@@ -3,6 +3,7 @@
 
 #include "HapbeatClip.h"
 #include "HapbeatConfig.h"
+#include "HapbeatEventEntry.h"
 #include "HapbeatNetInterfaces.h"
 #include "HapbeatProtocol.h"
 #include "HapbeatStreamRunnable.h"
@@ -539,7 +540,8 @@ void FHapbeatEditorSender::SendPlay(const FString& EventId, float Gain, const FS
 	}
 	// The caller passes the ENTRY's authored pan: Test Play auditions what the
 	// entry says, without the per-call value a runtime node would add on top.
-	SendRouted(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolveEditorTarget(Target), /*TargetTimeUs=*/0, Gain, Pan));
+	SendRouted(FHapbeatProtocol::BuildPlay(NextSeq(), EventId, ResolveEditorTarget(Target), /*TargetTimeUs=*/0,
+		FHapbeatEventEntry::ClampSendGain(Gain), Pan));
 }
 
 void FHapbeatEditorSender::SendStop(const FString& EventId, const FString& Target)
@@ -772,7 +774,9 @@ void FHapbeatEditorSender::StartStream(const UHapbeatClip* Clip, float Gain, con
 	// by it, and the device applies the BEGIN gain verbatim, so setting both would
 	// square it. One mirror for every device's session of this Test Play.
 	StreamMirror = MakeShared<FHapbeatStreamGainMirror, ESPMode::ThreadSafe>();
-	StreamMirror->Gain.store(Gain, std::memory_order_release);
+	// Capped here, the one place the final product is formed (clamp(clip_gain x
+	// app_gain, 0, 1)): the caller passes the entry's uncapped effective gain.
+	StreamMirror->Gain.store(FHapbeatEventEntry::ClampSendGain(Gain), std::memory_order_release);
 	// BEFORE the runnables are constructed: the streamer reads the pan once, there,
 	// to decide whether a mono clip has to be upmixed to stereo to be pannable at
 	// all (STREAM_BEGIN fixes the channel count for the session).

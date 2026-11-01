@@ -263,14 +263,14 @@ UHapbeatEventMap* AHapbeatShowcaseZ1BowlingActor::BuildFallbackEventMap()
 
 	PinHitClip = FHapbeatSampleLibrary::LoadSampleClip(this, TEXT("Showcase/Kit/showcase-kit/stream-clips/z1_pin_hit.wav"));
 
-	// Mode + intensity taken from the Unity Showcase's ShowcaseEventMap.asset and
+	// Mode + clip gain taken from the Unity Showcase's ShowcaseEventMap.asset and
 	// Content/HapbeatSamples/Showcase/Kit/showcase-kit/showcase-kit-manifest.json
-	// (schema 2.0.0) stream_events["showcase-kit.z1_pin_hit"].parameters.intensity:
-	// StreamClip mode, gain 1.00 x intensity 0.25 = effective 0.25 (before each
+	// (schema 2.0.0) stream_events["showcase-kit.z1_pin_hit"].parameters.clip_gain:
+	// StreamClip mode, gain 1.00 x clip_gain 0.25 = effective 0.25 (before each
 	// pin's own VelocityScaled multiplier is folded in on top).
 	Fallback->Entries.Add(FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("showcase-kit"), TEXT("z1_pin_hit"),
-		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedIntensity=*/0.25f, PinHitClip, TEXT("z1_pin_hit")));
+		/*Gain=*/1.0f, /*bLoop=*/false, /*CachedClipGain=*/0.25f, PinHitClip, TEXT("z1_pin_hit")));
 	return Fallback;
 }
 

@@ -12,8 +12,8 @@ template <typename OptionType> class SComboBox;
 /**
  * Detail customization for UHapbeatEventMap. Adds a "Hapbeat" category row
  * block above the (unmodified) native Entries array editor:
- *   - [Refresh Intensities] -- re-bakes every entry's CachedManifestIntensity
- *     from every *-manifest.json under Content/ (FHapbeatManifestIntensityBaker).
+ *   - [Refresh Clip Gains] -- re-bakes every entry's CachedManifestClipGain
+ *     from every *-manifest.json under Content/ (FHapbeatManifestClipGainBaker).
  *   - An entry picker (by DisplayName / event id / short guid) + [Test Play]
  *     [Stop] [Stop All] [Ping] wired to the editor-only UDP sender
  *     (FHapbeatEditorSender) so a designer can sanity-check gain / wiring
@@ -25,7 +25,7 @@ template <typename OptionType> class SComboBox;
  * in PIE via the runtime UHapbeatSubsystem::StreamClip API.
  *
  * UE counterpart of the "test-play path" described in
- * Hapbeat.Editor.HapbeatManifestIntensity's class doc comment (Unity SDK) --
+ * Hapbeat.Editor.HapbeatManifestClipGain's class doc comment (Unity SDK) --
  * intentionally NOT a clone of Unity's ~12k-line EventMap window: the native
  * Details panel already gives add/remove/reorder/duplicate/multi-edit on
  * Entries for free (see the design doc §3.6 "minimal effort" principle).
@@ -47,8 +47,8 @@ private:
 	void OnEntrySelectionChanged(TSharedPtr<FGuid> NewSelection, ESelectInfo::Type SelectInfo);
 	FText GetSelectedEntryLabel() const;
 
-	// ---- Refresh Intensities ----
-	FReply OnRefreshIntensitiesClicked();
+	// ---- Refresh Clip Gains ----
+	FReply OnRefreshClipGainsClicked();
 	FText GetRefreshResultText() const;
 
 	// ---- Test Play transport ----

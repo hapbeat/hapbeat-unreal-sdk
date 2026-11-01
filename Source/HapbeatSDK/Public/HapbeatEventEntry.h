@@ -117,19 +117,19 @@ struct HAPBEATSDK_API FHapbeatEventEntry
 		meta = (Tooltip = "Clip streamed over UDP as PCM16 (StreamClip mode only)."))
 	TSoftObjectPtr<UHapbeatClip> StreamClip;
 
-	// ---- Manifest intensity cache ----
+	// ---- Manifest clip gain cache ----
 	//
-	// Studio authors parameters.intensity per Kit event in manifest.json. The
+	// Studio authors parameters.clip_gain per Kit event in manifest.json. The
 	// device is a pure executor (plays req.gain verbatim and never reads the
-	// manifest), so the SDK must pre-multiply gain × intensity before putting
+	// manifest), so the SDK must pre-multiply gain × clip gain before putting
 	// it on the wire. The authored value is baked here by the editor module
-	// (Phase 5 "Refresh Intensities") so the runtime — which doesn't ship the
+	// (Phase 5 "Refresh Clip Gains") so the runtime — which doesn't ship the
 	// manifest — still has access to it. -1 = "not yet resolved / no matching
 	// manifest entry" (callers fall back to plain Gain). 0 is a valid authored
 	// silence. VisibleAnywhere so the user does not hand-edit it casually.
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Hapbeat",
-		meta = (Tooltip = "Authored intensity baked from the Kit manifest (editor 'Refresh Intensities'). -1 = unresolved (falls back to Gain). Do not edit by hand."))
-	float CachedManifestIntensity = -1.0f;
+		meta = (Tooltip = "Authored clip gain baked from the Kit manifest (editor 'Refresh Clip Gains'). -1 = unresolved (falls back to Gain). Do not edit by hand."))
+	float CachedManifestClipGain = -1.0f;
 
 	// ---- Pure helpers (mirror the Unity getter logic verbatim) ----
 
@@ -152,17 +152,40 @@ struct HAPBEATSDK_API FHapbeatEventEntry
 	}
 
 	/**
-	 * Effective gain to send over the wire: Gain × CachedManifestIntensity.
+	 * Effective gain to send over the wire: Gain × CachedManifestClipGain.
 	 * Applies to both Command and StreamClip modes (the device only honours
-	 * req.gain). When the cache is unresolved (CachedManifestIntensity < 0)
-	 * returns plain Gain; an authored intensity of exactly 0 is honoured (0 is
+	 * req.gain). When the cache is unresolved (CachedManifestClipGain < 0)
+	 * returns plain Gain; an authored clip gain of exactly 0 is honoured (0 is
 	 * a valid silence, so only the strictly-negative sentinel falls back).
 	 */
 	float GetEffectiveGain() const
 	{
-		return CachedManifestIntensity < 0.0f
+		return CachedManifestClipGain < 0.0f
 			? Gain
-			: Gain * CachedManifestIntensity;
+			: Gain * CachedManifestClipGain;
+	}
+
+	/**
+	 * The only cap on the strength. The value sent -- the PLAY gain, or the
+	 * factor a stream source's PCM is scaled by -- is
+	 * clamp(clip_gain x app_gain, 0, 1) (contracts kit-format.md, the strength
+	 * formula). Only this final product is capped: the parts of app_gain (entry
+	 * Gain, binding output, call-site gain) are never limited to 0..1, so a
+	 * clip_gain of 0.5 reaches 1.0 at an app_gain of 2.
+	 */
+	static float ClampSendGain(float ClipGainTimesAppGain)
+	{
+		return FMath::Clamp(ClipGainTimesAppGain, 0.0f, 1.0f);
+	}
+
+	/**
+	 * Value sent for one fire of this entry:
+	 * ClampSendGain(GetEffectiveGain() x AppGain), where AppGain is the rest of
+	 * app_gain on top of the entry Gain (binding output x call-site gain).
+	 */
+	float GetSendGain(float AppGain) const
+	{
+		return ClampSendGain(GetEffectiveGain() * AppGain);
 	}
 
 	/** True once Id has been assigned (a fresh value-initialized FGuid is all-zero / invalid). */

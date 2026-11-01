@@ -96,26 +96,26 @@ void AHapbeatBasicExampleActor::BuildEventMap()
 	SharedStreamClip = FHapbeatSampleLibrary::LoadSampleClip(this,
 		TEXT("BasicExample/Kit/basic-exam-kit/stream-clips/sine_100hz_1s.wav"));
 
-	// Manifest intensity is authored in Content/HapbeatSamples/BasicExample/Kit/
+	// Manifest clip gain is authored in Content/HapbeatSamples/BasicExample/Kit/
 	// basic-exam-kit/basic-exam-kit-manifest.json (schema 2.0.0): both the
 	// "basic-exam-kit.sine_100hz_1s" stream_events entry and the
-	// "basic-exam-kit.sine_200hz_1s" events entry set parameters.intensity =
+	// "basic-exam-kit.sine_200hz_1s" events entry set parameters.clip_gain =
 	// 0.5. Samples are self-contained (no runtime JSON parsing per the design
 	// doc), so the value is hardcoded here -- keep this comment's pointer in
 	// sync if the shipped manifest is ever revised.
-	constexpr float ManifestIntensity = 0.5f;
+	constexpr float ManifestClipGain = 0.5f;
 
 	const FHapbeatEventEntry StreamOneShotEntry = FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("basic-exam-kit"), TEXT("sine_100hz_1s"),
-		/*Gain=*/1.0f, /*bLoop=*/false, ManifestIntensity, SharedStreamClip, TEXT("demo_stream_sine_100hz"));
+		/*Gain=*/1.0f, /*bLoop=*/false, ManifestClipGain, SharedStreamClip, TEXT("demo_stream_sine_100hz"));
 
 	const FHapbeatEventEntry StreamLoopEntry = FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::StreamClip, TEXT("basic-exam-kit"), TEXT("sine_100hz_1s_loop"),
-		/*Gain=*/1.0f, /*bLoop=*/true, ManifestIntensity, SharedStreamClip, TEXT("demo_stream_loop_100hz"));
+		/*Gain=*/1.0f, /*bLoop=*/true, ManifestClipGain, SharedStreamClip, TEXT("demo_stream_loop_100hz"));
 
 	const FHapbeatEventEntry CommandEntry = FHapbeatSampleLibrary::MakeEntry(
 		EHapticMode::Command, TEXT("basic-exam-kit"), TEXT("sine_200hz_1s"),
-		/*Gain=*/1.0f, /*bLoop=*/false, ManifestIntensity, /*Clip=*/nullptr, TEXT("demo_command_sine_200hz"));
+		/*Gain=*/1.0f, /*bLoop=*/false, ManifestClipGain, /*Clip=*/nullptr, TEXT("demo_command_sine_200hz"));
 
 	EventMap->Entries.Reset(3);
 	EventMap->Entries.Add(StreamOneShotEntry);

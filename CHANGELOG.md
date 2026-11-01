@@ -28,6 +28,7 @@ Hapbeat 1.0（DEC-096）に合わせた変更。対応する仕様は contracts 
 - 機体の address が変わった PONG では、同じ IP・port の endpoint をすぐ新しい address へ移す（旧い address が 15 s 残らない）。
 - Editor の Test Play の stream を Stream Gen 2 に対応: target の address に一致する機体ごとに session を作り、Stream Gen 2 の機体には lease を unicast で求めてから送る（Stream Gen 1 の機体には従来の形式）。別の送信元に取られた機体は、Test Play が明示の操作なので取り戻す。
 - ログ・コメントの呼び方を Stream Gen 1 / Stream Gen 2 に揃えた（`versioning.md` §4.2）。
+- 素材の強さの名前を `clip_gain` にした（DEC-103）: `FHapbeatEventEntry::CachedManifestIntensity` → `CachedManifestClipGain`、Editor の *Refresh Intensities* → *Refresh Clip Gains*、Kit の manifest は `parameters.clip_gain` だけを読む（`intensity` は読まない）。既存の Event Map は *Refresh Clip Gains* を押し直す。送る値は `clamp(clip_gain × app_gain, 0, 1)` で、stream の source の gain も最後の積だけを 0〜1 にする（これまでは 0〜2）。Editor の Test Play も同じ上限で送る。
 
 ## [0.2.0] - 2026-10-17
 

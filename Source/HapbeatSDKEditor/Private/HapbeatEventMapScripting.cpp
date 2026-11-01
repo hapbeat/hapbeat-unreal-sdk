@@ -52,7 +52,7 @@ void UHapbeatEventMapScripting::ClearEntries(UHapbeatEventMap* Map)
 }
 
 FGuid UHapbeatEventMapScripting::AddEntry(UHapbeatEventMap* Map, EHapticMode Mode, const FString& Category,
-	const FString& EventName, float Gain, bool bLoop, float Intensity,
+	const FString& EventName, float Gain, bool bLoop, float ClipGain,
 	UHapbeatClip* StreamClip, const FString& DisplayName)
 {
 	if (Map == nullptr)
@@ -69,7 +69,7 @@ FGuid UHapbeatEventMapScripting::AddEntry(UHapbeatEventMap* Map, EHapticMode Mod
 	Entry.EventName = EventName;
 	Entry.Gain = Gain;
 	Entry.bLoop = bLoop;
-	Entry.CachedManifestIntensity = Intensity;
+	Entry.CachedManifestClipGain = ClipGain;
 	Entry.StreamClip = StreamClip;
 	Entry.DisplayName = DisplayName;
 

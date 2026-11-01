@@ -43,7 +43,7 @@ enum class EHapbeatGainMode : uint8
  * Gain composition is the inherited base composition: Fixed -> Fire() (multiplier
  * 1); VelocityScaled -> FireWithGain(curveOrLinearMultiplier), where the
  * multiplier folds into GainMultiplier exactly as Unity's VelocityScaled path
- * folds the curve value into the entry gain x intensity x trigger-multiplier
+ * folds the curve value into the entry gain x clip gain x trigger-multiplier
  * product.
  */
 UCLASS(ClassGroup = (Hapbeat), meta = (BlueprintSpawnableComponent))

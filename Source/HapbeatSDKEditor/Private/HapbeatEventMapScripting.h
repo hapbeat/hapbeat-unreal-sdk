@@ -14,7 +14,7 @@ class UHapbeatEventMap;
  * Editor scripting entry points for authoring Event Maps and Clips.
  *
  * Several fields on those assets are deliberately VisibleAnywhere -- an entry's
- * Id, a clip's sample rate, the baked manifest intensity -- because hand-editing
+ * Id, a clip's sample rate, the baked manifest clip gain -- because hand-editing
  * them silently breaks the wiring or the audio. That also puts them out of reach
  * of Python's set_editor_property, so a generator script cannot build these
  * assets field by field. These functions are the sanctioned way in: each one
@@ -43,11 +43,11 @@ public:
 	/**
 	 * Append one entry, minting its stable Id.
 	 *
-	 * @param Intensity Baked manifest intensity; pass a negative value to leave it
+	 * @param ClipGain Baked manifest clip gain; pass a negative value to leave it
 	 *                  unresolved (the runtime then falls back to plain Gain).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat|Scripting")
 	static FGuid AddEntry(UHapbeatEventMap* Map, EHapticMode Mode, const FString& Category,
-		const FString& EventName, float Gain, bool bLoop, float Intensity,
+		const FString& EventName, float Gain, bool bLoop, float ClipGain,
 		UHapbeatClip* StreamClip, const FString& DisplayName);
 };

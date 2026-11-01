@@ -100,7 +100,7 @@ device** via Hapbeat Studio. Stream Clip playback needs no Kit on the device.
 - **Fire side** (when/where): `PlayHapbeatEvent` / a trigger component's
   `Fire()` / an Animation Notify.
 - **Tuning side** (what/how strong): a `UHapbeatEventMap` (`UDataAsset`)
-  entry + the Studio-authored Kit's `manifest.json` `parameters.intensity`.
+  entry + the Studio-authored Kit's `manifest.json` `parameters.clip_gain`.
   Create it from the Content Browser's *Hapbeat* category (`docs/editor-menus.md`);
   double-click it (or **Tools → Hapbeat → Hapbeat Event Map**) to open the
   dedicated Event Map window.
@@ -117,11 +117,11 @@ or just `EventName` if `Category` is empty), `Gain` (0..2), `Pan` (-1..1,
 added to the call-site Pan and clamped), `Target`, `bLoop` (StreamClip only),
 `DelayOffsetSeconds` (-0.2..0.2, added to the global delay — see Gotchas),
 `Notes`, `StreamClip` (`TSoftObjectPtr<UHapbeatClip>`, StreamClip mode only),
-`CachedManifestIntensity` (baked by *Refresh Intensities*, `-1` = unresolved).
+`CachedManifestClipGain` (baked by *Refresh Clip Gains*, `-1` = unresolved).
 
 ```cpp
 FString GetEventId() const;       // "" if EventName empty; EventName alone if Category empty
-float   GetEffectiveGain() const;  // CachedManifestIntensity < 0 ? Gain : Gain * CachedManifestIntensity
+float   GetEffectiveGain() const;  // CachedManifestClipGain < 0 ? Gain : Gain * CachedManifestClipGain
 static TArray<FString> StandardPositions(); // pos_neck, pos_chest, pos_abd, pos_l_arm, pos_r_arm, ...
 ```
 
@@ -315,10 +315,10 @@ Map**) — the dedicated window provides:
 
 - Entry list add / remove / edit, **Import WAV...** for Stream Clip entries,
   the entry's effective gain.
-- **Refresh Intensities** — scans every `*-manifest.json` under the project
+- **Refresh Clip Gains** — scans every `*-manifest.json` under the project
   and enabled plugins (schema 2.0.0: `events`/`stream_events`, matched by
-  `(eventId, mode)`) and bakes `parameters.intensity` into each entry's
-  `CachedManifestIntensity`. Run after every Kit (re)deploy in Studio.
+  `(eventId, mode)`) and bakes `parameters.clip_gain` into each entry's
+  `CachedManifestClipGain`. Run after every Kit (re)deploy in Studio.
 - **Test Play / Stop / Stop All / Ping** — send to a real device without
   entering PIE via a small editor-only socket independent of the runtime
   subsystem. Test Play streams Stream Clip entries too, but only in the legacy
@@ -401,7 +401,7 @@ PONG-known devices, broadcast fallback when none), `HapticDelaySeconds`
   can be enabled — it cannot run from Blueprint-only binaries alone.
 - Studio Kit clips are 16 kHz; matching that rate for stream WAVs avoids a
   resample (other rates are accepted and converted).
-- `CachedManifestIntensity` is baked, not live — re-run **Refresh Intensities**
+- `CachedManifestClipGain` is baked, not live — re-run **Refresh Clip Gains**
   after every Kit re-deploy, or effective gain silently uses a stale value
   (or plain `Gain` if never baked, `-1`).
 - Multi-homed PC: discovery goes to each local subnet's broadcast address and

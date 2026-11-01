@@ -10,7 +10,7 @@
  * unregisters them (+ closes the editor Test Play socket) on shutdown.
  *
  * No runtime code depends on this module -- it exists purely to give the
- * native Details panel a manifest-intensity "Refresh" action, a per-entry
+ * native Details panel a manifest-clip-gain "Refresh" action, a per-entry
  * "Test Play" transport, and an EventMap entry picker (see the design doc
  * §3.6). The plugin's runtime module (HapbeatSDK) never references it.
  */

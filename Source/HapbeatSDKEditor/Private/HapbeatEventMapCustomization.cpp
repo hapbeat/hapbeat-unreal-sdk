@@ -3,7 +3,7 @@
 
 #include "HapbeatEditorSender.h"
 #include "HapbeatEventMap.h"
-#include "HapbeatManifestIntensityBaker.h"
+#include "HapbeatManifestClipGainBaker.h"
 
 #include "DetailCategoryBuilder.h"
 #include "DetailLayoutBuilder.h"
@@ -47,8 +47,8 @@ void FHapbeatEventMapCustomization::CustomizeDetails(IDetailLayoutBuilder& Detai
 
 	RefreshEntryOptions();
 
-	// Row 1: manifest-intensity bake action.
-	Category.AddCustomRow(LOCTEXT("RefreshFilter", "Refresh Intensities Manifest"))
+	// Row 1: manifest-clip-gain bake action.
+	Category.AddCustomRow(LOCTEXT("RefreshFilter", "Refresh Clip Gains Manifest"))
 		.WholeRowContent()
 		[
 			SNew(SHorizontalBox)
@@ -57,11 +57,11 @@ void FHapbeatEventMapCustomization::CustomizeDetails(IDetailLayoutBuilder& Detai
 				.VAlign(VAlign_Center)
 				[
 					SNew(SButton)
-					.Text(LOCTEXT("RefreshIntensities", "Refresh Intensities"))
-					.ToolTipText(LOCTEXT("RefreshIntensitiesTooltip",
+					.Text(LOCTEXT("RefreshClipGains", "Refresh Clip Gains"))
+					.ToolTipText(LOCTEXT("RefreshClipGainsTooltip",
 						"Re-scan every *-manifest.json under Content/ and bake each entry's "
-						"parameters.intensity into CachedManifestIntensity. Run after (re)deploying a Kit."))
-					.OnClicked(this, &FHapbeatEventMapCustomization::OnRefreshIntensitiesClicked)
+						"parameters.clip_gain into CachedManifestClipGain. Run after (re)deploying a Kit."))
+					.OnClicked(this, &FHapbeatEventMapCustomization::OnRefreshClipGainsClicked)
 				]
 			+ SHorizontalBox::Slot()
 				.FillWidth(1.0f)
@@ -228,22 +228,22 @@ FText FHapbeatEventMapCustomization::GetSelectedEntryLabel() const
 	return LOCTEXT("NoneEntry", "(none)");
 }
 
-// ---- Refresh Intensities ----
+// ---- Refresh Clip Gains ----
 
-FReply FHapbeatEventMapCustomization::OnRefreshIntensitiesClicked()
+FReply FHapbeatEventMapCustomization::OnRefreshClipGainsClicked()
 {
 	if (UHapbeatEventMap* Map = WeakEventMap.Get())
 	{
-		const FHapbeatManifestIntensityBaker::FBakeResult Result = FHapbeatManifestIntensityBaker::BakeIntoEventMap(Map);
+		const FHapbeatManifestClipGainBaker::FBakeResult Result = FHapbeatManifestClipGainBaker::BakeIntoEventMap(Map);
 		LastRefreshSummary = FText::Format(
 			LOCTEXT("RefreshResult", "Scanned {0} manifest(s): {1} resolved, {2} unresolved."),
 			FText::AsNumber(Result.NumManifestsScanned),
 			FText::AsNumber(Result.NumResolved),
 			FText::AsNumber(Result.NumUnresolved));
-		UE_LOG(LogHapbeatEditor, Log, TEXT("Refresh Intensities (%s): %s"),
+		UE_LOG(LogHapbeatEditor, Log, TEXT("Refresh Clip Gains (%s): %s"),
 			*GetNameSafe(Map), *LastRefreshSummary.ToString());
 
-		// CachedManifestIntensity is VisibleAnywhere inside the native Entries
+		// CachedManifestClipGain is VisibleAnywhere inside the native Entries
 		// array rows; a plain field write (not via a property handle) does not
 		// auto-refresh those rows, so force it explicitly. RequestForceRefresh
 		// (not the immediate ForceRefresh) is deliberately used here: we are
@@ -284,13 +284,13 @@ FText FHapbeatEventMapCustomization::GetTestPlayTooltip() const
 			"which streams the clip in place without entering PIE and stops on its Stop button. "
 			"This Details transport covers Command entries.");
 	}
-	if (Entry.CachedManifestIntensity < 0.0f)
+	if (Entry.CachedManifestClipGain < 0.0f)
 	{
 		return LOCTEXT("TestPlayHintUnresolved",
-			"Send a PLAY command for this entry's event id. Manifest intensity is UNRESOLVED (-1): "
-			"plain Gain will be sent without the intensity factor -- run Refresh Intensities first.");
+			"Send a PLAY command for this entry's event id. Manifest clip gain is UNRESOLVED (-1): "
+			"plain Gain will be sent without the clip gain factor -- run Refresh Clip Gains first.");
 	}
-	return LOCTEXT("TestPlayHint", "Send a PLAY command for this entry's event id at its effective gain (Gain x CachedManifestIntensity).");
+	return LOCTEXT("TestPlayHint", "Send a PLAY command for this entry's event id at its effective gain (Gain x CachedManifestClipGain).");
 }
 
 FReply FHapbeatEventMapCustomization::OnTestPlayClicked()
@@ -298,12 +298,12 @@ FReply FHapbeatEventMapCustomization::OnTestPlayClicked()
 	FHapbeatEventEntry Entry;
 	if (TryGetSelectedEntry(Entry) && Entry.Mode == EHapticMode::Command)
 	{
-		if (Entry.CachedManifestIntensity < 0.0f)
+		if (Entry.CachedManifestClipGain < 0.0f)
 		{
 			// Same designer-facing warning Unity surfaces for a missing manifest
-			// intensity: the wire gain is plain Gain (intensity factor skipped).
+			// clip gain: the wire gain is plain Gain (clip gain factor skipped).
 			UE_LOG(LogHapbeatEditor, Warning,
-				TEXT("Test Play '%s': manifest intensity unresolved (-1); sending plain gain=%.2f. Run Refresh Intensities and confirm the Kit manifest is under Content/."),
+				TEXT("Test Play '%s': manifest clip gain unresolved (-1); sending plain gain=%.2f. Run Refresh Clip Gains and confirm the Kit manifest is under Content/."),
 				*Entry.GetEventId(), Entry.Gain);
 		}
 		FHapbeatEditorSender::SendPlay(Entry.GetEventId(), Entry.GetEffectiveGain(), Entry.Target, Entry.Pan);

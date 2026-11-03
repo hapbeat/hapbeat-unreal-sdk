@@ -18,6 +18,8 @@ Hapbeat 1.0（DEC-096）に合わせた変更。対応する仕様は contracts 
 - ERROR の受信: 既知の機体の port 7700 から来た ERROR だけを受け付け、stream の ERROR は自分の session の envelope と一致するものだけを扱う。code ごとに 1 回ログに出し、STREAM_NOT_STARTED で BEGIN を送り直し、STREAM_TIMED_OUT・STREAM_LEASE_INVALID で新しい世代を始め、STREAM_SUPERSEDED でその機体を `Superseded` で待たせ、STREAM_STOPPED でその機体から source を外し、STREAM_GEN_UNSUPPORTED・STREAM_TARGET_MISMATCH で機体に問い直す。
 - Stream Gen 2 の BEGIN の再送: 最初の 3 ブロックの前と、以後 50 ブロック（500 ms）ごとに同じ BEGIN を送る。再送する BEGIN の target は、その時点の機体の address。
 - 差し替え（re-splice）: Stream Gen 2 の機体で、送り済みの音が 40 ms 以上残っている時に新しい source が始まったら、送り済みのブロックを新しい世代で作り直し、新しい source を要求した時刻から鳴らす。
+- UE 5.4 / 5.5 / 5.6 ごとのビルド済み ZIP（`HapbeatSDK-<version>-UE5.x.zip`）を Releases で配布する。Win64 のエディタ用バイナリを含むため、`Plugins/HapbeatSDK/` に展開するだけでビルドなしで使える（ゲームのパッケージ時は従来どおり `Source/` からビルドされる）。
+- `Scripts/Update-HapbeatSDK.ps1`: エディタを閉じて実行すると、`.uproject` のエンジンに合う最新 ZIP を取得し、SHA256 を確認して入れ替える。古いフォルダは `Saved/HapbeatSDK-backup-*` へ移す（削除しない）。git clone で入れた場合は `git pull` を案内して止まる。
 
 ### 変更
 - PONG の tail の読み方: tail なしは Stream Gen 1、32 byte 以上で `HBS2`・extension_version 1 は Stream Gen 2（先頭 32 byte を読み、reserved と未知の flag は無視）、それ以外は無視（世代・lease を変えず、照合済みの応答なら機体ごとに 1 回警告）。
@@ -29,6 +31,8 @@ Hapbeat 1.0（DEC-096）に合わせた変更。対応する仕様は contracts 
 - Editor の Test Play の stream を Stream Gen 2 に対応: target の address に一致する機体ごとに session を作り、Stream Gen 2 の機体には lease を unicast で求めてから送る（Stream Gen 1 の機体には従来の形式）。別の送信元に取られた機体は、Test Play が明示の操作なので取り戻す。
 - ログ・コメントの呼び方を Stream Gen 1 / Stream Gen 2 に揃えた（`versioning.md` §4.2）。
 - 素材の強さの名前を `clip_gain` にした（DEC-103）: `FHapbeatEventEntry::CachedManifestIntensity` → `CachedManifestClipGain`、Editor の *Refresh Intensities* → *Refresh Clip Gains*、Kit の manifest は `parameters.clip_gain` だけを読む（`intensity` は読まない）。既存の Event Map は *Refresh Clip Gains* を押し直す。送る値は `clamp(clip_gain × app_gain, 0, 1)` で、stream の source の gain も最後の積だけを 0〜1 にする（これまでは 0〜2）。Editor の Test Play も同じ上限で送る。
+- README / Getting Started の導入手順を「ZIP を展開」を基本にし、git clone はソースから入れる場合の手順にした。
+
 
 ## [0.2.0] - 2026-10-17
 

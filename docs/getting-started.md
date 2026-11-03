@@ -25,27 +25,28 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 ## 動作環境
 
 -   Unreal Engine 5.3 以上で動作する想定です（動作確認済み: 5.6.1、5.4）。特にこだわりがなければ、Hapbeat のデモ制作で使っている 5.6.1 がおすすめです。
--   C++ プロジェクトのビルド環境（Windows は Visual Studio）が必要です。Blueprint のみのプロジェクトでも、プラグインのために 1 回ビルドします。
+-   ビルド済み ZIP（UE 5.4 / 5.5 / 5.6）はエディタでそのまま使えます。ソースから入れる場合と、ゲームをパッケージする場合（プラグインが `Source/` からビルドされます）は C++ のビルド環境（Windows は Visual Studio）が必要です。
 
 ## 1\. プロジェクトへ追加する
 
-1.  `.uproject` があるフォルダでターミナルを開き、次を実行します（`Plugins/HapbeatSDK` フォルダは自動で作られます）。
+1.  [Releases](https://github.com/hapbeat/hapbeat-unreal-sdk/releases) から、使っている Unreal Engine に合う `HapbeatSDK-<version>-UE<バージョン>.zip` をダウンロードします（現在は UE 5.4 / 5.5 / 5.6）。
+2.  `.uproject` があるフォルダに `Plugins/HapbeatSDK/` を作成し、ZIP の中身を展開します。`Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在すれば正しい配置です。
+3.  プロジェクトを開きます。ZIP にはビルド済みのバイナリが入っているため、ビルドは不要です。
 
-    ```
-    git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK
-    ```
+**更新**: Unreal Editor を閉じ、`.uproject` があるフォルダで次を実行します。最新の ZIP をダウンロードして SHA256 を確認し、古いフォルダを `Saved/HapbeatSDK-backup-<バージョン>-<日時>/` へ移してから入れ替えます（`-Version vX.Y.Z` で版を指定、`-WhatIf` で試行のみ）。
 
-2.  `Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在することを確認します。
-3.  project files を再生成して、プロジェクトの **Development Editor / Win64** を build します。[ビルド手順](./unreal-build.md)
+```
+powershell -ExecutionPolicy Bypass -File Plugins/HapbeatSDK/Scripts/Update-HapbeatSDK.ps1
+```
 
 <details>
-<summary>補足: ZIP で入れる場合・更新・複数プロジェクト</summary>
+<summary>補足: ソースから入れる場合（git clone）・複数プロジェクト</summary>
 
--   **ZIP で入れる場合**: `Plugins/HapbeatSDK/` フォルダを作成し、ZIP を解凍したフォルダの**中身**をコピーします。`Plugins/HapbeatSDK/hapbeat-unreal-sdk-main/HapbeatSDK.uplugin` のように 1 階層深くなる配置は誤りです。
+-   **ソースから入れる場合**（ZIP の無い UE 5.3 以上のバージョン、ソースビルドのエンジン、SDK の開発）: `.uproject` があるフォルダで `git clone https://github.com/hapbeat/hapbeat-unreal-sdk.git Plugins/HapbeatSDK` を実行し、project files を再生成して **Development Editor / Win64** を build します。[ビルド手順](./unreal-build.md)
 -   **パスを指定して clone する場合**: パスにスペースが含まれるときは `"..."` で囲みます。囲まないと `Too many arguments` で失敗します。
--   **更新**: `Plugins/HapbeatSDK` で `git pull`（リリースに固定するなら `git checkout vX.Y.Z`）を実行し、build し直します。
--   **複数プロジェクト**: プロジェクトごとに clone します。プロジェクトを Git で管理しているなら `git submodule add` でも構いません。
--   **1 つの clone をリンクで複数プロジェクトから共有しないでください。** build 成果物がプラグインのフォルダ内に作られるため、プロジェクト間で DLL が上書きされます。
+-   **ソース版の更新**: `Plugins/HapbeatSDK` で `git pull`（リリースに固定するなら `git checkout vX.Y.Z`）を実行し、build し直します。更新スクリプトは git clone を対象にしません。
+-   **複数プロジェクト**: プロジェクトごとに入れます。プロジェクトを Git で管理しているなら `git submodule add` でも構いません。
+-   **1 つのプラグインフォルダをリンクで複数プロジェクトから共有しないでください。** build 成果物がプラグインのフォルダ内に作られるため、プロジェクト間で DLL が上書きされます。
 
 </details>
 

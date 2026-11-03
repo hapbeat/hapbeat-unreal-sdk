@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"Version": 2,
+	"Version": 3,
 	"VersionName": "1.0.0-d1",
 	"FriendlyName": "Hapbeat SDK",
 	"Description": "Drive Hapbeat haptic devices over Wi-Fi UDP from Unreal Engine (C++ and Blueprint).",

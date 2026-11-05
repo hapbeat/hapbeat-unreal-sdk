@@ -9,7 +9,7 @@ Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
 
 ## [1.0.0] - 2026-11-06
 
-Hapbeat 1.0（DEC-096）に合わせた変更。対応する仕様は contracts `46f246e`（1.0 の仕様。release 時に contracts の版へ置き換える）の `specs/stream-session.md`・`specs/sdk-multi-stream.md`・`specs/message-format.md`。
+Hapbeat 1.0（DEC-096）に合わせた変更。対応する仕様は contracts `v1.0.0` の `specs/stream-session.md`・`specs/sdk-multi-stream.md`・`specs/message-format.md`。
 
 ### 追加
 - `EHapbeatStreamDeferredReason` に `UnknownClass`（機体の stream の世代がまだ分からない）・`LeaseUnavailable`（機体が lease を出していない）・`Superseded`（別の送信元が stream を取った）を追加。一致する機体の理由が分かれる時は `Superseded` > `LeaseUnavailable` > `UnknownClass` > `NoResolvedEndpoint` の順で 1 つを返す。Stream Gen 1 の 300 ms の間隔を待つ間は `Active` のまま。

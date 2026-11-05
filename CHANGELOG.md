@@ -7,7 +7,7 @@ Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
 
 ---
 
-## [Unreleased]
+## [1.0.0] - 2026-11-06
 
 Hapbeat 1.0（DEC-096）に合わせた変更。対応する仕様は contracts `46f246e`（1.0 の仕様。release 時に contracts の版へ置き換える）の `specs/stream-session.md`・`specs/sdk-multi-stream.md`・`specs/message-format.md`。
 
@@ -217,5 +217,6 @@ Initial release. Hapbeat Unity SDK の Unreal 版として、wire protocol・Eve
   （`/Content/HapbeatSamples/...` を raw WAV/manifest ごとパッケージに含める）。
 - CI: タグ push (`v*`) から CHANGELOG を抽出して GitHub Release を自動公開。
 
+[1.0.0]: https://github.com/hapbeat/hapbeat-unreal-sdk/releases/tag/v1.0.0
 [0.2.0]: https://github.com/hapbeat/hapbeat-unreal-sdk/releases/tag/v0.2.0
 [0.1.0]: https://github.com/hapbeat/hapbeat-unreal-sdk/releases/tag/v0.1.0

@@ -282,7 +282,53 @@ void UHapbeatSubsystem::Stop(const FString& EventId, const FString& Target)
 void UHapbeatSubsystem::StopAll(const FString& Target)
 {
 	const FString ResolvedTarget = UHapbeatTargetLibrary::ResolveTarget(Target, OverridePlayer, OverrideGroup);
+	// The STOP_ALL ends this SDK's streams on the devices it matches as well. End
+	// those sessions here first: one left open (or lingering) would take the next
+	// source into the generation the device stops, where every DATA is rejected.
+	EndStreamSessionsForStopAll(ResolvedTarget);
 	SendCommandPacket(FHapbeatProtocol::BuildStopAll(NextSeq(), ResolvedTarget), ResolvedTarget);
+}
+
+void UHapbeatSubsystem::EndStreamSessionsForStopAll(const FString& ResolvedTarget)
+{
+	TArray<FString> SessionKeys;
+	for (const TPair<FString, FStreamSession>& Pair : StreamSessions)
+	{
+		const FStreamEndpoint* Endpoint = StreamEndpoints.Find(Pair.Key);
+		if (Endpoint != nullptr && UHapbeatTargetLibrary::AddressMatches(ResolvedTarget, Endpoint->Address))
+		{
+			SessionKeys.Add(Pair.Key);
+		}
+	}
+	if (SessionKeys.Num() == 0)
+	{
+		return;
+	}
+	for (const FString& SessionKey : SessionKeys)
+	{
+		// As when another sender's STOP_ALL is reported (ERROR STREAM_STOPPED,
+		// sdk-multi-stream.md §6.13): the Playbacks there leave the device for good
+		// and keep playing on their other devices.
+		RemoveStreamSourcesFromEndpoint(SessionKey);
+		// END now, before the STOP_ALL: a source started after this call begins a
+		// new session, under a new generation, on this device.
+		StopStreamSession(SessionKey);
+	}
+	ReconcileStreamSources();
+}
+
+void UHapbeatSubsystem::RemoveStreamSourcesFromEndpoint(const FString& EndpointKey)
+{
+	const FStreamSession* Session = StreamSessions.Find(EndpointKey);
+	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
+	{
+		FStreamSource& Source = Pair.Value;
+		if ((Session != nullptr && Session->SourceIds.Contains(Pair.Key)) || Source.EndpointKeys.Contains(EndpointKey))
+		{
+			Source.StoppedEndpointKeys.Add(EndpointKey);
+			Source.CarriedCursors.Remove(EndpointKey);
+		}
+	}
 }
 
 UHapbeatStreamPlayback* UHapbeatSubsystem::PlayEntry(UHapbeatEventMap* Map, FGuid EntryId, float GainMultiplier,
@@ -1561,6 +1607,13 @@ void UHapbeatSubsystem::ReconcileStreamSources()
 		Playback->SetActive();
 		for (const FString& EndpointKey : Source.EndpointKeys)
 		{
+			if (Source.CompletedEndpointKeys.Contains(EndpointKey))
+			{
+				// sdk-multi-stream.md §6.10: a finite source that played to the end
+				// on this device waits there for its other devices. It is not added
+				// again: the session lingering there would play it from frame 0.
+				continue;
+			}
 			FStreamSession* Existing = StreamSessions.Find(EndpointKey);
 			if (Existing != nullptr && Existing->Runnable != nullptr)
 			{
@@ -1627,9 +1680,11 @@ void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 	FGuid FirstSourceId;
 	FStreamSource* FirstSource = nullptr;
 	UHapbeatStreamPlayback* FirstPlayback = nullptr;
+	// A source that already played to the end on this device is not part of its
+	// next session (sdk-multi-stream.md §6.10).
 	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
 	{
-		if (Pair.Value.EndpointKeys.Contains(EndpointKey)
+		if (Pair.Value.EndpointKeys.Contains(EndpointKey) && !Pair.Value.CompletedEndpointKeys.Contains(EndpointKey)
 			&& (FirstPlayback = Pair.Value.Playback.Get()) != nullptr && FirstPlayback->IsActive())
 		{
 			FirstSourceId = Pair.Key;
@@ -1707,7 +1762,8 @@ void UHapbeatSubsystem::StartEndpointSession(const FString& EndpointKey)
 	Session.SourceIds.Add(FirstSourceId);
 	for (TPair<FGuid, FStreamSource>& Pair : StreamSources)
 	{
-		if (Pair.Key != FirstSourceId && Pair.Value.EndpointKeys.Contains(EndpointKey))
+		if (Pair.Key != FirstSourceId && Pair.Value.EndpointKeys.Contains(EndpointKey)
+			&& !Pair.Value.CompletedEndpointKeys.Contains(EndpointKey))
 		{
 			if (UHapbeatStreamPlayback* Playback = Pair.Value.Playback.Get())
 			{
@@ -2322,6 +2378,9 @@ void UHapbeatSubsystem::HandleErrorGameThread(const FString& SenderIp, int32 Sen
 		&& Code <= FHapbeatProtocol::ErrorStreamTargetMismatch;
 	FString SessionKey;
 	bool bCurrentSession = false;
+	// The ERROR names the session open there now (its current or previous
+	// generation), not only one this SDK already ended on that device.
+	bool bOpenSession = false;
 	if (bStreamCode)
 	{
 		// detail = the rejected packet's envelope. It must name a session this
@@ -2356,11 +2415,13 @@ void UHapbeatSubsystem::HandleErrorGameThread(const FString& SenderIp, int32 Sen
 				{
 					SessionKey = Pair.Key;
 					bCurrentSession = true;
+					bOpenSession = true;
 					break;
 				}
 				if (Session->Runnable->GetPreviousIdentity() == Envelope)
 				{
 					SessionKey = Pair.Key;
+					bOpenSession = true;
 					break;
 				}
 			}
@@ -2476,15 +2537,18 @@ void UHapbeatSubsystem::HandleErrorGameThread(const FString& SenderIp, int32 Sen
 	case FHapbeatProtocol::ErrorStreamStopped:
 		// sdk-multi-stream.md §6.13: STOP_ALL ended the session on this device.
 		// Its sources leave this device for good (their Playbacks never rejoin it).
-		if (Session != nullptr)
+		// An ERROR about a session already ended there is not acted on: it must not
+		// take the sources of the session that replaced it.
+		if (Session != nullptr && Runnable != nullptr && bOpenSession)
 		{
-			for (const FGuid& SourceId : Session->SourceIds)
+			RemoveStreamSourcesFromEndpoint(SessionKey);
+			if (bCurrentSession)
 			{
-				if (FStreamSource* Source = StreamSources.Find(SourceId))
-				{
-					Source->StoppedEndpointKeys.Add(SessionKey);
-					Source->CarriedCursors.Remove(SessionKey);
-				}
+				// The device ended this generation. Close the session now, without an
+				// END (nothing is left to end), so a new Playback begins a new
+				// generation there instead of joining this one.
+				Runnable->Abandon();
+				StopStreamSession(SessionKey);
 			}
 			ReconcileStreamSources();
 		}
@@ -2585,6 +2649,13 @@ FString UHapbeatSubsystem::AppNameForWire() const
 
 void UHapbeatSubsystem::SendCommandPacket(const TArray<uint8>& Packet, const FString& ResolvedTarget)
 {
+#if WITH_DEV_AUTOMATION_TESTS
+	if (bSuppressStreamDiscoveryForAutomationTest)
+	{
+		CommandsForAutomationTest.Add(Packet);
+		return;
+	}
+#endif
 	if (HapbeatIsNetworkSuppressedForEditor())
 	{
 		return;

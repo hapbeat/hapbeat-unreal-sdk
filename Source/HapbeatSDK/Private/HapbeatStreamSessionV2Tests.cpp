@@ -1878,6 +1878,283 @@ bool FHapbeatGen2StreamStoppedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace HapbeatStreamSessionV2Test
+{
+	/** Whether a packet of Cmd under Identity went to Endpoint. */
+	bool HasEnvelope(const FStreamPacketLog& Log, const FString& Endpoint, uint8 Cmd,
+		const FHapbeatStreamSessionIdentity& Identity)
+	{
+		for (const FStreamPacketLog::FEntry& Entry : Log.Snapshot(Endpoint))
+		{
+			if (Entry.Packet.Num() >= FHapbeatProtocol::HeaderSize && Entry.Packet[3] == Cmd
+				&& EnvelopeOf(Entry.Packet) == Identity)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool WaitForEnvelope(const FStreamPacketLog& Log, const FString& Endpoint, uint8 Cmd,
+		const FHapbeatStreamSessionIdentity& Identity)
+	{
+		const double Deadline = FPlatformTime::Seconds() + 2.0;
+		while (!HasEnvelope(Log, Endpoint, Cmd, Identity) && FPlatformTime::Seconds() < Deadline)
+		{
+			FPlatformProcess::Sleep(0.002f);
+		}
+		return HasEnvelope(Log, Endpoint, Cmd, Identity);
+	}
+
+	/** Frames of the STREAM_DATA sent to Endpoint whose left sample is not silent. */
+	int32 SoundingFrames(const FStreamPacketLog& Log, const FString& Endpoint)
+	{
+		int32 Frames = 0;
+		for (const FStreamPacketLog::FEntry& Entry : Log.Snapshot(Endpoint))
+		{
+			const TArray<uint8>& Packet = Entry.Packet;
+			if (Packet.Num() < FHapbeatProtocol::HeaderSize || Packet[3] != FHapbeatProtocol::CmdStreamData)
+			{
+				continue;
+			}
+			const int32 Envelope = Packet[2] == FHapbeatProtocol::StreamProtocolVersion ? FHapbeatProtocol::StreamSessionEnvelopeSize : 0;
+			const int32 BlockFrames = (Packet.Num() - FHapbeatProtocol::HeaderSize - Envelope - 4) / 4;
+			for (int32 Frame = 0; Frame < BlockFrames; ++Frame)
+			{
+				Frames += DataSample(Packet, Frame, 0) != 0 ? 1 : 0;
+			}
+		}
+		return Frames;
+	}
+}
+
+/** Set-up shared by the subsystem tests below (a friend of UHapbeatSubsystem). */
+class FHapbeatGen2SubsystemTestAccess
+{
+public:
+	/** A subsystem whose sessions run logging runners: no socket, nothing is sent. */
+	static UHapbeatSubsystem* MakeLoggingSubsystem(uint64 Incarnation,
+		const TSharedRef<HapbeatStreamSessionV2Test::FStreamPacketLog, ESPMode::ThreadSafe>& Log)
+	{
+		UGameInstance* GameInstance = NewObject<UGameInstance>();
+		UHapbeatSubsystem* Sub = NewObject<UHapbeatSubsystem>(GameInstance);
+		Sub->bSuppressStreamDiscoveryForAutomationTest = true;
+		Sub->ClientIncarnation = Incarnation;
+		Sub->StreamRunnableFactoryForAutomationTest =
+			[Log](const FGuid& SourceId, TArray<uint8>&& Pcm16, const FString& Target,
+				TSharedRef<FHapbeatStreamGainMirror, ESPMode::ThreadSafe> Mirror, EHapbeatStreamWireFormat Format,
+				const FHapbeatStreamSessionIdentity& Identity) -> FHapbeatStreamRunnable*
+			{
+				return new HapbeatStreamSessionV2Test::FLoggingStreamRunnable(
+					SourceId, MoveTemp(Pcm16), Target, Mirror, Format, Identity, Log);
+			};
+		return Sub;
+	}
+
+	/** Registers a Playback of Frames frames (every sample 1000) for Target and reconciles. */
+	static UHapbeatStreamPlayback* AddPlayback(UHapbeatSubsystem* Sub, const FString& Target, bool bLoop,
+		int32 Frames = 32000)
+	{
+		UHapbeatStreamPlayback* Playback = NewObject<UHapbeatStreamPlayback>(Sub);
+		Playback->Init(1.0f, 1.0f);
+		Playback->SetLoop(bLoop);
+		UHapbeatSubsystem::FStreamSource& Source = Sub->StreamSources.Add(Playback->Id);
+		Source.CanonicalPcm16 = HapbeatStreamSessionV2Test::MakeSessionTestPcm(1000, Frames);
+		Source.Playback = Playback;
+		Source.ResolvedTarget = Target;
+		Sub->ActivePlaybacks.Add(Playback);
+		Sub->ReconcileStreamSources();
+		return Playback;
+	}
+};
+
+// ---------------------------------------------------------------------------
+// StopAll ends this SDK's sessions on the devices it matches at once
+// (sdk-multi-stream.md §6.13: a new Playback joins the device as usual)
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatGen2StopAllNewGenerationTest,
+	"Hapbeat.Streaming.Gen2.StopAllNewGeneration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatGen2StopAllNewGenerationTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	const uint64 Inc = 0x4444555566667777ULL;
+	TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> Log = MakeShared<FStreamPacketLog, ESPMode::ThreadSafe>();
+	UHapbeatSubsystem* Sub = FHapbeatGen2SubsystemTestAccess::MakeLoggingSubsystem(Inc, Log);
+	const FString AddrA = TEXT("player_1/pos_l_arm");
+	const FString AddrB = TEXT("player_1/pos_r_arm");
+	const FString KeyA = TEXT("192.0.2.160:7700|player_1/pos_l_arm");
+	const FString KeyB = TEXT("192.0.2.161:7700|player_1/pos_r_arm");
+
+	// One loop on both devices.
+	UHapbeatStreamPlayback* Both = FHapbeatGen2SubsystemTestAccess::AddPlayback(Sub, TEXT(""), true);
+	Sub->PendingPings.Add(700, Pending(50000, Inc));
+	Sub->HandlePongGameThread(TEXT("192.0.2.160"), 7700, 700, 0, V2Pong(50000, "player_1/pos_l_arm", Inc, 0xA160, 1));
+	Sub->HandlePongGameThread(TEXT("192.0.2.161"), 7700, 700, 0, V2Pong(50000, "player_1/pos_r_arm", Inc, 0xB161, 1));
+	if (!TestTrue(TEXT("sessions on both devices"), Sub->StreamSessions.Contains(KeyA) && Sub->StreamSessions.Contains(KeyB)))
+	{
+		Sub->StopStream();
+		return false;
+	}
+	TestTrue(TEXT("A streams"), WaitForCount(*Log, AddrA, FHapbeatProtocol::CmdStreamData, 3));
+	FHapbeatStreamRunnable* const RunnerB = Sub->StreamSessions[KeyB].Runnable;
+	const FHapbeatStreamSessionIdentity StoppedA = Sub->StreamSessions[KeyA].Runnable->GetCurrentIdentity();
+
+	// --- StopAll for A: A's session ENDs now; the Playback leaves A and keeps playing on B.
+	Sub->StopAll(AddrA);
+	TestFalse(TEXT("StopAll ends the session on the matching device at once"), Sub->StreamSessions.Contains(KeyA));
+	TestTrue(TEXT("... with the END of its generation"), HasEnvelope(*Log, AddrA, FHapbeatProtocol::CmdStreamEnd, StoppedA));
+	TestTrue(TEXT("STOP_ALL is sent"), Sub->CommandsForAutomationTest.Num() == 1
+		&& Sub->CommandsForAutomationTest[0][3] == FHapbeatProtocol::CmdStopAll);
+	TestTrue(TEXT("the Playback leaves A for good"), Sub->StreamSources.FindChecked(Both->Id).StoppedEndpointKeys.Contains(KeyA));
+	TestEqual(TEXT("... and keeps playing on B"), Both->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
+	TestTrue(TEXT("B's session is untouched"), Sub->StreamSessions.Contains(KeyB) && Sub->StreamSessions[KeyB].Runnable == RunnerB);
+	TestEqual(TEXT("... and got no END"), Log->Count(AddrB, FHapbeatProtocol::CmdStreamEnd), 0);
+
+	// --- A Stream Clip started right after plays on A, under a new generation.
+	UHapbeatStreamPlayback* Fresh = FHapbeatGen2SubsystemTestAccess::AddPlayback(Sub, TEXT(""), true);
+	TestEqual(TEXT("a new Playback plays"), Fresh->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
+	if (TestTrue(TEXT("... in a new session on A"), Sub->StreamSessions.Contains(KeyA)))
+	{
+		const FHapbeatStreamSessionIdentity NextA = Sub->StreamSessions[KeyA].Runnable->GetCurrentIdentity();
+		TestTrue(TEXT("... a new generation of the same lease"),
+			NextA.GetLease() == StoppedA.GetLease() && NextA.Generation > StoppedA.Generation);
+		TestTrue(TEXT("... whose BEGIN goes out"), WaitForEnvelope(*Log, AddrA, FHapbeatProtocol::CmdStreamBegin, NextA));
+		TestTrue(TEXT("... followed by its DATA"), WaitForEnvelope(*Log, AddrA, FHapbeatProtocol::CmdStreamData, NextA));
+	}
+	TestTrue(TEXT("... and joins B's running session"), Sub->StreamSessions.Contains(KeyB)
+		&& Sub->StreamSessions[KeyB].SourceIds.Contains(Fresh->Id));
+
+	// --- StopAll for every device: no device is left for either Playback.
+	Sub->StopAll(TEXT(""));
+	TestEqual(TEXT("StopAll() ends every session"), Sub->StreamSessions.Num(), 0);
+	TestEqual(TEXT("the first Playback stops"), Both->GetStatus(), EHapbeatStreamPlaybackStatus::Stopped);
+	TestEqual(TEXT("the second Playback stops"), Fresh->GetStatus(), EHapbeatStreamPlaybackStatus::Stopped);
+
+	Sub->StopStream();
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// ERROR STREAM_STOPPED closes the session at once (sdk-multi-stream.md §6.13)
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatGen2StreamStoppedNewGenerationTest,
+	"Hapbeat.Streaming.Gen2.StreamStoppedNewGeneration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatGen2StreamStoppedNewGenerationTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	const uint64 Inc = 0x5555666677778888ULL;
+	TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> Log = MakeShared<FStreamPacketLog, ESPMode::ThreadSafe>();
+	UHapbeatSubsystem* Sub = FHapbeatGen2SubsystemTestAccess::MakeLoggingSubsystem(Inc, Log);
+	const FString AddrA = TEXT("player_1/pos_chest");
+	const FString KeyA = TEXT("192.0.2.170:7700|player_1/pos_chest");
+
+	UHapbeatStreamPlayback* Loop = FHapbeatGen2SubsystemTestAccess::AddPlayback(Sub, AddrA, true);
+	Sub->PendingPings.Add(710, Pending(51000, Inc));
+	Sub->HandlePongGameThread(TEXT("192.0.2.170"), 7700, 710, 0, V2Pong(51000, "player_1/pos_chest", Inc, 0xC170, 1));
+	if (!TestTrue(TEXT("a session on the device"), Sub->StreamSessions.Contains(KeyA)))
+	{
+		Sub->StopStream();
+		return false;
+	}
+	TestTrue(TEXT("it streams"), WaitForCount(*Log, AddrA, FHapbeatProtocol::CmdStreamData, 3));
+	const FHapbeatStreamSessionIdentity Stopped = Sub->StreamSessions[KeyA].Runnable->GetCurrentIdentity();
+
+	// --- Another sender's STOP_ALL ended the session on the device.
+	Sub->HandleErrorGameThread(TEXT("192.0.2.170"), 7700, StreamError(FHapbeatProtocol::ErrorStreamStopped, Stopped));
+	TestFalse(TEXT("the session the device stopped closes at once"), Sub->StreamSessions.Contains(KeyA));
+	TestEqual(TEXT("... without an END (the device has ended it)"), Log->Count(AddrA, FHapbeatProtocol::CmdStreamEnd), 0);
+	TestEqual(TEXT("the loop with no device left stops"), Loop->GetStatus(), EHapbeatStreamPlaybackStatus::Stopped);
+
+	// --- A new Playback right after joins the device under a new generation.
+	UHapbeatStreamPlayback* Fresh = FHapbeatGen2SubsystemTestAccess::AddPlayback(Sub, AddrA, true);
+	TestEqual(TEXT("a new Playback plays"), Fresh->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
+	if (TestTrue(TEXT("... in a new session"), Sub->StreamSessions.Contains(KeyA)))
+	{
+		const FHapbeatStreamSessionIdentity Next = Sub->StreamSessions[KeyA].Runnable->GetCurrentIdentity();
+		TestTrue(TEXT("... a new generation of the same lease"),
+			Next.GetLease() == Stopped.GetLease() && Next.Generation > Stopped.Generation);
+		TestTrue(TEXT("... whose DATA goes out"), WaitForEnvelope(*Log, AddrA, FHapbeatProtocol::CmdStreamData, Next));
+	}
+
+	// --- A late ERROR about the stopped generation (DATA that was in flight)
+	// does not take the new Playback off the device.
+	Sub->HandleErrorGameThread(TEXT("192.0.2.170"), 7700, StreamError(FHapbeatProtocol::ErrorStreamStopped, Stopped));
+	TestEqual(TEXT("a late ERROR about the ended session leaves the new Playback playing"),
+		Fresh->GetStatus(), EHapbeatStreamPlaybackStatus::Active);
+	TestTrue(TEXT("... in its session"), Sub->StreamSessions.Contains(KeyA)
+		&& Sub->StreamSessions[KeyA].SourceIds.Contains(Fresh->Id));
+	TestFalse(TEXT("... free to play there"), Sub->StreamSources.FindChecked(Fresh->Id).StoppedEndpointKeys.Contains(KeyA));
+
+	Sub->StopStream();
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// A finite source plays once on each device (sdk-multi-stream.md §6.10)
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FHapbeatGen2FiniteSourcePlaysOncePerDeviceTest,
+	"Hapbeat.Streaming.Gen2.FiniteSourcePlaysOncePerDevice",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FHapbeatGen2FiniteSourcePlaysOncePerDeviceTest::RunTest(const FString& Parameters)
+{
+	using namespace HapbeatStreamSessionV2Test;
+	const uint64 Inc = 0x6666777788889999ULL;
+	TSharedRef<FStreamPacketLog, ESPMode::ThreadSafe> Log = MakeShared<FStreamPacketLog, ESPMode::ThreadSafe>();
+	UHapbeatSubsystem* Sub = FHapbeatGen2SubsystemTestAccess::MakeLoggingSubsystem(Inc, Log);
+	const FString AddrA = TEXT("player_1/pos_l_arm");
+	const FString AddrB = TEXT("player_1/pos_r_arm");
+	const FString KeyA = TEXT("192.0.2.180:7700|player_1/pos_l_arm");
+	const FString KeyB = TEXT("192.0.2.181:7700|player_1/pos_r_arm");
+	constexpr int32 ClipFrames = 4800; // 0.3 s
+
+	UHapbeatStreamPlayback* OneShot = FHapbeatGen2SubsystemTestAccess::AddPlayback(Sub, TEXT(""), false, ClipFrames);
+	Sub->PendingPings.Add(720, Pending(52000, Inc));
+	Sub->HandlePongGameThread(TEXT("192.0.2.180"), 7700, 720, 0, V2Pong(52000, "player_1/pos_l_arm", Inc, 0xA180, 1));
+	if (!TestTrue(TEXT("the one-shot starts on A"), Sub->StreamSessions.Contains(KeyA)))
+	{
+		Sub->StopStream();
+		return false;
+	}
+	// B answers later (A is a third of the way through), so A finishes first.
+	TestTrue(TEXT("A is part way through"), WaitForCount(*Log, AddrA, FHapbeatProtocol::CmdStreamData, 10));
+	Sub->PendingPings.Add(721, Pending(52001, Inc));
+	Sub->HandlePongGameThread(TEXT("192.0.2.181"), 7700, 721, 0, V2Pong(52001, "player_1/pos_r_arm", Inc, 0xB181, 1));
+	TestTrue(TEXT("... when it starts on B"), Sub->StreamSessions.Contains(KeyB));
+
+	bool bAFinishedFirst = false;
+	const double Deadline = FPlatformTime::Seconds() + 3.0;
+	while (!OneShot->IsStopped() && FPlatformTime::Seconds() < Deadline)
+	{
+		Sub->TickStream(0.0f);
+		if (const UHapbeatSubsystem::FStreamSource* Source = Sub->StreamSources.Find(OneShot->Id))
+		{
+			if (Source->CompletedEndpointKeys.Contains(KeyA) && !Source->CompletedEndpointKeys.Contains(KeyB)
+				&& !OneShot->IsStopped())
+			{
+				bAFinishedFirst = true;
+				TestEqual(TEXT("the one-shot stays Active until B finishes"), OneShot->GetStatus(),
+					EHapbeatStreamPlaybackStatus::Active);
+			}
+		}
+		FPlatformProcess::Sleep(0.005f);
+	}
+	TestTrue(TEXT("A finished while B still played"), bAFinishedFirst);
+	TestTrue(TEXT("the one-shot finishes"), OneShot->IsStopped());
+	TestEqual(TEXT("A played the clip once (not again while B played)"), SoundingFrames(*Log, AddrA), ClipFrames);
+	TestEqual(TEXT("B played the clip once"), SoundingFrames(*Log, AddrB), ClipFrames);
+
+	Sub->StopStream();
+	return true;
+}
+
 // ---------------------------------------------------------------------------
 // deferredReason and the endpoint class API (sdk-multi-stream.md §3)
 // ---------------------------------------------------------------------------

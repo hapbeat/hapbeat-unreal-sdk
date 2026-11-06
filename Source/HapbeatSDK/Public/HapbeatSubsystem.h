@@ -165,6 +165,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop Event (Hapbeat)"))
 	void Stop(const FString& EventId, const FString& Target = TEXT(""));
 
+	/**
+	 * Send STOP_ALL to the devices Target matches ("" = all). This SDK's stream
+	 * sessions on those devices end at once and their Playbacks leave them for good
+	 * (they keep playing on other devices; a Playback left with no device stops). A
+	 * Stream Clip started afterwards plays on those devices as usual.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Hapbeat", meta = (DisplayName = "Stop All Events (Hapbeat)"))
 	void StopAll(const FString& Target = TEXT(""));
 
@@ -462,6 +468,10 @@ private:
 	friend class FHapbeatGen2ErrorTest;
 	friend class FHapbeatGen2CursorCarryTest;
 	friend class FHapbeatGen2StreamStoppedTest;
+	friend class FHapbeatGen2StopAllNewGenerationTest;
+	friend class FHapbeatGen2StreamStoppedNewGenerationTest;
+	friend class FHapbeatGen2FiniteSourcePlaysOncePerDeviceTest;
+	friend class FHapbeatGen2SubsystemTestAccess;
 	friend class FHapbeatGen2DeferredReasonTest;
 	friend class FHapbeatGen2SupersededReissueTest;
 	friend class FHapbeatGen2IgnoredTailWarningTest;
@@ -533,6 +543,15 @@ private:
 	void StopStreamSession(const FString& EndpointKey, bool bCarryCursors = false);
 	void AbandonStreamSession(const FString& EndpointKey);
 	void StartEndpointSession(const FString& EndpointKey);
+	/**
+	 * StopAll(Target): END every session on a device the (resolved) target matches,
+	 * at once, and take its sources off that device for good, as ERROR
+	 * STREAM_STOPPED does (sdk-multi-stream.md §6.13). A source started afterwards
+	 * begins a new session (a new generation) there.
+	 */
+	void EndStreamSessionsForStopAll(const FString& ResolvedTarget);
+	/** The sources of the endpoint's session (and those assigned to it) never rejoin it (§6.13). */
+	void RemoveStreamSourcesFromEndpoint(const FString& EndpointKey);
 	bool NormalizeClipToCanonical(const UHapbeatClip* Clip, TArray<uint8>& OutPcm16) const;
 
 	/**
@@ -1001,9 +1020,11 @@ private:
 #if WITH_DEV_AUTOMATION_TESTS
 	/**
 	 * Test-only network seam: discovery PINGs are counted, lease PINGs and
-	 * CAPS_REQs recorded (with their pending request), and nothing is sent.
+	 * CAPS_REQs recorded (with their pending request), PLAY / STOP / STOP_ALL
+	 * packets recorded in CommandsForAutomationTest, and nothing is sent.
 	 */
 	bool bSuppressStreamDiscoveryForAutomationTest = false;
+	TArray<TArray<uint8>> CommandsForAutomationTest;
 	int32 StreamDiscoveryRequestCount = 0;
 	struct FAutomationUnicastRecord
 	{

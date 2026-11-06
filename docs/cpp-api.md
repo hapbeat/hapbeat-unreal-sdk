@@ -192,7 +192,7 @@ Target の意味と構成別の使い分けは[ターゲティング](./targetin
 - `PlayHapbeatEvent` / `PlayEntry` の戻り値は Stream Clip のみです。Command の `nullptr` は正常ですが、entry 未解決・無効 Clip でも `nullptr` になります。戻り値を使う前に有効性を確認してください。
 - Stream は送信前に 16 kHz / stereo PCM16 に正規化され、送信先ごとに混合されます。mono の素材も実行中に Pan を変更できます。各 source の戻り値を保持すると、その source だけを調整・停止できます。
 - `Deferred` はまだ送信を開始していない状態、`Active` は送信中、`Stopped` は停止済みです。宛先未検出でも handle は保持されます。`IsActive() == false` を停止済みと解釈せず、停止判定には `IsStopped()` を使います。
-- `StopEntry` は Stream Clip の場合 **Subsystem 内の全 source** を停止します。個別停止は `UHapbeatStreamPlayback::Stop()`。Command の `StopAll(Target)` は device event の停止で、SDK 側 Stream の終了には `StopStream()` を使います。
+- `StopEntry` は Stream Clip の場合 **Subsystem 内の全 source** を停止します。個別停止は `UHapbeatStreamPlayback::Stop()`。`StopAll(Target)` は一致する device の event を止め、この SDK がその device で送っている Stream の session もその場で終えます（Playback はその device から外れ、他の device では鳴り続けます。待機中の Playback は対象外）。その後に始めた Stream Clip は、その device でも通常どおり鳴ります。SDK 側の全 Stream の終了には `StopStream()` を使います。
 - Event Map 経路の遅延は `max(0, HapticDelaySeconds + DelayOffsetSeconds + ExtraDelaySeconds)`。`StopEntry` は global + entry の遅延を使い、呼出単位の ExtraDelay は加えません。直接 `Play` / `StreamClip` は Event Map の遅延経路を通りません。
 - UObject / component の操作はゲームスレッドで行います。保持する playback / asset 参照には `UPROPERTY()` を使い、送信ワーカースレッドから UObject を操作しません。
 - 別のアプリが同じ device へ stream を始めると、この SDK の lease は置き換えられ、stream は `Deferred` のまま送信されません（`LogHapbeat` に警告）。SDK は自分からは取り戻さず、アプリが前面に戻った時だけ自動で取り戻します。それ以外はユーザー操作から `ReacquireStreamOwnership()` を呼びます。

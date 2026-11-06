@@ -7,6 +7,13 @@ Hapbeat Unreal Engine SDK の主要な変更点をまとめます。
 
 ---
 
+## [Unreleased]
+
+### 修正
+- `StopAll` の直後に始めた Stream Clip が鳴らない不具合を修正。`StopAll` は STOP_ALL を送るだけで、この SDK の stream の session を開いたまま（Playback が無くなった後の 300 ms の待ちを含む）にしていたため、直後の Stream Clip は機体が STOP_ALL で止めた世代の session に入り、その DATA は機体にすべて捨てられていた（返ってくる ERROR STREAM_STOPPED で、その Stream Clip も機体から外れていた）。`StopAll` は、Target に一致する機体の session をその場で END し、そこで鳴っていた Playback をその機体から外す（他の機体では鳴り続け、機体が残らない Playback は止まる）。この後に始めた Stream Clip は、新しい世代でその機体に入る（contracts `sdk-multi-stream.md` §6.13）。待機中（Deferred）の Playback は対象外で、全部止めるには `StopStream()` を使う。
+- 別のアプリの STOP_ALL で機体の stream が止まった（ERROR STREAM_STOPPED）ときも、その session をその場で閉じる（END は送らない）。これまでは 300 ms 待ってから閉じていたため、その間に始めた Stream Clip が止められた世代に入って鳴らなかった。止められた世代についての ERROR が遅れて届いても、後から始めた Playback は外さない。
+- 有限の Stream Clip を 2 台以上で鳴らし、機体ごとに終わる時刻が違うとき（片方の機体の lease の応答や Stream Gen 1 の 300 ms の間隔で、始まりが遅れたとき）、先に終わった機体で、もう片方が終わるまで頭から繰り返し鳴っていた不具合を修正。先に終わった機体では、もう鳴らさずに他の機体を待つ（`sdk-multi-stream.md` §6.10）。
+
 ## [1.0.0] - 2026-11-06
 
 Hapbeat 1.0（DEC-096）に合わせた変更。対応する仕様は contracts `v1.0.0` の `specs/stream-session.md`・`specs/sdk-multi-stream.md`・`specs/message-format.md`。

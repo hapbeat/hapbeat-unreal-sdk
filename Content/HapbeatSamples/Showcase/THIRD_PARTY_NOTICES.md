@@ -65,6 +65,8 @@ occlusion and displacement maps are not included.
 derived from royalty-free / CC0 sound-effect sources, then resampled / trimmed /
 gain-adjusted for haptic playback.
 
+Exception — the light charge shot: `Kit/showcase-kit/install-clips/z5_shot_light.wav` and `Kit/showcase-kit/stream-clips/z5_shot_light.wav` (and the `HC_z5_shot_light` clip asset made from the stream clip) are synthesized by Hapbeat from a recipe, with no recorded or third-party audio (CC0; the stream clip is the install clip on two channels).
+
 Source sites:
 
 - Kenney — <https://kenney.nl/assets> (CC0; multiple SFX packs)

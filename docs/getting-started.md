@@ -14,9 +14,9 @@ sidebar:
 ファイル操作と Unreal の build を実行できる AI には、次の依頼文を渡します。`<ProjectRoot>` は対象プロジェクトの絶対パスに置き換えます。
 
 ```text
-Unreal Engine 5.6 の C++ プロジェクト <ProjectRoot> に Hapbeat Unreal SDK を導入してください。
-https://github.com/hapbeat/hapbeat-unreal-sdk.git を <ProjectRoot>/Plugins/HapbeatSDK に clone し、project files を再生成して Editor target を build してください。
-Hapbeat SDK を有効化し、Plugin Content の BasicExample マップを開いてください。
+Unreal Engine のプロジェクト <ProjectRoot> に Hapbeat Unreal SDK を導入してください。
+https://github.com/hapbeat/hapbeat-unreal-sdk/releases/latest から、<ProjectRoot> の .uproject の EngineAssociation に合う HapbeatSDK-<version>-UE<バージョン>.zip をダウンロードし、<ProjectRoot>/Plugins/HapbeatSDK/ に中身を展開してください（Plugins/HapbeatSDK/HapbeatSDK.uplugin ができる配置）。
+合う ZIP が無い場合だけ、https://github.com/hapbeat/hapbeat-unreal-sdk.git を <ProjectRoot>/Plugins/HapbeatSDK に clone し、project files を再生成して Editor target を build してください。
 PIE、Test Play、実機への触覚送信は実行しないでください。
 ```
 
@@ -25,13 +25,15 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 ## 動作環境
 
 -   Unreal Engine 5.3 以上で動作する想定です（動作確認済み: 5.6.1、5.4）。特にこだわりがなければ、Hapbeat のデモ制作で使っている 5.6.1 がおすすめです。
--   ビルド済み ZIP（UE 5.4 / 5.5 / 5.6）はエディタでそのまま使えます。ソースから入れる場合と、ゲームをパッケージする場合（プラグインが `Source/` からビルドされます）は C++ のビルド環境（Windows は Visual Studio）が必要です。
+-   Windows では、ビルド済み ZIP（UE 5.4 / 5.5 / 5.6）をエディタでそのまま使えます。Visual Studio は要りません。Blueprint だけのプロジェクトでも使えます。
+-   ソースから入れる場合（Mac・ZIP の無いバージョン）と、ゲームをパッケージする場合（プラグインが `Source/` からビルドされます）は、C++ のビルド環境（Windows は Visual Studio 2022）が必要です。
 
 ## 1\. プロジェクトへ追加する
 
-1.  [Releases](https://github.com/hapbeat/hapbeat-unreal-sdk/releases) から、使っている Unreal Engine に合う `HapbeatSDK-<version>-UE<バージョン>.zip` をダウンロードします（現在は UE 5.4 / 5.5 / 5.6）。
-2.  `.uproject` があるフォルダに `Plugins/HapbeatSDK/` を作成し、ZIP の中身を展開します。`Plugins/HapbeatSDK/HapbeatSDK.uplugin` が存在すれば正しい配置です。
-3.  プロジェクトを開きます。ZIP にはビルド済みのバイナリが入っているため、ビルドは不要です。
+1.  [最新のリリース](https://github.com/hapbeat/hapbeat-unreal-sdk/releases/latest) の Assets から、使っている Unreal Engine に合う ZIP をダウンロードします（例: UE 5.6 なら `HapbeatSDK-1.0.0-UE5.6.zip`）。Unreal Engine のバージョンは、エディタの **Help → About Unreal Editor** で確認できます。
+2.  プロジェクトのフォルダ（`.uproject` があるフォルダ）に `Plugins` フォルダを作り、その中に `HapbeatSDK` フォルダを作ります。
+3.  ZIP の**中身**を `Plugins/HapbeatSDK/` に展開します。エクスプローラーの「すべて展開」は ZIP と同じ名前のフォルダを作ろうとするので、展開先を `Plugins\HapbeatSDK` に変えてください。`Plugins/HapbeatSDK/HapbeatSDK.uplugin` があれば正しい配置です。
+4.  プロジェクトを開きます。ZIP にはビルド済みのバイナリが入っているため、ビルドは不要です。「モジュールを再ビルドしますか」と聞かれた場合は、[うまくいかないとき](#うまくいかないとき) を見てください。
 
 **更新**: Unreal Editor を閉じ、`.uproject` があるフォルダで次を実行します。最新の ZIP をダウンロードして SHA256 を確認し、古いフォルダを `Saved/HapbeatSDK-backup-<バージョン>-<日時>/` へ移してから入れ替えます（`-Version vX.Y.Z` で版を指定、`-WhatIf` で試行のみ）。
 
@@ -52,7 +54,7 @@ powershell -ExecutionPolicy Bypass -File Plugins/HapbeatSDK/Scripts/Update-Hapbe
 
 ## 2\. プラグインを有効にする
 
-1.  Unreal Editor の **Edit → Plugins** で `Hapbeat SDK` を有効にします。
+1.  Unreal Editor の **Edit → Plugins** で `Hapbeat SDK` が有効になっていることを確認します（無効なら有効にして、エディタを再起動します）。
 2.  **Tools → Hapbeat → Hapbeat Settings** を開きます。Project Settings の **Plugins → Hapbeat** で、`Connection > Port` を Hapbeat と同じネットワークで使う UDP port と一致させます。既定値は `7700` です。
 
 :::note[音と触覚のタイミング]
@@ -78,6 +80,12 @@ powershell -ExecutionPolicy Bypass -File Plugins/HapbeatSDK/Scripts/Update-Hapbe
 `F` は Fire（Command）として `basic-exam-kit.sine_200hz_1s` を再生します。`Space` のストリーミング再生を先に確認してから、Kit に含めた install-clip の再生を確認する順序です。
 
 反応しない場合は、Hapbeat の電源・同一ネットワーク・UDP port と、OS のファイアウォールが Unreal Editor の UDP 通信を許可しているかを確認してください。**Output Log** の `LogHapbeat` で PONG・エラーを確認できます。
+
+## うまくいかないとき
+
+-   **「モジュールを再ビルドしますか」「could not be compiled」が出る**: ZIP がエンジンのバージョンと合っていません。Help → About Unreal Editor のバージョン（5.4 / 5.5 / 5.6）と ZIP の名前を見比べ、合う ZIP を入れ直してください。ZIP は Epic Games Launcher 版のエンジン（UE 5.4.4 / 5.5.4 / 5.6.1）で作っています。ソースからビルドしたエンジンでは使えないので、ソースから入れてください（[1. の補足](#1-プロジェクトへ追加する)）。
+-   **`Plugins/HapbeatSDK/HapbeatSDK.uplugin` が無い**: ZIP を 1 階層深く展開しています（`Plugins/HapbeatSDK/HapbeatSDK-1.0.0-UE5.6/HapbeatSDK.uplugin` など）。中のファイルを `Plugins/HapbeatSDK/` の直下へ移してください。
+-   **Space を押しても振動しない**: 3. の最後の項目（電源・同一ネットワーク・UDP port・ファイアウォール）を確認してください。
 
 ## 同梱サンプル
 

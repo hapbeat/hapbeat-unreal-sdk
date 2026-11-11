@@ -43,7 +43,7 @@ PIE、Test Play、実機への触覚送信は実行しないでください。
 1.  [最新のリリース](https://github.com/hapbeat/hapbeat-unreal-sdk/releases/latest) の Assets から、1. で起動した Unreal Engine に合う ZIP をダウンロードします（例: UE 5.6 なら `HapbeatSDK-1.0.0-UE5.6.zip`）。Unreal Engine のバージョンは、エディタの **Help → About Unreal Editor** でも確認できます。
 2.  プロジェクトのフォルダ（`HapbeatTest.uproject` があるフォルダ）に `Plugins` フォルダを作り、その中に `HapbeatSDK` フォルダを作ります。
 3.  ZIP の**中身**を `Plugins/HapbeatSDK/` に展開します。エクスプローラーの「すべて展開」は ZIP と同じ名前のフォルダを作ろうとするので、展開先を `Plugins\HapbeatSDK` に変えてください。`Plugins/HapbeatSDK/HapbeatSDK.uplugin` があれば正しい配置です。
-4.  `HapbeatTest.uproject` をダブルクリックしてプロジェクトを開きます。ZIP にはビルド済みのバイナリが入っているため、ビルドは不要です。「モジュールを再ビルドしますか」と聞かれた場合は、[うまくいかないとき](#うまくいかないとき) を見てください。
+4.  Epic Games Launcher の **Unreal Engine → ライブラリ** の **マイプロジェクト** で `HapbeatTest` を選んで開きます（`.uproject` のダブルクリックは、PC によってはファイルの関連付けが無く、エラーになります）。ZIP にはビルド済みのバイナリが入っているため、ビルドは不要です。「モジュールを再ビルドしますか」と聞かれた場合は、[うまくいかないとき](#うまくいかないとき) を見てください。
 
 **更新**: Unreal Editor を閉じ、`.uproject` があるフォルダで次を実行します。最新の ZIP をダウンロードして SHA256 を確認し、古いフォルダを `Saved/HapbeatSDK-backup-<バージョン>-<日時>/` へ移してから入れ替えます（`-Version vX.Y.Z` で版を指定、`-WhatIf` で試行のみ）。
 
